@@ -11,7 +11,7 @@ import asyncio  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import tui as tui_module  # noqa: E402
-from kyraan.control_plane import kill_switch  # noqa: E402
+from kyraan.control_plane import config, kill_switch  # noqa: E402
 from kyraan.model_router import router  # noqa: E402
 from textual.widgets import Collapsible, LoadingIndicator  # noqa: E402
 
@@ -21,6 +21,13 @@ def _clean_kill_switch():
     kill_switch.disengage()
     yield
     kill_switch.disengage()
+
+
+@pytest.fixture(autouse=True)
+def _clean_tier_overrides():
+    config.clear_tier_overrides()
+    yield
+    config.clear_tier_overrides()
 
 
 async def test_sending_a_message_updates_sidebar_and_count(monkeypatch):
@@ -176,3 +183,95 @@ async def test_reminders_command_does_not_call_the_model(monkeypatch):
         await pilot.press("enter")
         await pilot.pause()
         # no exception means fail_if_called was never invoked
+
+
+async def test_retry_resends_the_last_message(monkeypatch):
+    calls = []
+
+    async def fake_handle_message(chat_id, text):
+        calls.append(text)
+        return "mocked reply"
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fake_handle_message)
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"hi there")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(*"/retry")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert calls == ["hi there", "hi there"]
+        assert app.message_count == 2
+
+
+async def test_retry_with_nothing_sent_yet_does_not_call_the_model(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("orchestrator.handle_message should not be called")
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fail_if_called)
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"/retry")
+        await pilot.press("enter")
+        await pilot.pause()
+        # no exception means fail_if_called was never invoked
+
+
+async def test_tier_command_with_no_args_shows_current_config():
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"/tier")
+        await pilot.press("enter")
+        await pilot.pause()
+        # doesn't raise; config.load() still reflects the real file
+        assert "cheap" in config.load()["model_tiers"]
+
+
+async def test_tier_command_overrides_a_tier_for_this_session():
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"/tier cheap groq openai/gpt-oss-20b")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert config.load()["model_tiers"]["cheap"] == {"provider": "groq", "model": "openai/gpt-oss-20b"}
+
+
+async def test_tier_command_rejects_an_unknown_provider():
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"/tier cheap not-a-real-provider some-model")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # unchanged — override was rejected
+        assert config.load()["model_tiers"]["cheap"]["provider"] == "ollama"
+
+
+async def test_export_writes_a_transcript_file(monkeypatch, tmp_path):
+    async def fake_handle_message(chat_id, text):
+        return "mocked reply"
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fake_handle_message)
+    monkeypatch.setattr(tui_module, "TRANSCRIPT_DIR", tmp_path)
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"hi")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        await pilot.press(*"/export")
+        await pilot.press("enter")
+        await pilot.pause()
+
+    files = list(tmp_path.glob("*.md"))
+    assert len(files) == 1
+    content = files[0].read_text()
+    assert "hi" in content
+    assert "mocked reply" in content

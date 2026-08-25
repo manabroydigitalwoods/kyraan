@@ -25,6 +25,7 @@ an already-scheduled reminder still fires even if cancelled from the store.
 """
 import asyncio
 from datetime import datetime
+from pathlib import Path
 
 from dotenv import load_dotenv
 from textual import on
@@ -39,15 +40,21 @@ from kyraan.model_router import router
 from kyraan.triggers import scheduler
 
 CHAT_ID = 0
+TRANSCRIPT_DIR = Path(__file__).resolve().parents[1] / "data" / "transcripts"
 
 HELP_TEXT = """\
 [b]Slash commands[/b]
-  /help        this message
-  /reminders   list pending reminders (no model call)
-  /kill        engage the kill switch
-  /unkill      disengage the kill switch
-  /clear       clear the chat log
-  /quit,/exit  quit (or Ctrl-C)
+  /help              this message
+  /reminders         list pending reminders (no model call)
+  /retry             resend the last message you sent
+  /tier <t> <p> <m>  point tier t at provider p, model m (this session only,
+                      e.g. /tier frontier openai gpt-5-nano)
+  /tier              show current tier config
+  /export            save the transcript to data/transcripts/
+  /kill              engage the kill switch
+  /unkill            disengage the kill switch
+  /clear             clear the chat log
+  /quit,/exit        quit (or Ctrl-C)
 
 Anything else is sent to the orchestrator, same as a real Telegram message."""
 
@@ -85,6 +92,8 @@ class KyraanTUI(App):
         self.message_count = 0
         self.total_input_tokens = 0
         self.total_output_tokens = 0
+        self.last_user_message: str | None = None
+        self.transcript_lines: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -107,6 +116,18 @@ class KyraanTUI(App):
         tier_cfg = config.load()["model_tiers"][tier]
         return f"{tier_cfg['provider']}/{tier_cfg['model']}"
 
+    def _cost_line(self) -> str:
+        spent = router.session_cost_usd
+        budget = router.daily_budget_usd()
+        pct = (spent / budget * 100) if budget else 0
+        alert_pct = router.budget_alert_threshold_pct()
+        text = f"${spent:.4f} / ${budget:.2f} ({pct:.0f}%)"
+        if pct >= 100:
+            return f"[bold red]{text}[/bold red]"
+        if pct >= alert_pct:
+            return f"[bold yellow]{text}[/bold yellow]"
+        return text
+
     def _refresh_sidebar(self) -> None:
         elapsed = local_now() - self.session_start
         lines = [
@@ -123,6 +144,9 @@ class KyraanTUI(App):
             "[b]Tokens (session)[/b]",
             f"in  {self.total_input_tokens}",
             f"out {self.total_output_tokens}",
+            "",
+            "[b]Cost (of daily budget)[/b]",
+            self._cost_line(),
         ]
         last = router.last_call
         if last is not None:
@@ -134,6 +158,7 @@ class KyraanTUI(App):
                 f"model    {last.model}",
                 f"latency  {last.latency_ms:.0f}ms",
                 f"tokens   in={last.usage.input_tokens} out={last.usage.output_tokens}",
+                f"cost     ${last.cost_usd:.4f}",
                 f"reasoning {'yes' if last.reasoning else 'no'}",
             ]
         self.query_one("#sidebar", Static).update("\n".join(lines))
@@ -141,9 +166,12 @@ class KyraanTUI(App):
     async def _log(self, text: str) -> None:
         """Rich console markup (e.g. [bold red]...[/bold red]) — for our own
         UI/system messages, not model-generated content."""
+        from rich.text import Text
+
         log = self.query_one("#chat-log", VerticalScroll)
         await log.mount(Static(text))
         log.scroll_end()
+        self.transcript_lines.append(Text.from_markup(text).plain)
 
     async def _log_markdown(self, text: str) -> None:
         """CommonMark — for actual model output, which may contain **bold**,
@@ -152,11 +180,13 @@ class KyraanTUI(App):
         log = self.query_one("#chat-log", VerticalScroll)
         await log.mount(Markdown(text))
         log.scroll_end()
+        self.transcript_lines.append(text)
 
     async def _log_thought(self, reasoning: str, latency_ms: float) -> None:
         log = self.query_one("#chat-log", VerticalScroll)
         await log.mount(Collapsible(Markdown(reasoning), title=f"Thought · {latency_ms:.0f}ms", collapsed=True))
         log.scroll_end()
+        self.transcript_lines.append(f"<details><summary>Thought · {latency_ms:.0f}ms</summary>\n\n{reasoning}\n\n</details>")
 
     async def _show_thinking(self) -> LoadingIndicator:
         """Mount an inline spinner directly in the conversation flow, right
@@ -190,6 +220,34 @@ class KyraanTUI(App):
 
         return await asyncio.to_thread(runner)
 
+    async def _process_message(self, text: str) -> None:
+        self.last_user_message = text
+        await self._log(f"[bold green]>[/bold green] {text}")
+        input_widget = self.query_one("#chat-input", Input)
+        input_widget.disabled = True
+        thinking = await self._show_thinking()
+        try:
+            reply = await self._call_orchestrator(text)
+        finally:
+            await thinking.remove()
+            input_widget.disabled = False
+            input_widget.focus()
+
+        last = router.last_call
+        if last is not None and last.reasoning:
+            await self._log_thought(last.reasoning, last.latency_ms)
+        await self._log_markdown(reply)
+        if last is not None:
+            cost_part = f" · ${last.cost_usd:.4f}" if last.cost_usd else ""
+            await self._log(
+                f"[dim]{last.tier_used} · {last.provider}/{last.model} · "
+                f"{last.latency_ms:.0f}ms · in={last.usage.input_tokens} out={last.usage.output_tokens}{cost_part}[/dim]"
+            )
+            self.total_input_tokens += last.usage.input_tokens or 0
+            self.total_output_tokens += last.usage.output_tokens or 0
+        self.message_count += 1
+        self._refresh_sidebar()
+
     @on(Input.Submitted, "#chat-input")
     async def handle_input(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -205,51 +263,66 @@ class KyraanTUI(App):
             await self._handle_slash(text)
             return
 
-        await self._log(f"[bold green]>[/bold green] {text}")
-        input_widget.disabled = True
-        thinking = await self._show_thinking()
-        try:
-            reply = await self._call_orchestrator(text)
-        finally:
-            await thinking.remove()
-            input_widget.disabled = False
-            input_widget.focus()
-
-        last = router.last_call
-        if last is not None and last.reasoning:
-            await self._log_thought(last.reasoning, last.latency_ms)
-        await self._log_markdown(reply)
-        if last is not None:
-            await self._log(
-                f"[dim]{last.tier_used} · {last.provider}/{last.model} · "
-                f"{last.latency_ms:.0f}ms · in={last.usage.input_tokens} out={last.usage.output_tokens}[/dim]"
-            )
-            self.total_input_tokens += last.usage.input_tokens or 0
-            self.total_output_tokens += last.usage.output_tokens or 0
-        self.message_count += 1
-        self._refresh_sidebar()
+        await self._process_message(text)
 
     async def _handle_slash(self, cmd: str) -> None:
-        if cmd == "/help":
+        parts = cmd.split()
+        command = parts[0]
+        args = parts[1:]
+
+        if command == "/help":
             await self._log(HELP_TEXT)
-        elif cmd == "/clear":
+        elif command == "/clear":
             await self.query_one("#chat-log", VerticalScroll).remove_children()
-        elif cmd == "/kill":
+            self.transcript_lines.clear()
+        elif command == "/kill":
             kill_switch.engage("engaged from TUI")
             await self._log("[bold red]Kill switch engaged.[/bold red]")
-        elif cmd == "/unkill":
+        elif command == "/unkill":
             kill_switch.disengage()
             await self._log("[bold green]Kill switch disengaged.[/bold green]")
-        elif cmd == "/reminders":
+        elif command == "/reminders":
             pending = scheduler.store.list_pending(CHAT_ID)
             if not pending:
                 await self._log("[dim]No pending reminders.[/dim]")
             else:
                 for r in pending:
                     await self._log(f"[dim]-[/dim] [cyan]{r.id[:8]}[/cyan] {r.text} [dim]at {r.when_iso}[/dim]")
+        elif command == "/retry":
+            if self.last_user_message is None:
+                await self._log("[dim]Nothing to retry yet.[/dim]")
+            else:
+                await self._process_message(self.last_user_message)
+        elif command == "/tier":
+            await self._handle_tier_command(args)
+        elif command == "/export":
+            await self._handle_export_command()
         else:
-            await self._log(f"[dim]Unknown command: {cmd} (try /help)[/dim]")
+            await self._log(f"[dim]Unknown command: {command} (try /help)[/dim]")
         self._refresh_sidebar()
+
+    async def _handle_tier_command(self, args: list[str]) -> None:
+        if not args:
+            tiers = config.load()["model_tiers"]
+            lines = [f"{name}: {cfg['provider']}/{cfg['model']}" for name, cfg in tiers.items()]
+            await self._log("[b]Current tiers[/b]\n" + "\n".join(lines))
+            return
+        if len(args) != 3:
+            await self._log("[dim]Usage: /tier <tier> <provider> <model>  (or /tier with no args to show current)[/dim]")
+            return
+        tier, provider, model = args
+        try:
+            config.set_tier_override(tier, provider, model)
+        except ValueError as exc:
+            await self._log(f"[bold red]{exc}[/bold red]")
+            return
+        await self._log(f"[bold green]{tier}[/bold green] now points at {provider}/{model} (this session only).")
+
+    async def _handle_export_command(self) -> None:
+        TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+        path = TRANSCRIPT_DIR / f"{local_now().strftime('%Y%m%d-%H%M%S')}.md"
+        path.write_text("\n\n".join(self.transcript_lines))
+        await self._log(f"[dim]Saved transcript to {path}[/dim]")
 
 
 if __name__ == "__main__":

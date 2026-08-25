@@ -34,6 +34,32 @@ The bot only responds to `TELEGRAM_OWNER_ID` — everyone else is ignored and
 logged. Try: "remind me to call the plumber tomorrow at 5pm", "what
 reminders do I have", or any general question.
 
+## Dev tools: chat.py and tui.py
+
+`scripts/chat.py` (CLI) and `scripts/tui.py` (full-screen Textual
+dashboard) both exercise the real `orchestrator.handle_message` path
+without needing Telegram credentials — see each file's docstring for what
+they support (slash commands, session stats, collapsible reasoning, etc).
+
+```bash
+source .venv/bin/activate
+python scripts/chat.py   # or: python scripts/tui.py
+```
+
+For TUI development specifically, `textual-dev` (in the `dev` extra) adds
+a debugging console — normally you can't `print()`/`log()` anything since
+the TUI owns the whole screen:
+
+```bash
+# terminal 1
+textual console
+
+# terminal 2
+textual run --dev scripts/tui.py
+```
+
+`--dev` also hot-reloads CSS changes live, no restart needed.
+
 ## Model providers
 
 `config/permissions.yaml` has a `providers` registry — every provider

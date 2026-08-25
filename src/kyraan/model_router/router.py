@@ -86,6 +86,20 @@ class RoutedResponse:
     latency_ms: float
     usage: Usage
     reasoning: str | None = None
+    cost_usd: float = 0.0
+
+
+def _cost_usd(tier_cfg: dict, usage: Usage) -> float:
+    """USD per config/permissions.yaml's `pricing` (USD per 1M tokens) on
+    the tier — absent means free, matching our currently free-tier
+    providers. Missing token counts count as 0 tokens for that side rather
+    than raising, consistent with Usage's best-effort contract."""
+    pricing = tier_cfg.get("pricing")
+    if not pricing:
+        return 0.0
+    input_cost = (usage.input_tokens or 0) / 1_000_000 * pricing.get("input_per_million", 0)
+    output_cost = (usage.output_tokens or 0) / 1_000_000 * pricing.get("output_per_million", 0)
+    return input_cost + output_cost
 
 
 @dataclass
@@ -181,6 +195,19 @@ _RETRY_BACKOFF_SECONDS = (0.5, 1.5)  # transient errors (rate limits, 503s) are 
 # API for concurrent use.
 last_call: RoutedResponse | None = None
 
+# Cumulative cost since process start — not persisted, not a substitute for
+# a real daily budget tracked across restarts, just enough for a dev
+# session to see "am I anywhere near cost_monitor.daily_budget_usd".
+session_cost_usd: float = 0.0
+
+
+def daily_budget_usd() -> float:
+    return config.load()["cost_monitor"]["daily_budget_usd"]
+
+
+def budget_alert_threshold_pct() -> float:
+    return config.load()["cost_monitor"]["alert_threshold_pct"]
+
 
 def call(
     prompt: str,
@@ -188,7 +215,7 @@ def call(
     tier: str = "cheap",
     max_tokens: int = 1024,
 ) -> RoutedResponse:
-    global last_call
+    global last_call, session_cost_usd
     tier_cfg = config.load()["model_tiers"][tier]
     model = tier_cfg["model"]
     provider = tier_cfg["provider"]
@@ -200,6 +227,7 @@ def call(
         try:
             raw = _dispatch(provider, model, prompt, system, max_tokens)
             latency_ms = (time.monotonic() - start) * 1000
+            cost_usd = _cost_usd(tier_cfg, raw.usage)
             log_event(
                 "model_call",
                 tier=tier,
@@ -211,6 +239,7 @@ def call(
                 input_tokens=raw.usage.input_tokens,
                 output_tokens=raw.usage.output_tokens,
                 had_reasoning=raw.reasoning is not None,
+                cost_usd=cost_usd,
             )
             response = RoutedResponse(
                 text=raw.text,
@@ -220,8 +249,10 @@ def call(
                 latency_ms=latency_ms,
                 usage=raw.usage,
                 reasoning=raw.reasoning,
+                cost_usd=cost_usd,
             )
             last_call = response
+            session_cost_usd += cost_usd
             return response
         except Exception as exc:
             last_exc = exc
