@@ -3,6 +3,7 @@
 Flow: normalize intent -> gate + dispatch through the kernel -> return text
 for the Response Engine (here, just the Telegram send call) to deliver.
 """
+import contextvars
 import json
 from collections import defaultdict, deque
 
@@ -55,6 +56,8 @@ if a calendar request lands here by mistake, suggest phrasing like "what's
 on my calendar today" or "add lunch with mom friday 1pm to my calendar".
 Never claim an event was created unless it actually was, and never present
 a reminder as a calendar event — they are different things. Kyraan can
+also check unread email (senders and subjects, never bodies) — never deny
+that; suggest "any new emails?" if such a request lands here. Kyraan can
 also check and switch the bedroom AC smart plug (switching needs the
 owner's yes) — never deny that; suggest "is the AC on?" or "turn off the
 AC" if such a request lands here. Never claim a device was switched
@@ -108,6 +111,12 @@ _history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
 # "thanks") — skip the extraction model call entirely.
 _EXTRACTION_MIN_CHARS = 8
 
+# Data boundary: a skill can replace what the conversation history records
+# for its reply. Email summaries use this — sender/subject lines must not
+# ride the history into the cloud classifier or qa prompts (owner's §3a
+# resolution: work email metadata stays off third-party models).
+_history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_redaction", default=None)
+
 
 def _history_block(chat_id: int) -> str:
     return "\n".join(f"{role}: {text}" for role, text in _history[chat_id]) or "(no conversation yet)"
@@ -141,6 +150,7 @@ async def _extraction_note(raw_text: str) -> str:
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
+    redaction_token = _history_redaction.set(None)
     reply = await _dispatch(chat_id, raw_text)
     reply += await _extraction_note(raw_text)
     if router.budget_alert_due():
@@ -150,7 +160,8 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             "daily budget. Calls stop at the cap."
         )
     _history[chat_id].append(("user", raw_text))
-    _history[chat_id].append(("assistant", reply))
+    _history[chat_id].append(("assistant", _history_redaction.get() or reply))
+    _history_redaction.reset(redaction_token)
     return reply
 
 
@@ -207,6 +218,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _list_calendar(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
+        if parsed.intent == "email.check":
+            return await _check_email(chat_id)
         if parsed.intent == "home.query":
             return await _home_query(chat_id, parsed.normalized_text)
         if parsed.intent == "home.control":
@@ -454,6 +467,28 @@ def _since(last_changed: str | None) -> str:
 # Rooms Kyraan knows it has NO sensor in — an honest "no sensor there"
 # beats answering a kitchen question with bedroom data (seen live).
 _UNSENSORED_ROOMS = ("living", "kitchen", "hall", "bathroom", "balcony", "dining", "office")
+
+
+async def _check_email(chat_id: int) -> str:
+    async def handler(_args: dict) -> str:
+        # The reply the user sees carries senders/subjects; the history
+        # records only a placeholder, so none of it reaches cloud models.
+        _history_redaction.set("[showed the unread email summary]")
+        try:
+            result = await kernel.run_tool(kernel.ToolCall("email.unread", {"limit": 5}))
+        except kernel.ToolFailed as exc:
+            return f"Couldn't check email: {exc}"
+        total = result.get("unread_estimate", 0)
+        messages = result.get("messages", [])
+        if not messages:
+            return "No unread emails."
+        lines = [f"You have about {total} unread. Latest:"]
+        for m in messages:
+            sender = m["from"].split("<")[0].strip().strip('"') or m["from"]
+            lines.append(f"- {sender}: {m['subject']}")
+        return "\n".join(lines)
+
+    return await _gated(chat_id, SkillCall("email.check", {}), handler)
 
 
 async def _home_query(chat_id: int, text: str) -> str:

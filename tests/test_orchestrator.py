@@ -679,3 +679,39 @@ async def test_unsensored_room_gets_an_honest_no_sensor_answer(monkeypatch):
     assert "no sensor in the kitchen room" in result
     assert "Bedroom: 27.4°C" in result  # still offers the reading it has
     assert "The AC" not in result
+
+
+async def test_email_check_formats_metadata_and_redacts_history(monkeypatch):
+    """The §3a data boundary: the user sees senders/subjects, but the
+    conversation history — which feeds the cloud classifier and qa
+    prompts — records only a placeholder."""
+    _mock_normalize(monkeypatch, "email.check")
+
+    async def fake_run_tool(call, **kwargs):
+        assert call.tool_name == "email.unread"
+        return {"unread_estimate": 3, "messages": [
+            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"},
+            {"from": "noreply@bank.com", "subject": "Statement", "date": "d"},
+        ]}
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="any new emails?")
+    assert "about 3 unread" in result
+    assert "Suman Das: Invoice pending" in result
+    assert "noreply@bank.com: Statement" in result
+
+    history = orchestrator._history_block(0)
+    assert "Invoice pending" not in history and "Suman Das" not in history
+    assert "[showed the unread email summary]" in history
+
+
+async def test_email_failure_surfaces_and_history_stays_clean(monkeypatch):
+    _mock_normalize(monkeypatch, "email.check")
+
+    async def failing_run_tool(call, **kwargs):
+        raise orchestrator.kernel.ToolFailed("email.unread failed: re-run setup_google_oauth")
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", failing_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="any new emails?")
+    assert "Couldn't check email" in result

@@ -19,7 +19,8 @@ for you:
 
 Then run:  .venv/bin/python scripts/setup_google_oauth.py
 
-A browser opens; approve access for your own account. The refresh token is
+A browser opens; approve access for your own account (re-run this whenever
+the scope list grows — e.g. the Gmail read-only scope added for email.unread). The refresh token is
 written into .env as GOOGLE_OAUTH_REFRESH_TOKEN and the calendar.create
 skill starts working (each event still asks for your yes in chat).
 """
@@ -31,7 +32,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 REPO = Path(__file__).resolve().parents[1]
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/gmail.readonly",  # added 2026-08-25: email.unread (metadata only)
+]
 
 
 def main() -> None:

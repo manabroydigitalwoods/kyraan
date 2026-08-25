@@ -13,6 +13,7 @@ KNOWN_INTENTS = [
     "reminders.cancel",
     "calendar.list",
     "calendar.create",
+    "email.check",
     "home.query",
     "home.control",
     "qa.answer",
@@ -47,6 +48,8 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   being asked for the event name) are also calendar.create — fold the
   context in. A calendar EVENT is not a reminder: only an explicit
   reminder request ("remind me...") is reminders.create.
+- email.check: asking about email/inbox. E.g. "any new emails?", "do I have
+  unread mail?", "check my inbox", "who emailed me?".
 - home.query: asking about the home's smart devices or climate — state,
   power, runtime, temperature. E.g. "is the AC on?", "did I leave the AC
   running?", "how long has the AC been on?", "how much power is the AC

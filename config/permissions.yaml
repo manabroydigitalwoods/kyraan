@@ -117,6 +117,10 @@ skills:
                           # user approves the concrete event, not the vague
                           # intent to create one
     model_tier: cheap
+  email.check:
+    permission: auto      # read-only metadata; replies are kept out of the
+                          # history fed to cloud models (data boundary)
+    model_tier: cheap
   home.query:
     permission: auto      # read-only: AC state + power/energy readout
     model_tier: cheap
@@ -132,6 +136,9 @@ tool_servers:
   calendar:
     transport: builtin
     module: kyraan.tools.google_calendar
+  gmail:
+    transport: builtin
+    module: kyraan.tools.gmail
   home_assistant:
     transport: builtin
     module: kyraan.tools.home_assistant
@@ -165,6 +172,18 @@ tools:
     failure:
       retries: 2
       timeout_s: 12
+      on_failure: surface
+  email.unread:
+    description: Unread Gmail count + sender/subject/date lines (metadata only, never bodies).
+    server: gmail
+    permission: auto
+    side_effects: read
+    params:
+      limit: {type: number}
+    returns: "{unread_estimate, messages: [{from, subject, date}]}"
+    failure:
+      retries: 2
+      timeout_s: 15
       on_failure: surface
   home.get_state:
     description: Read one allowlisted Home Assistant entity's state (AC switch, power/energy sensors).

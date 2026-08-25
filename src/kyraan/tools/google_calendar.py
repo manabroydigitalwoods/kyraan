@@ -91,34 +91,7 @@ def _list_events(start_iso: str, end_iso: str) -> list[dict]:
     return events
 
 
-def _access_token() -> str:
-    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
-    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "").strip()
-    if not (client_id and client_secret and refresh_token):
-        raise ToolError(
-            "Google OAuth isn't set up for calendar writes — run "
-            "`python scripts/setup_google_oauth.py` once (it walks through the "
-            "GCP credential steps and stores the refresh token in .env)"
-        )
-    body = urllib.parse.urlencode({
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token",
-    }).encode()
-    try:
-        with urllib.request.urlopen(urllib.request.Request(_TOKEN_URL, data=body), timeout=8) as resp:
-            return json.loads(resp.read())["access_token"]
-    except urllib.error.HTTPError as exc:
-        if exc.code >= 500:
-            raise TransientToolError(f"Google token endpoint returned {exc.code}") from exc
-        raise ToolError(
-            f"Google refused the OAuth refresh ({exc.code}) — the refresh token may be revoked; "
-            "re-run scripts/setup_google_oauth.py"
-        ) from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise TransientToolError(f"could not reach Google OAuth: {exc}") from exc
+from kyraan.tools.google_auth import access_token as _access_token  # shared across Google adapters
 
 
 def _create_event(args: dict) -> dict:
