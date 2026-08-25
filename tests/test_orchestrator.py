@@ -1169,6 +1169,7 @@ def test_thought_open_reads_message_shape_like_a_human():
     assert orchestrator.thought_open("very important")              # intensifier addendum
     assert orchestrator.thought_open("tomorrow morning")            # time fragment
     assert orchestrator.thought_open("I'll go there and,")          # trailing comma
+    assert orchestrator.thought_open("on my smoke havite")           # leading preposition
     assert not orchestrator.thought_open("what is the plan?")
     assert not orchestrator.thought_open("hello")
     assert not orchestrator.thought_open("turn off the AC.")
@@ -1220,3 +1221,59 @@ async def test_reminder_intent_without_remind_wording_is_demoted(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="to buy something")
     assert "busy morning" in result
     assert created == []  # no reminder was ever attempted
+
+
+async def test_rejected_rewrite_discredits_the_intent_too(monkeypatch):
+    """Seen live: 'on my smoke havite' rewrote to 'what's the status of my
+    humidifier' — the guard rejected the rewrite but kept the home.query
+    intent, and the user got the full AC dump. A hallucinated rewrite and
+    its intent are one judgment: both fall together."""
+    _mock_normalize(monkeypatch, "home.query", "what's the status of my humidifier")
+
+    async def fake_answer(chat_id, text):
+        return f"conversational: {text}"
+
+    async def must_not_run(chat_id, text):
+        raise AssertionError("home.query must not execute on a discredited intent")
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator, "_home_query", must_not_run)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="on my smoke havite")
+    # Both the rewrite and the intent were dropped: the raw words are
+    # answered as conversation.
+    assert result == "conversational: on my smoke havite"
+
+
+async def test_home_query_without_any_home_word_is_demoted(monkeypatch):
+    """A home question names something in the home; without any such word
+    the classification is a guess and must converse, not dump status."""
+    _mock_normalize(monkeypatch, "home.query", "on my smoke habit")
+
+    async def fake_answer(chat_id, text):
+        return "Let's talk about that."
+
+    async def must_not_run(chat_id, text):
+        raise AssertionError("no home tool for a guess")
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator, "_home_query", must_not_run)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="on my smoke habit")
+    assert result == "Let's talk about that."
+
+
+def test_home_word_guard_still_passes_real_home_questions():
+    assert orchestrator._mentions_home("is the AC on?")
+    assert orchestrator._mentions_home("how humid is it inside")
+    assert orchestrator._mentions_home("what's the bedroom temperature")
+    assert orchestrator._mentions_home("how much power is it drawing")
+    assert orchestrator._mentions_home("did I leave it off")
+    assert not orchestrator._mentions_home("on my smoke havite")
+    assert not orchestrator._mentions_home("what's your favorite place?")

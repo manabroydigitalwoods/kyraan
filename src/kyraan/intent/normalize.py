@@ -96,6 +96,11 @@ SELF-CONTAINED command with the context folded in. Examples:
   siliguri to buy something". A fragment CONTINUING A STATEMENT stays part
   of that statement — it NEVER becomes a reminder, event, or any action
   unless the user actually asked for one.
+- user said "I need help"; assistant asked what with; user says "on my
+  smoke havite" -> qa.answer, normalized_text "I need help with my smoking
+  habit". The fragment ANSWERS the assistant's question — fold it into
+  what the user was asking for; it is never a device/home/calendar query
+  just because a word vaguely resembles one.
 A message that stands alone is classified as-is — never force context onto it.
 
 Recent conversation (oldest first):

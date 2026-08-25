@@ -161,7 +161,8 @@ _TRAILING_OPEN = {
 }
 _LEADING_OPEN = {
     "to", "and", "but", "or", "also", "then", "because", "so", "plus",
-    "with", "for", "very", "really",
+    "with", "for", "very", "really", "on", "in", "at", "about", "of",
+    "from", "after", "before",
 }
 
 # A genuine reminder request contains remind-ish wording somewhere in the
@@ -172,6 +173,23 @@ _REMIND_WORDS = (
     "remind", "remember", "alarm", "alert", "wake me", "notify",
     "forget", "ping me", "timer", "tell me", "let me know",
 )
+
+# A genuine home/climate question names something in the home. A
+# home.query classification whose text mentions none of these is the
+# classifier guessing ("on my smoke havite" got the full AC dump, live).
+_HOME_WORDS_EXACT = {"ac", "a/c", "air", "hot", "hub", "fan", "off"}
+_HOME_WORD_STEMS = (
+    "temp", "humid", "plug", "power", "energy", "watt", "kwh", "room",
+    "bedroom", "home", "house", "device", "switch", "vacuum", "geyser",
+    "heater", "climate", "degree", "cold", "warm", "sensor", "run",
+)
+
+
+def _mentions_home(text: str) -> bool:
+    tokens = {w.strip(".,!?…'\"()") for w in text.lower().split()}
+    if tokens & _HOME_WORDS_EXACT:
+        return True
+    return any(t.startswith(s) for t in tokens for s in _HOME_WORD_STEMS)
 
 
 def thought_open(text: str) -> bool:
@@ -476,6 +494,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             log_event("normalized_text_rejected", chat_id=chat_id,
                       normalized=parsed.normalized_text, raw=raw_text)
             parsed.normalized_text = raw_text
+            if parsed.intent not in ("qa.answer", "unknown", "incomplete"):
+                # The intent came from the same hallucinated reading the
+                # rewrite did — seen live: "on my smoke havite" rewrote to
+                # "what's the status of my humidifier" (rejected) but the
+                # home.query intent survived and dumped the AC status.
+                # Discredit both together; conversation is the safe path.
+                log_event("intent_demoted_after_rejected_rewrite",
+                          chat_id=chat_id, intent=parsed.intent)
+                parsed.intent = "qa.answer"
         log_event("intent_classified", chat_id=chat_id, intent=parsed.intent,
                   confidence=parsed.confidence, normalized=parsed.normalized_text)
         if parsed.confidence < 0.4:
@@ -512,6 +539,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         if parsed.intent == "email.check":
             return await _check_email(chat_id, parsed.normalized_text)
         if parsed.intent == "home.query":
+            wording = f"{raw_text} {parsed.normalized_text}"
+            if not _mentions_home(wording):
+                # Same over-reach family as the reminder guard: a home
+                # status question mentions the home somehow ("AC",
+                # "temperature", "bedroom", ...). Without any such word
+                # ("on my smoke havite", seen live answered with the full
+                # AC/climate dump) the classifier is guessing — converse.
+                log_event("home_query_demoted", chat_id=chat_id, text=raw_text)
+                return await _answer(chat_id, parsed.normalized_text)
             return await _home_query(chat_id, parsed.normalized_text)
         if parsed.intent == "home.control":
             return await _home_control(chat_id, parsed.normalized_text)
