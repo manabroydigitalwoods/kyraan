@@ -117,6 +117,12 @@ skills:
                           # user approves the concrete event, not the vague
                           # intent to create one
     model_tier: cheap
+  home.query:
+    permission: auto      # read-only: AC state + power/energy readout
+    model_tier: cheap
+  home.control:
+    permission: auto      # the switch itself is confirm-gated at the tool
+    model_tier: cheap
 
 # Phase 2 tool registry (design: docs/design/tool_registry.md). Every tool
 # Kyraan can call is declared here — schema, permission, side effects, and
@@ -126,6 +132,23 @@ tool_servers:
   calendar:
     transport: builtin
     module: kyraan.tools.google_calendar
+  home_assistant:
+    transport: builtin
+    module: kyraan.tools.home_assistant
+    # The allowlist IS the boundary: an entity not named here doesn't exist
+    # for Kyraan. v1 = the bedroom AC plug only (owner's decision).
+    # Heater/geyser/vacuum join later as deliberate one-line additions —
+    # heating appliances especially stay off until explicitly added.
+    read_entities:
+      - switch.ac
+      - sensor.ac_current_consumption
+      - sensor.ac_today_s_consumption
+      - sensor.ac_this_month_s_consumption
+      - sensor.ac_voltage
+      - binary_sensor.ac_overheated
+      - binary_sensor.ac_overloaded
+    write_entities:
+      - switch.ac
 
 tools:
   calendar.list_events:
@@ -139,6 +162,42 @@ tools:
     returns: list of {title, start, end, all_day, location}
     failure:
       retries: 2
+      timeout_s: 12
+      on_failure: surface
+  home.get_state:
+    description: Read one allowlisted Home Assistant entity's state (AC switch, power/energy sensors).
+    server: home_assistant
+    permission: auto
+    side_effects: read
+    params:
+      entity: {type: string, required: true}
+    returns: "{entity, state, unit, name}"
+    failure:
+      retries: 2
+      timeout_s: 10
+      on_failure: surface
+  home.turn_on:
+    description: Switch an allowlisted smart plug ON (v1 - the bedroom AC).
+    server: home_assistant
+    permission: confirm
+    side_effects: write
+    params:
+      entity: {type: string, required: true}
+    returns: "{entity, state} read back after switching"
+    failure:
+      retries: 0
+      timeout_s: 12
+      on_failure: surface
+  home.turn_off:
+    description: Switch an allowlisted smart plug OFF (v1 - the bedroom AC).
+    server: home_assistant
+    permission: confirm
+    side_effects: write
+    params:
+      entity: {type: string, required: true}
+    returns: "{entity, state} read back after switching"
+    failure:
+      retries: 0
       timeout_s: 12
       on_failure: surface
   calendar.create_event:

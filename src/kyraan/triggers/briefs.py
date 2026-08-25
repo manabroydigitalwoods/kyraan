@@ -65,6 +65,23 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.append("No reminders today.")
 
+    # Home line — best-effort: worth a "the AC ran all night" heads-up,
+    # never worth blocking the brief when HA is unreachable/unconfigured.
+    try:
+        ac = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": "switch.ac"}))
+        if ac["state"] == "on":
+            try:
+                power = await kernel.run_tool(
+                    kernel.ToolCall("home.get_state", {"entity": "sensor.ac_current_consumption"})
+                )
+                lines.append("")
+                lines.append(f"⚡ The AC is ON — drawing {power['state']} {power['unit'] or 'W'}.")
+            except kernel.ToolFailed:
+                lines.append("")
+                lines.append("⚡ The AC is ON.")
+    except kernel.ToolFailed:
+        pass
+
     return "\n".join(lines)
 
 

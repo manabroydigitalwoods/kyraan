@@ -249,6 +249,15 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
+- **Tool #2: Home Assistant** (2026-08-25 evening) — HA runs in Docker on
+  this Mac (Tapo ecosystem: P110 plugs, H100 hub + T310 sensor, RV30
+  vacuum). v1 scope by owner decision: the bedroom AC plug only — state +
+  power/energy as auto reads ("is the AC on?" answers with live watts),
+  on/off confirm-gated per action, hard entity allowlist in
+  permissions.yaml (unlisted entities don't exist for Kyraan; heater/
+  geyser/vacuum join later deliberately). Morning brief notes when the AC
+  is running. HA migration path to the Intel MacBook: copy
+  ~/homeassistant, same container command, update HASS_URL
 - Calendar writes are LIVE (2026-08-25 16:33 IST): OAuth ceremony done,
   first real event created over Telegram through the full confirm gate —
   ask named the exact event, "yes" wrote it, audit log clean at both the

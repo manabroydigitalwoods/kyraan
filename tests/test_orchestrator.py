@@ -588,3 +588,49 @@ async def test_event_extraction_junk_is_cleaned_before_the_ask(monkeypatch):
 
     await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert dispatched == [{"title": "Test Event", "start": "2099-01-02T15:00:00+00:00", "end": "2099-01-02T16:00:00+00:00"}]
+
+
+async def test_home_query_reports_state_and_power(monkeypatch):
+    _mock_normalize(monkeypatch, "home.query")
+    readings = {
+        "switch.ac": {"entity": "switch.ac", "state": "on", "unit": None, "name": "AC"},
+        "sensor.ac_current_consumption": {"entity": "sensor.ac_current_consumption", "state": "359.5", "unit": "W", "name": "AC power"},
+        "sensor.ac_today_s_consumption": {"entity": "sensor.ac_today_s_consumption", "state": "2.098", "unit": "kWh", "name": "AC today"},
+    }
+
+    async def fake_run_tool(call, **kwargs):
+        return readings[call.args["entity"]]
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="is the AC on?")
+    assert "The AC is ON" in result and "359.5 W" in result and "2.098 kWh" in result
+
+
+async def test_home_control_asks_then_switches_with_readback(monkeypatch):
+    """The confirm chain unmocked at the kernel: OFF is parsed
+    deterministically, nothing switches before the yes, and the reply
+    reports the plug's read-back state."""
+    from kyraan.tools import registry as reg
+
+    _mock_normalize(monkeypatch, "home.control", "turn off the AC")
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append(spec.name)
+        return {"entity": "switch.ac", "state": "off", "unit": None, "name": "AC"}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="turn off the AC")
+    assert "About to turn the AC OFF" in ask
+    assert dispatched == []
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "the AC is now OFF" in result
+    assert dispatched == ["home.turn_off"]
+
+
+async def test_home_control_without_direction_asks(monkeypatch):
+    _mock_normalize(monkeypatch, "home.control", "do something with the AC")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="do something with the AC")
+    assert "on or off" in result

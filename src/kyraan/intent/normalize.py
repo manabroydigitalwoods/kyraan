@@ -13,6 +13,8 @@ KNOWN_INTENTS = [
     "reminders.cancel",
     "calendar.list",
     "calendar.create",
+    "home.query",
+    "home.control",
     "qa.answer",
     "unknown",
 ]
@@ -45,6 +47,12 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   being asked for the event name) are also calendar.create — fold the
   context in. A calendar EVENT is not a reminder: only an explicit
   reminder request ("remind me...") is reminders.create.
+- home.query: asking about the home's smart devices — state or power. E.g.
+  "is the AC on?", "did I leave the AC running?", "how much power is the AC
+  using?", "AC status", "how much electricity did the AC use today?".
+- home.control: switching a smart device. E.g. "turn off the AC", "switch
+  the AC on", "AC off please". Only for device switching — "remind me to
+  turn off the AC" is reminders.create.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. This should be the common case for
   ordinary chat, not a rare fallback.

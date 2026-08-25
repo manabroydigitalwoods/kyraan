@@ -54,7 +54,11 @@ Kyraan can also READ the owner's Google Calendar and CREATE events on it
 if a calendar request lands here by mistake, suggest phrasing like "what's
 on my calendar today" or "add lunch with mom friday 1pm to my calendar".
 Never claim an event was created unless it actually was, and never present
-a reminder as a calendar event — they are different things. If asked
+a reminder as a calendar event — they are different things. Kyraan can
+also check and switch the bedroom AC smart plug (switching needs the
+owner's yes) — never deny that; suggest "is the AC on?" or "turn off the
+AC" if such a request lands here. Never claim a device was switched
+unless it actually was. If asked
 whether an event was created, answer that directly, don't deflect to
 listing the calendar.
 When the user asks you to CREATE something — a song, poem, story, message,
@@ -203,6 +207,10 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _list_calendar(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
+        if parsed.intent == "home.query":
+            return await _home_query(chat_id)
+        if parsed.intent == "home.control":
+            return await _home_control(chat_id, parsed.normalized_text)
         # qa.answer, and anything the classifier couldn't place ("unknown"
         # with reasonable confidence) both fall through here — Phase 1's
         # taxonomy only has one truly distinct path (reminders), so
@@ -414,6 +422,58 @@ async def _create_event(chat_id: int, text: str) -> str:
     end_h = end_dt.strftime("%I:%M %p").lstrip("0") if same_day else humanize(args["end"])
     describe = f"About to create a calendar event: \"{args['title']}\" {start_h} → {end_h}{where}"
     return await _gated(chat_id, SkillCall("calendar.create", args), handler, describe=describe)
+
+
+# v1 home scope: the bedroom AC plug (owner's decision). More devices =
+# more entries here + the allowlist in permissions.yaml, nothing else.
+_AC_SWITCH = "switch.ac"
+_AC_POWER = "sensor.ac_current_consumption"
+_AC_TODAY = "sensor.ac_today_s_consumption"
+
+
+async def _home_query(chat_id: int) -> str:
+    async def handler(_args: dict) -> str:
+        try:
+            state = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_SWITCH}))
+        except kernel.ToolFailed as exc:
+            return f"Couldn't check the AC: {exc}"
+        if state["state"] != "on":
+            return "The AC is OFF."
+        detail = ""
+        try:
+            power = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_POWER}))
+            today = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_TODAY}))
+            detail = f" — drawing {power['state']} {power['unit'] or 'W'}, {today['state']} {today['unit'] or 'kWh'} today"
+        except kernel.ToolFailed:
+            pass  # the on/off answer stands even if the sensors hiccup
+        return f"The AC is ON{detail}."
+
+    return await _gated(chat_id, SkillCall("home.query", {}), handler)
+
+
+async def _home_control(chat_id: int, text: str) -> str:
+    # Direction is decided deterministically from the normalized text —
+    # a physical switch must never flip on a model's guess. "off" checked
+    # first: "turn off" contains no "on", but "on" appears inside many
+    # words, so an explicit standalone-word match is used for both.
+    words = text.lower().replace(",", " ").split()
+    if "off" in words:
+        tool, verb = "home.turn_off", "OFF"
+    elif "on" in words:
+        tool, verb = "home.turn_on", "ON"
+    else:
+        return "Should the AC go on or off? Say e.g. \"turn off the AC\"."
+
+    async def handler(args: dict) -> str:
+        try:
+            result = await kernel.run_tool(kernel.ToolCall(tool, args))
+        except kernel.ToolFailed as exc:
+            return f"Couldn't switch the AC: {exc}"
+        # Read-back truth, not assumption: report what the plug says now.
+        return f"Done — the AC is now {result['state'].upper()}."
+
+    describe = f"About to turn the AC {verb}"
+    return await _gated(chat_id, SkillCall("home.control", {"entity": _AC_SWITCH}), handler, describe=describe)
 
 
 async def _answer(chat_id: int, text: str) -> str:

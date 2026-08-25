@@ -22,6 +22,8 @@ def fake_calendar(monkeypatch):
     events = []
 
     async def fake_run_tool(call, **kwargs):
+        if call.tool_name == "home.get_state":
+            raise kernel.ToolFailed("HA not configured in this test")
         assert call.tool_name == "calendar.list_events"
         return events
 
@@ -98,3 +100,16 @@ def test_brief_time_parses_config(monkeypatch):
 
     monkeypatch.setattr(config, "load", lambda: {**base, "briefs": {}})
     assert briefs.brief_time() is None  # unconfigured = disabled, never a crash
+
+
+async def test_brief_notes_the_ac_when_it_is_on(isolated_store, monkeypatch):
+    async def fake_run_tool(call, **kwargs):
+        if call.tool_name == "calendar.list_events":
+            return []
+        if call.args["entity"] == "switch.ac":
+            return {"entity": "switch.ac", "state": "on", "unit": None, "name": "AC"}
+        return {"entity": call.args["entity"], "state": "359.5", "unit": "W", "name": "AC power"}
+
+    monkeypatch.setattr(kernel, "run_tool", fake_run_tool)
+    text = await briefs.compose(1)
+    assert "⚡ The AC is ON — drawing 359.5 W." in text
