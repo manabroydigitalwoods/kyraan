@@ -14,9 +14,11 @@ worker thread would be destroyed before a delayed reminder ever fires), so
 schedule_fn uses asyncio.run_coroutine_threadsafe(..., app_loop) — safe to
 call from any thread, unlike scheduling on "whatever loop is current".
 
-The chat area is a VerticalScroll of mounted widgets (Static per line,
-Collapsible for reasoning) rather than a RichLog — a Collapsible is a real
-interactive widget and can't be written into a text-only log stream.
+The chat area is a VerticalScroll of mounted widgets (Static for our own
+Rich-markup UI text, Markdown for model-generated content, Collapsible for
+reasoning) rather than a RichLog — a Collapsible is a real interactive
+widget and can't be written into a text-only log stream, and Markdown
+syntax needs a real Markdown renderer rather than Rich console markup.
 
 Same reminder-cancellation limitation as chat.py: cancel_fn is a no-op, so
 an already-scheduled reminder still fires even if cancelled from the store.
@@ -28,7 +30,7 @@ from dotenv import load_dotenv
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Collapsible, Footer, Header, Input, LoadingIndicator, Static
+from textual.widgets import Collapsible, Footer, Header, Input, LoadingIndicator, Markdown, Static
 
 from kyraan.agents import orchestrator
 from kyraan.control_plane import config, kill_switch
@@ -68,12 +70,10 @@ class KyraanTUI(App):
         border: solid $panel;
         padding: 1 2;
     }
-    #thinking {
+    #chat-log LoadingIndicator {
         height: 1;
-        display: none;
-    }
-    #thinking.active {
-        display: block;
+        width: auto;
+        align: left top;
     }
     """
     BINDINGS = [("ctrl+c", "quit", "Quit")]
@@ -91,7 +91,6 @@ class KyraanTUI(App):
         with Horizontal(id="body"):
             yield VerticalScroll(id="chat-log")
             yield Static(id="sidebar")
-        yield LoadingIndicator(id="thinking")
         yield Input(placeholder="Ask anything, or /help for commands...", id="chat-input")
         yield Footer()
 
@@ -102,6 +101,7 @@ class KyraanTUI(App):
         self.sub_title = "local TUI — real model calls, no Telegram needed"
         await self._log("[bold cyan]Kyraan[/bold cyan] — type a message, or /help for commands.")
         self._refresh_sidebar()
+        self.query_one("#chat-input", Input).focus()
 
     def _tier_line(self, tier: str) -> str:
         tier_cfg = config.load()["model_tiers"][tier]
@@ -139,17 +139,34 @@ class KyraanTUI(App):
         self.query_one("#sidebar", Static).update("\n".join(lines))
 
     async def _log(self, text: str) -> None:
+        """Rich console markup (e.g. [bold red]...[/bold red]) — for our own
+        UI/system messages, not model-generated content."""
         log = self.query_one("#chat-log", VerticalScroll)
         await log.mount(Static(text))
         log.scroll_end()
 
-    async def _log_thought(self, reasoning: str, latency_ms: float) -> None:
+    async def _log_markdown(self, text: str) -> None:
+        """CommonMark — for actual model output, which may contain **bold**,
+        lists, code fences, etc. that should render, not show as literal
+        asterisks."""
         log = self.query_one("#chat-log", VerticalScroll)
-        await log.mount(Collapsible(Static(reasoning), title=f"Thought · {latency_ms:.0f}ms", collapsed=True))
+        await log.mount(Markdown(text))
         log.scroll_end()
 
-    def _set_thinking(self, active: bool) -> None:
-        self.query_one("#thinking", LoadingIndicator).set_class(active, "active")
+    async def _log_thought(self, reasoning: str, latency_ms: float) -> None:
+        log = self.query_one("#chat-log", VerticalScroll)
+        await log.mount(Collapsible(Markdown(reasoning), title=f"Thought · {latency_ms:.0f}ms", collapsed=True))
+        log.scroll_end()
+
+    async def _show_thinking(self) -> LoadingIndicator:
+        """Mount an inline spinner directly in the conversation flow, right
+        where the reply will land — matches how OpenCode shows an in-place
+        "Thinking" placeholder rather than a separate persistent status bar."""
+        log = self.query_one("#chat-log", VerticalScroll)
+        indicator = LoadingIndicator()
+        await log.mount(indicator)
+        log.scroll_end()
+        return indicator
 
     def _schedule_fn(self, job_name: str, run_at: datetime, payload: dict) -> None:
         delay = max((run_at - local_now()).total_seconds(), 0)
@@ -190,18 +207,18 @@ class KyraanTUI(App):
 
         await self._log(f"[bold green]>[/bold green] {text}")
         input_widget.disabled = True
-        self._set_thinking(True)
+        thinking = await self._show_thinking()
         try:
             reply = await self._call_orchestrator(text)
         finally:
-            self._set_thinking(False)
+            await thinking.remove()
             input_widget.disabled = False
             input_widget.focus()
 
         last = router.last_call
         if last is not None and last.reasoning:
             await self._log_thought(last.reasoning, last.latency_ms)
-        await self._log(reply)
+        await self._log_markdown(reply)
         if last is not None:
             await self._log(
                 f"[dim]{last.tier_used} · {last.provider}/{last.model} · "

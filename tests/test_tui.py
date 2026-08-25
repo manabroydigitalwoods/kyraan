@@ -7,11 +7,13 @@ from pathlib import Path
 
 import pytest
 
+import asyncio  # noqa: E402
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import tui as tui_module  # noqa: E402
 from kyraan.control_plane import kill_switch  # noqa: E402
 from kyraan.model_router import router  # noqa: E402
-from textual.widgets import Collapsible  # noqa: E402
+from textual.widgets import Collapsible, LoadingIndicator  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -62,6 +64,46 @@ async def test_kill_and_unkill_slash_commands_toggle_the_real_kill_switch():
         await pilot.press("enter")
         await pilot.pause()
         assert not kill_switch.is_engaged()
+
+
+async def test_input_is_focused_on_launch():
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.focused is not None
+        assert app.focused.id == "chat-input"
+
+
+async def test_show_thinking_mounts_a_loading_indicator():
+    """Verified live via screenshots that the indicator is visible for the
+    duration of a real (slow) call. Pilot's message-pump timing in this
+    harness doesn't let a test reliably observe "mid-flight" state — by the
+    time control returns to the test body, queued async work (including a
+    mocked call's own artificial delay) has often already been drained past
+    that point — so this checks the mounting mechanism directly instead of
+    racing real elapsed time."""
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        indicator = await app._show_thinking()
+        assert len(app.query(LoadingIndicator)) == 1
+        await indicator.remove()
+        await pilot.pause()
+        assert len(app.query(LoadingIndicator)) == 0
+
+
+async def test_no_loading_indicator_left_over_after_a_completed_exchange(monkeypatch):
+    async def fake_handle_message(chat_id, text):
+        return "mocked reply"
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fake_handle_message)
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"hi")
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(app.query(LoadingIndicator)) == 0
 
 
 async def test_reasoning_shows_as_a_collapsed_thought_section(monkeypatch):
