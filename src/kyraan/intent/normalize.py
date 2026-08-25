@@ -42,7 +42,10 @@ class NormalizedIntent:
 
 
 def normalize(raw_text: str, tier: str = "cheap") -> NormalizedIntent:
-    response = router.call(prompt=raw_text, system=_SYSTEM_PROMPT, tier=tier, max_tokens=200)
+    # No max_tokens cap below the router's 1024 default — a reasoning-model
+    # tier spends hidden tokens before the visible JSON, and a tight cap
+    # truncates the output mid-string (seen live in reminder extraction).
+    response = router.call(prompt=raw_text, system=_SYSTEM_PROMPT, tier=tier)
     try:
         data = json.loads(response.text)
 
