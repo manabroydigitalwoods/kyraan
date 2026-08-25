@@ -22,7 +22,7 @@ class _FakeRouted:
 
 
 def _mock_normalize(monkeypatch, intent: str, normalized_text: str = "") -> None:
-    def fake_normalize(raw_text, tier="cheap"):
+    def fake_normalize(raw_text, tier="cheap", history=""):
         return NormalizedIntent(intent=intent, confidence=1.0, normalized_text=normalized_text or raw_text)
 
     monkeypatch.setattr(orchestrator, "normalize", fake_normalize)
@@ -328,7 +328,7 @@ async def test_intent_classification_falls_back_to_cheap_when_frontier_is_down(m
     to the local cheap tier, not refuse to understand anything."""
     tiers_called = []
 
-    def fake_normalize(raw_text, tier="cheap"):
+    def fake_normalize(raw_text, tier="cheap", history=""):
         tiers_called.append(tier)
         if tier == "frontier":
             raise orchestrator.router.ModelProviderError("groq is down")
@@ -398,3 +398,52 @@ async def test_calendar_tool_failure_surfaces_honestly(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="what's on my calendar today")
     assert "Couldn't check the calendar" in result
     assert "GOOGLE_CALENDAR_ICS_URL" in result
+
+
+async def test_classifier_receives_conversation_context(monkeypatch):
+    """The live bug this guards: follow-ups ("go ahead", "the call mom
+    one", "6pm") were classified with no context, so Kyraan lost the
+    thread of what the user was continuing."""
+    captured = {}
+
+    def fake_normalize(raw_text, tier="cheap", history=""):
+        captured["history"] = history
+        return NormalizedIntent(intent="qa.answer", confidence=1.0, normalized_text=raw_text)
+
+    monkeypatch.setattr(orchestrator, "normalize", fake_normalize)
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="ok"))
+
+    await orchestrator.handle_message(chat_id=3, raw_text="remind me to call the plumber tomorrow")
+    await orchestrator.handle_message(chat_id=3, raw_text="go ahead")
+
+    assert "remind me to call the plumber tomorrow" in captured["history"]
+
+
+async def test_classifier_context_is_clipped(monkeypatch):
+    orchestrator._history[4].append(("assistant", "x" * 5000))
+    context = orchestrator._classifier_context(4)
+    assert len(context) < 300 and context.endswith("…")
+
+
+async def test_cancel_by_unique_description_cancels_the_right_one(monkeypatch, isolated_store):
+    _mock_normalize(monkeypatch, "reminders.cancel", "cancel the call mom reminder")
+    store = orchestrator.scheduler.store
+    store.add(chat_id=0, text="call mom", when_iso="2099-01-01T10:00:00+00:00")
+    store.add(chat_id=0, text="water the plants", when_iso="2099-01-01T11:00:00+00:00")
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="cancel the call mom reminder")
+
+    assert 'Cancelled reminder: "call mom"' in result
+    assert [r.text for r in store.list_pending(0)] == ["water the plants"]
+
+
+async def test_cancel_with_description_matching_several_still_asks(monkeypatch, isolated_store):
+    _mock_normalize(monkeypatch, "reminders.cancel", "cancel the call reminder")
+    store = orchestrator.scheduler.store
+    store.add(chat_id=0, text="call mom", when_iso="2099-01-01T10:00:00+00:00")
+    store.add(chat_id=0, text="call the plumber", when_iso="2099-01-01T11:00:00+00:00")
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="cancel the call reminder")
+
+    assert "which should I cancel" in result
+    assert len(store.list_pending(0)) == 2

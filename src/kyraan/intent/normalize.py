@@ -43,6 +43,25 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
 Handle typos, slang, and shorthand. Respond with ONLY a JSON object:
 {{"intent": "<one of the valid intents>", "confidence": <0.0-1.0>, "normalized_text": "<cleaned-up message>"}}"""
 
+_CONTEXT_SECTION = """
+
+The message may be a FOLLOW-UP that only makes sense given the recent
+conversation below. Use the conversation to resolve it: pick the intent the
+user is actually continuing, and write normalized_text as the FULL,
+SELF-CONTAINED command with the context folded in. Examples:
+- assistant asked which reminder to cancel; user says "the call mom one"
+  -> intent reminders.cancel, normalized_text "cancel the call mom reminder"
+- reminder time failed earlier; user says "6pm"
+  -> intent reminders.create, normalized_text "remind me to call mom at 6pm"
+- user mentioned needing to call the plumber; then says "remind me about
+  that at 9am" -> reminders.create, "remind me to call the plumber at 9am"
+- assistant offered an action; user says "go ahead" / "yes do it"
+  -> the offered action's intent, normalized_text spelling that action out.
+A message that stands alone is classified as-is — never force context onto it.
+
+Recent conversation (oldest first):
+{history}"""
+
 
 @dataclass
 class NormalizedIntent:
@@ -51,11 +70,16 @@ class NormalizedIntent:
     normalized_text: str
 
 
-def normalize(raw_text: str, tier: str = "cheap") -> NormalizedIntent:
+def normalize(raw_text: str, tier: str = "cheap", history: str = "") -> NormalizedIntent:
+    # `history` makes the classifier context-aware: follow-ups like "go
+    # ahead", "the call mom one", or "6pm" classify as the intent the user
+    # is continuing, with normalized_text rewritten self-contained — found
+    # live: without it, every follow-up dead-ended as a fresh message.
+    system = _SYSTEM_PROMPT + (_CONTEXT_SECTION.format(history=history) if history else "")
     # No max_tokens cap below the router's 1024 default — a reasoning-model
     # tier spends hidden tokens before the visible JSON, and a tight cap
     # truncates the output mid-string (seen live in reminder extraction).
-    response = router.call(prompt=raw_text, system=_SYSTEM_PROMPT, tier=tier)
+    response = router.call(prompt=raw_text, system=system, tier=tier)
     try:
         data = json.loads(router.strip_code_fence(response.text))
 

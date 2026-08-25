@@ -23,7 +23,9 @@ that full day; "this week" runs to Sunday night. Respond with ONLY JSON:
 {{"start_iso": "<ISO 8601 datetime with the same UTC offset>", "end_iso": "<ISO 8601 datetime with the same UTC offset>", "label": "<short human name for the window, e.g. 'today', 'tomorrow'>"}}"""
 
 _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
-The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
+The current date/time is {now} (includes a UTC offset). Use a stated clock
+time EXACTLY — "8pm" means 20:00:00, never the current minutes/seconds
+carried over from now. Respond with ONLY JSON:
 {{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
 
 _ANSWER_SYSTEM = """You are Kyraan, a personal assistant. The current date/time
@@ -88,6 +90,16 @@ def _history_block(chat_id: int) -> str:
     return "\n".join(f"{role}: {text}" for role, text in _history[chat_id]) or "(no conversation yet)"
 
 
+def _classifier_context(chat_id: int, entries: int = 6, clip: int = 200) -> str:
+    """Compact tail of the conversation for intent classification — enough
+    to resolve a follow-up, clipped so a long calendar listing or code
+    answer doesn't drown the classifier prompt."""
+    recent = list(_history[chat_id])[-entries:]
+    return "\n".join(
+        f"{role}: {text[:clip] + '…' if len(text) > clip else text}" for role, text in recent
+    )
+
+
 async def _extraction_note(raw_text: str) -> str:
     """Run fact extraction and return a reply suffix naming what was queued
     ("" when nothing was). Extraction is best-effort: it must never break
@@ -148,15 +160,16 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # fast call even on the bigger model — there's no real cost to
         # always using it here, so this isn't a cheap-first-then-escalate
         # dance anymore, just the reliable tier directly.
+        context = _classifier_context(chat_id)
         try:
-            parsed = normalize(raw_text, tier="frontier")
+            parsed = normalize(raw_text, tier="frontier", history=context)
         except router.ModelProviderError as exc:
             # Frontier (Groq) is classification's single cloud dependency —
             # if it's down or rate-limited, degrade to the local cheap tier
             # (measured at 12-13/14 on the same test set) instead of
             # refusing to understand anything at all.
             log_event("intent_fallback_cheap", error=str(exc))
-            parsed = normalize(raw_text, tier="cheap")
+            parsed = normalize(raw_text, tier="cheap", history=context)
 
         if parsed.confidence < 0.4:
             return "I'm not confident I understood that — could you rephrase?"
@@ -260,6 +273,19 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
         # token is safe.
         tokens = [t.lower() for t in args["text"].split() if len(t) >= 6 and t.isalnum()]
         match = next((r for r in pending if any(r.id.startswith(t) for t in tokens)), None)
+        if not match:
+            # Match by description too ("cancel the call mom one") — the
+            # context-aware classifier rewrites follow-ups into phrases
+            # like this, and demanding an id for them dead-ends the
+            # conversation. Only an UNAMBIGUOUS description match cancels;
+            # words hitting several reminders still ask.
+            stop = {"cancel", "the", "reminder", "reminders", "one", "that",
+                    "this", "delete", "remove", "please", "for", "about", "set"}
+            words = [w.lower().strip(".,!?'\"") for w in args["text"].split()]
+            words = [w for w in words if len(w) >= 3 and w not in stop]
+            candidates = [r for r in pending if any(w in r.text.lower() for w in words)] if words else []
+            if len(candidates) == 1:
+                match = candidates[0]
         if not match and len(pending) == 1:
             # Only one reminder exists — "cancel my reminder" is unambiguous.
             match = pending[0]
