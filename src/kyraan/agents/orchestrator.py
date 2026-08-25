@@ -250,6 +250,20 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             log_event("intent_fallback_cheap", error=str(exc))
             parsed = normalize(raw_text, tier="cheap", history=context)
 
+        # Sanity-guard the rewrite: a degraded classifier was seen turning
+        # "Do you know my father?" into the ANSWER "I don't have any
+        # information about your family members." — which qa then answered
+        # instead of the user's words. A legit contextual rewrite draws its
+        # words from the message or the recent conversation; one that draws
+        # from neither is hallucination — use the raw text.
+        def _words(t):
+            return {w.strip(".,!?'\"").lower() for w in t.split() if len(w) > 2}
+        norm_w = _words(parsed.normalized_text)
+        allowed = _words(raw_text) | _words(context)
+        if norm_w and len(norm_w & allowed) / len(norm_w) < 0.3:
+            log_event("normalized_text_rejected", chat_id=chat_id,
+                      normalized=parsed.normalized_text, raw=raw_text)
+            parsed.normalized_text = raw_text
         log_event("intent_classified", chat_id=chat_id, intent=parsed.intent,
                   confidence=parsed.confidence, normalized=parsed.normalized_text)
         if parsed.confidence < 0.4:

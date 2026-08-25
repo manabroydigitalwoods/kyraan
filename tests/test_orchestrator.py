@@ -925,3 +925,23 @@ async def test_past_event_start_is_refused_before_the_ask(monkeypatch, isolated_
     assert "in the past" in result
     assert "reply \"yes\"" not in result  # no confirm ask was created
     assert orchestrator._pending_confirmations == {}
+
+
+async def test_hallucinated_normalization_is_replaced_with_raw_text(monkeypatch):
+    """Degraded classifier turned 'Do you know my father?' into the ANSWER
+    'I don't have any information about your family members.' — qa then
+    answered the hallucination. Zero-overlap rewrites now revert to raw."""
+    def bad_normalize(raw_text, tier="cheap", history=""):
+        return NormalizedIntent(intent="qa.answer", confidence=1.0,
+                                normalized_text="I don't have any information about your family members.")
+
+    monkeypatch.setattr(orchestrator, "normalize", bad_normalize)
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["prompt"] = prompt
+        return _FakeRouted(text="ok")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    await orchestrator.handle_message(chat_id=0, raw_text="Do you know my father?")
+    assert captured["prompt"] == "Do you know my father?"  # raw, not the hallucination

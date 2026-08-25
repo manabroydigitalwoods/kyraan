@@ -32,3 +32,53 @@ def test_ollama_honors_a_real_env_var_override(monkeypatch):
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://example.internal:11434/v1")
     client = router._get_openai_compatible_client("ollama", _OLLAMA_CFG)
     assert str(client.base_url) == "http://example.internal:11434/v1/"
+
+
+async def _noop():
+    pass
+
+
+def test_rate_limited_provider_enters_cooldown(monkeypatch):
+    """Live degraded mode burned ~9 doomed HTTP calls per message before
+    fallbacks engaged — after a rate-limit failure the provider is skipped
+    outright for the cool-down window."""
+    import pytest
+    from kyraan.control_plane import config
+
+    monkeypatch.setattr(router, "_cooldown_until", {})
+    monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [])
+    attempts = []
+
+    def limited(provider, model, prompt, system, max_tokens):
+        attempts.append(1)
+        raise RuntimeError("Error code: 429 - rate limit reached")
+
+    monkeypatch.setattr(router, "_dispatch", limited)
+    with pytest.raises(router.ModelProviderError):
+        router.call(prompt="x", tier="frontier")
+    assert len(attempts) == 1
+
+    with pytest.raises(router.ModelProviderError, match="cooling down"):
+        router.call(prompt="x", tier="frontier")
+    assert len(attempts) == 1  # zero new HTTP attempts during cooldown
+
+    # cooldown expiry re-enables the provider
+    router._cooldown_until["groq"] = 0.0
+    with pytest.raises(router.ModelProviderError, match="failed after"):
+        router.call(prompt="x", tier="frontier")
+    assert len(attempts) == 2
+
+
+def test_non_rate_errors_do_not_trigger_cooldown(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(router, "_cooldown_until", {})
+    monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [])
+
+    def broken(provider, model, prompt, system, max_tokens):
+        raise RuntimeError("connection reset")
+
+    monkeypatch.setattr(router, "_dispatch", broken)
+    with pytest.raises(router.ModelProviderError):
+        router.call(prompt="x", tier="frontier")
+    assert router._cooldown_until == {}

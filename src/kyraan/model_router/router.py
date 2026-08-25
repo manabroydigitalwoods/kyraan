@@ -114,6 +114,13 @@ def budget_alert_due() -> bool:
     log_event("budget_alert", spent_today=spent, budget=budget)
     return True
 
+# Circuit breaker: after a rate-limit failure a provider is skipped for a
+# cool-down instead of burning 3 retries per call site per message — in
+# live degraded mode that was ~9 doomed HTTP calls (~12s) per message
+# before the fallbacks engaged.
+_COOLDOWN_S = 120
+_cooldown_until: dict = {}
+
 _anthropic_client = None
 _gemini_client = None
 _openai_compatible_clients: dict[str, object] = {}
@@ -349,6 +356,11 @@ def call(
     model = tier_cfg["model"]
     provider = tier_cfg["provider"]
 
+    if time.monotonic() < _cooldown_until.get(provider, 0.0):
+        raise ModelProviderError(
+            f"{provider} is cooling down after a rate limit — fallbacks engage immediately"
+        )
+
     last_exc: Exception | None = None
     attempts = len(_RETRY_BACKOFF_SECONDS) + 1
     for attempt in range(attempts):
@@ -391,4 +403,7 @@ def call(
             if attempt < attempts - 1:
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 
+    if "429" in str(last_exc) or "rate" in str(last_exc).lower():
+        _cooldown_until[provider] = time.monotonic() + _COOLDOWN_S
+        log_event("provider_cooldown", provider=provider, seconds=_COOLDOWN_S)
     raise ModelProviderError(f"{provider}/{model} failed after {attempts} attempts: {last_exc}") from last_exc
