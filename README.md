@@ -33,24 +33,42 @@ reminders do I have", or any general question.
 
 ## Model providers
 
-Both tiers currently point at [OpenCode Zen](https://opencode.ai/zen)'s free
-models (`big-pickle` for cheap, `nemotron-3-ultra-free` for frontier) as a
-stand-in — set `OPENCODE_API_KEY` in `.env` to use them. To switch a tier to
-a different provider, edit its entry in `config/permissions.yaml`:
+`config/permissions.yaml` has a `providers` registry — every provider
+Kyraan knows how to call, each just a `kind` (`anthropic` | `gemini` |
+`openai_compatible`) plus connection info. `model_tiers` then picks a
+`provider` + `model` per tier:
 
 ```yaml
 model_tiers:
   cheap:
-    provider: anthropic   # or opencode | openai | ollama
-    model: claude-haiku-4-5-20251001
+    provider: ollama
+    model: llama3.2
+  frontier:
+    provider: groq
+    model: openai/gpt-oss-120b
 ```
 
-- `anthropic` / `openai` need `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in `.env`
-- `ollama` needs nothing but a running local server (`OLLAMA_BASE_URL`
-  defaults to `http://localhost:11434/v1`); use whatever model tag you've
-  pulled locally (e.g. `llama3.1`)
-- see the full OpenCode Zen catalog at `https://opencode.ai/zen/v1/models`
-  (with your key in the `Authorization: Bearer` header)
+Currently: `cheap` runs on local Ollama (no key, no rate limit — good for
+intent normalization and everyday replies), `frontier` runs on Groq (still
+free, but a real ~120B-class model for harder escalations, served fast).
+`anthropic`, `gemini`, `openai`, `opencode`, and `openrouter` are all
+already configured in the registry and ready to assign to a tier — swapping
+either field, or adding a third tier, is a config-only change; no code in
+`src/kyraan/model_router/router.py` needs to change. Adding a brand new
+`openai_compatible` gateway later (another base_url/key pair) is the same:
+add an entry under `providers`, nothing else.
+
+Live-tested findings worth knowing before picking a provider:
+- **OpenCode Zen**'s free models share one account-wide rate limit that
+  trips fast — fine for a quick check, not for real dev iteration
+- **Gemini**'s free tier caps `gemini-3.7-flash` at 20 requests/day — too
+  little for anything but the lightest testing
+- **Groq** and **OpenRouter**'s free models are "reasoning" models that
+  spend tokens on hidden reasoning before the visible answer — give them
+  real `max_tokens` headroom (the router defaults to 1024) or the visible
+  text comes back empty
+- **local Ollama** has no rate limit at all; pull whatever fits your
+  hardware (`ollama pull llama3.2`) and reference that tag as the model id
 
 ## Test
 
@@ -69,9 +87,8 @@ rm KILL_SWITCH       # resumes
 
 - `src/kyraan/control_plane/` — kernel (permission + kill-switch gate), config
   loader, DND rules, structured event logging (`logs/events.jsonl`)
-- `src/kyraan/model_router/` — cheap/frontier tier routing; each tier picks a
-  provider independently (`anthropic`, `opencode`, `openai`, or a local
-  `ollama` server) via `config/permissions.yaml`
+- `src/kyraan/model_router/` — cheap/frontier tier routing against the
+  provider registry in `config/permissions.yaml`
 - `src/kyraan/memory/` — Markdown fact store; writes land in
   `memory/pending_review/` for manual approval, never live directly
 - `src/kyraan/intent/` — cheap-model typo/slang normalization + confidence

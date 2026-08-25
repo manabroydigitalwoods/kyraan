@@ -6,19 +6,62 @@ defaults:
   permission: confirm   # auto | confirm
   model_tier: cheap      # cheap | frontier
 
+# Every provider Kyraan can call, in one place. `kind` selects which code
+# path in src/kyraan/model_router/router.py handles it:
+#   - anthropic: native Anthropic SDK
+#   - gemini: native Google AI Studio SDK
+#   - openai_compatible: any OpenAI-wire-format endpoint (just base_url +
+#     api_key_env) — covers OpenCode Zen, OpenAI itself, Groq, OpenRouter,
+#     and a local Ollama server. Adding another gateway later is a config
+#     change only, no code change.
+# Live-tested findings (2026-08-25), so future-you doesn't have to
+# rediscover them: OpenCode Zen's free models share one account-wide rate
+# limit that trips fast; Gemini's free tier caps gemini-3.7-flash at 20
+# requests/day (too little for dev iteration, let alone real use); Groq and
+# OpenRouter's free models are "reasoning" models that spend tokens on
+# hidden reasoning before the visible answer — give them real max_tokens
+# headroom (router.py defaults to 1024) or the visible text comes back
+# empty; local Ollama has no rate limit at all.
+providers:
+  anthropic:
+    kind: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+  gemini:
+    kind: gemini
+    api_key_env: GEMINI_API_KEY
+  openai:
+    kind: openai_compatible
+    api_key_env: OPENAI_API_KEY
+  opencode:
+    kind: openai_compatible
+    base_url: https://opencode.ai/zen/v1
+    api_key_env: OPENCODE_API_KEY
+  groq:
+    kind: openai_compatible
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+  openrouter:
+    kind: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+  ollama:
+    kind: openai_compatible
+    base_url: http://localhost:11434/v1   # overridden by OLLAMA_BASE_URL env if set
+
 model_tiers:
-  # provider is one of: anthropic | opencode | openai | ollama | gemini
-  # (see src/kyraan/model_router/router.py). Using Google AI Studio's free
-  # Gemini Flash tier for now (OpenCode Zen's free models kept hitting an
-  # account-wide rate limit) — swap provider/model per tier as real
-  # Anthropic/OpenAI keys or a local Ollama model become available; nothing
-  # else in the codebase changes.
+  # Each tier just names a provider (must exist above) + that provider's
+  # model id. cheap = local Ollama: zero cost, zero rate limit, fast enough
+  # for intent normalization and everyday replies. frontier = Groq: still
+  # free, but a real ~120B-class model for harder qa.answer escalations,
+  # served fast by Groq's inference hardware. OpenRouter/Gemini/OpenCode
+  # are configured above and ready to use — assign either tier to them, or
+  # add a third tier later, purely by editing this file.
   cheap:
-    provider: gemini
-    model: gemini-flash-latest
+    provider: ollama
+    model: llama3.2
   frontier:
-    provider: gemini
-    model: gemini-flash-latest
+    provider: groq
+    model: openai/gpt-oss-120b
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.

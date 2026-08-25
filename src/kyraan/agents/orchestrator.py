@@ -4,18 +4,17 @@ Flow: normalize intent -> gate + dispatch through the kernel -> return text
 for the Response Engine (here, just the Telegram send call) to deliver.
 """
 import json
-import os
-from datetime import datetime
 
 from kyraan.control_plane import kernel
+from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
 from kyraan.intent.normalize import normalize
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
 
 _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
-The current date/time is {now}. Respond with ONLY JSON:
-{{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime>"}}"""
+The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
+{{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
@@ -46,7 +45,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
         extraction = router.call(
             prompt=text,
-            system=_EXTRACT_WHEN_SYSTEM.format(now=datetime.now().isoformat()),
+            system=_EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()),
             tier="cheap",
             max_tokens=200,
         )

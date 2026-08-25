@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
 from kyraan.control_plane import kernel
+from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.triggers import store
 
@@ -34,7 +35,7 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         assert _schedule_fn is not None
         _schedule_fn(
             reminder_id,
-            datetime.now().astimezone() + timedelta(minutes=15),
+            local_now() + timedelta(minutes=15),
             {"chat_id": chat_id, "text": text, "reminder_id": reminder_id},
         )
         return
@@ -44,11 +45,22 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
     log_event("reminder_sent", reminder_id=reminder_id, chat_id=chat_id)
 
 
+def _parse_when(when_iso: str) -> datetime:
+    """The extraction prompt asks the model for an offset-aware ISO datetime,
+    but models sometimes drop the offset — if so, assume it meant
+    KYRAAN_TIMEZONE (the same tz "now" was expressed in) rather than
+    crashing or silently assuming UTC/system tz."""
+    parsed = datetime.fromisoformat(when_iso)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_now().tzinfo)
+    return parsed
+
+
 def _schedule(reminder: store.Reminder) -> None:
     assert _schedule_fn is not None, "scheduler.init() must be called before creating reminders"
     _schedule_fn(
         reminder.id,
-        datetime.fromisoformat(reminder.when_iso),
+        _parse_when(reminder.when_iso),
         {"chat_id": reminder.chat_id, "text": reminder.text, "reminder_id": reminder.id},
     )
 

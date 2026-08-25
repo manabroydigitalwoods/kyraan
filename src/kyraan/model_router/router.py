@@ -1,60 +1,60 @@
 """Two-tier model routing: cheap by default, escalate to frontier on request
 or when the cheap tier reports low confidence.
 
-Each tier picks a provider in config/permissions.yaml's `provider` field:
-  - anthropic: native Anthropic API (ANTHROPIC_API_KEY)
-  - opencode: OpenCode Zen's OpenAI-compatible gateway (OPENCODE_API_KEY) —
-    a stand-in while there's no Anthropic key; its free models are used by
-    default (see permissions.yaml)
-  - openai: native OpenAI API (OPENAI_API_KEY)
-  - ollama: a local Ollama server's OpenAI-compatible endpoint, no key needed
-  - gemini: native Google AI Studio API (GEMINI_API_KEY), e.g. Flash models
-
-Swapping a tier's `provider`/`model` in permissions.yaml is the only change
-needed to move a tier between these — nothing else in the codebase changes.
+Providers are a registry in config/permissions.yaml's `providers` section —
+each entry has a `kind` (anthropic | gemini | openai_compatible) plus
+whatever connection info that kind needs (api_key_env, base_url). Adding a
+new OpenAI-compatible provider (another gateway, another local server) is a
+config-only change; no code here needs to know about it. A tier just names
+a `provider` + `model`; swapping either in permissions.yaml is the only
+change needed to move a tier between providers.
 """
 import os
+import time
 from dataclasses import dataclass
 
 from kyraan.control_plane import config
 from kyraan.control_plane.logging_setup import log_event
-
-# provider -> (base_url or None for the SDK default, api_key env var or None if unneeded)
-_OPENAI_COMPATIBLE = {
-    "opencode": ("https://opencode.ai/zen/v1", "OPENCODE_API_KEY"),
-    "openai": (None, "OPENAI_API_KEY"),
-    "ollama": (os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1"), None),
-}
 
 _anthropic_client = None
 _gemini_client = None
 _openai_compatible_clients: dict[str, object] = {}
 
 
-def _get_anthropic_client():
+def _provider_cfg(provider: str) -> dict:
+    providers = config.load()["providers"]
+    if provider not in providers:
+        raise ValueError(f"Unknown model provider {provider!r} — add it to config/permissions.yaml's providers section")
+    return providers[provider]
+
+
+def _get_anthropic_client(provider_cfg: dict):
     global _anthropic_client
     if _anthropic_client is None:
         from anthropic import Anthropic
 
-        _anthropic_client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+        _anthropic_client = Anthropic(api_key=os.environ[provider_cfg["api_key_env"]])
     return _anthropic_client
 
 
-def _get_gemini_client():
+def _get_gemini_client(provider_cfg: dict):
     global _gemini_client
     if _gemini_client is None:
         from google import genai
 
-        _gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        _gemini_client = genai.Client(api_key=os.environ[provider_cfg["api_key_env"]])
     return _gemini_client
 
 
-def _get_openai_compatible_client(provider: str):
+def _get_openai_compatible_client(provider: str, provider_cfg: dict):
     if provider not in _openai_compatible_clients:
         from openai import OpenAI
 
-        base_url, api_key_env = _OPENAI_COMPATIBLE[provider]
+        api_key_env = provider_cfg.get("api_key_env")
         api_key = os.environ[api_key_env] if api_key_env else "not-needed"
+        base_url = provider_cfg.get("base_url")
+        if provider == "ollama":
+            base_url = os.environ.get("OLLAMA_BASE_URL") or base_url
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
@@ -75,8 +75,8 @@ class RoutedResponse:
     model: str
 
 
-def _call_anthropic(model: str, prompt: str, system: str, max_tokens: int) -> str:
-    response = _get_anthropic_client().messages.create(
+def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
+    response = _get_anthropic_client(provider_cfg).messages.create(
         model=model,
         max_tokens=max_tokens,
         system=system or None,
@@ -85,24 +85,10 @@ def _call_anthropic(model: str, prompt: str, system: str, max_tokens: int) -> st
     return "".join(block.text for block in response.content if block.type == "text")
 
 
-def _call_openai_compatible(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> str:
-    messages = []
-    if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-
-    response = _get_openai_compatible_client(provider).chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=messages,
-    )
-    return response.choices[0].message.content or ""
-
-
-def _call_gemini(model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
     from google.genai import types
 
-    response = _get_gemini_client().models.generate_content(
+    response = _get_gemini_client(provider_cfg).models.generate_content(
         model=model,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -113,14 +99,33 @@ def _call_gemini(model: str, prompt: str, system: str, max_tokens: int) -> str:
     return response.text or ""
 
 
+def _call_openai_compatible(provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+
+    response = _get_openai_compatible_client(provider, provider_cfg).chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=messages,
+    )
+    return response.choices[0].message.content or ""
+
+
 def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> str:
-    if provider == "anthropic":
-        return _call_anthropic(model, prompt, system, max_tokens)
-    if provider == "gemini":
-        return _call_gemini(model, prompt, system, max_tokens)
-    if provider in _OPENAI_COMPATIBLE:
-        return _call_openai_compatible(provider, model, prompt, system, max_tokens)
-    raise ValueError(f"Unknown model provider: {provider!r}")
+    provider_cfg = _provider_cfg(provider)
+    kind = provider_cfg["kind"]
+    if kind == "anthropic":
+        return _call_anthropic(provider_cfg, model, prompt, system, max_tokens)
+    if kind == "gemini":
+        return _call_gemini(provider_cfg, model, prompt, system, max_tokens)
+    if kind == "openai_compatible":
+        return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens)
+    raise ValueError(f"Unknown provider kind {kind!r} for provider {provider!r}")
+
+
+_RETRY_BACKOFF_SECONDS = (0.5, 1.5)  # transient errors (rate limits, 503s) are common; retry before giving up
 
 
 def call(
@@ -131,16 +136,22 @@ def call(
 ) -> RoutedResponse:
     tier_cfg = config.load()["model_tiers"][tier]
     model = tier_cfg["model"]
-    provider = tier_cfg.get("provider", "anthropic")
+    provider = tier_cfg["provider"]
 
-    try:
-        text = _dispatch(provider, model, prompt, system, max_tokens)
-    except Exception as exc:
-        log_event("model_call_error", tier=tier, provider=provider, model=model, error=str(exc))
-        raise ModelProviderError(f"{provider}/{model} failed: {exc}") from exc
+    last_exc: Exception | None = None
+    attempts = len(_RETRY_BACKOFF_SECONDS) + 1
+    for attempt in range(attempts):
+        try:
+            text = _dispatch(provider, model, prompt, system, max_tokens)
+            log_event("model_call", tier=tier, provider=provider, model=model, prompt_chars=len(prompt), attempt=attempt)
+            return RoutedResponse(text=text, tier_used=tier, model=model)
+        except Exception as exc:
+            last_exc = exc
+            log_event("model_call_error", tier=tier, provider=provider, model=model, attempt=attempt, error=str(exc))
+            if attempt < attempts - 1:
+                time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 
-    log_event("model_call", tier=tier, provider=provider, model=model, prompt_chars=len(prompt))
-    return RoutedResponse(text=text, tier_used=tier, model=model)
+    raise ModelProviderError(f"{provider}/{model} failed after {attempts} attempts: {last_exc}") from last_exc
 
 
 def call_with_escalation(

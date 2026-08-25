@@ -16,6 +16,13 @@ def _tz() -> ZoneInfo:
     return ZoneInfo(tz_name)
 
 
+def local_now() -> datetime:
+    """The single source of truth for "now" in KYRAAN_TIMEZONE — used
+    anywhere a wall-clock time needs to match what the user meant (reminder
+    scheduling, DND), independent of the host machine's own system tz."""
+    return datetime.now(_tz())
+
+
 def in_quiet_hours(now: datetime | None = None) -> bool:
     dnd_cfg = config.load()["dnd"]
     tz = _tz()

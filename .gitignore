@@ -9,3 +9,5 @@ memory/pending_review/
 .pytest_cache/
 *.egg-info/
 .DS_Store
+.claude/
+data/

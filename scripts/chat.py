@@ -23,6 +23,7 @@ from rich.markdown import Markdown
 
 from kyraan.agents import orchestrator
 from kyraan.control_plane import kill_switch
+from kyraan.control_plane.dnd import local_now
 from kyraan.triggers import scheduler
 
 CHAT_ID = 0
@@ -42,7 +43,7 @@ Anything else is sent to the orchestrator, same as a real Telegram message.
 
 
 def schedule_fn(job_name: str, run_at: datetime, payload: dict) -> None:
-    delay = max((run_at - datetime.now().astimezone()).total_seconds(), 0)
+    delay = max((run_at - local_now()).total_seconds(), 0)
 
     async def fire_later():
         await asyncio.sleep(delay)
