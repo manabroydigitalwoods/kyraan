@@ -311,6 +311,14 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             _skip_extraction.set(True)  # a message we couldn't parse can't state reliable facts
             return "I'm not confident I understood that — could you rephrase?"
 
+        if parsed.intent == "incomplete":
+            # A human doesn't answer half a sentence — they wait for the
+            # rest. Seen live: "tomorrow morning" (sent a minute before
+            # "remind me at 9") got an irrelevant morning-brief answer.
+            # Deterministic, no model call; the fragment stays in history
+            # so the next message completes the thought.
+            _skip_extraction.set(True)
+            return "Go on — I'm listening…"
         if parsed.intent == "reminders.create":
             return await _create_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "reminders.list":

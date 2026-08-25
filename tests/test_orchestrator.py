@@ -1014,3 +1014,27 @@ async def test_control_intent_without_a_device_answers_conversationally(monkeypa
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Tell me what's wrong and I'll improve."))
     result = await orchestrator.handle_message(chat_id=0, raw_text="let me fix you")
     assert "AC" not in result and "improve" in result
+
+
+async def test_incomplete_fragment_waits_instead_of_answering(monkeypatch):
+    """Seen live: 'tomorrow morning' (first fragment of a slow burst) got
+    an irrelevant morning-brief answer. A fragment gets a listening
+    prompt — deterministic, no qa call — and stays in history so the
+    next message completes the thought."""
+    _mock_normalize(monkeypatch, "incomplete", "tomorrow morning")
+
+    def explode(**kwargs):
+        raise AssertionError("no model call for a fragment")
+
+    monkeypatch.setattr(orchestrator.router, "call", explode)
+    calls = []
+
+    async def counting(raw_text, context=""):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", counting)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="tomorrow morning")
+    assert "listening" in result.lower()
+    assert calls == []  # extraction skipped too
+    assert "user: tomorrow morning" in orchestrator._history_block(0)  # kept for the follow-up

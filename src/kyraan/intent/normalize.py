@@ -16,6 +16,7 @@ KNOWN_INTENTS = [
     "email.check",
     "home.query",
     "home.control",
+    "incomplete",
     "qa.answer",
     "unknown",
 ]
@@ -59,6 +60,14 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   turn off the AC" is reminders.create, and complaints or meta-talk about
   Kyraan itself ("you are confused", "let me fix you", "your answers are
   wrong") are qa.answer, never device control.
+- incomplete: the message is a FRAGMENT that starts a thought but isn't a
+  complete request yet — a bare time or place ("tomorrow morning", "at 9",
+  "after lunch"), a dangling noun — AND nothing in the recent conversation
+  makes it a follow-up that completes an earlier exchange. The user is
+  mid-thought; more is coming. (If the conversation makes the fragment a
+  real follow-up — "the call mom one" after a which-reminder question,
+  "6pm" after a failed time — classify it as that continued intent
+  instead, never incomplete.)
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. Asking the current TIME ("what time
   is it", "wat tym is it") is qa.answer — the clock, never calendar.list. This should be the common case for
