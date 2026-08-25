@@ -486,7 +486,10 @@ async def _check_email(chat_id: int, text: str = "") -> str:
     # never fetches (§3a: metadata only). Say the boundary instead of
     # dumping the same list again (seen live: "can you open email?" got an
     # identical unread summary, as if it answered the question).
-    wants_body = any(w in text.lower() for w in ("open", "read", "body", "content", "full"))
+    wants_body = any(w in text.lower() for w in (
+        "open", "read", "body", "content", "full", "detail", "more about",
+        "tell me about", "about the email", "what does", "says", "summar",
+    ))
 
     async def handler(_args: dict) -> str:
         # The reply the user sees carries senders/subjects; the history

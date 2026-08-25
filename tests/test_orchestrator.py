@@ -761,3 +761,17 @@ async def test_chat_transcript_logs_both_sides(monkeypatch):
     assert '"role": "assistant", "text": "hello back"' in log
     events = logging_setup.EVENT_LOG.read_text()
     assert '"kind": "intent_classified"' in events
+
+
+async def test_asking_details_about_a_specific_email_states_the_boundary(monkeypatch):
+    """Found via chat.jsonl minutes after it went live: 'tell more about
+    the Kotak email?' slipped past the body-boundary keywords and got the
+    plain list a third time."""
+    _mock_normalize(monkeypatch, "email.check", 'show me more details about the email titled "Kotak Credit Card"')
+
+    async def fake_run_tool(call, **kwargs):
+        return {"unread_estimate": 1, "messages": [{"from": "Kotak", "subject": "EMI", "date": "d"}]}
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="can you tell more about the Kotak email?")
+    assert "can't open email contents" in result
