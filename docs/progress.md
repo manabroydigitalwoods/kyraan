@@ -39,9 +39,10 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - Working providers: `ollama` (local), `groq`, `openrouter`, `opencode`,
   `gemini`, `openai` — all live-verified with real keys
 - Two tiers (`cheap`, `frontier`), each independently assigned a
-  provider+model; configured as **cheap → local Ollama (`llama3.2`)**,
-  **frontier → Groq (`openai/gpt-oss-120b`)** — but see below, the
-  orchestrator currently calls frontier for everything
+  provider+model; **cheap → local Ollama (`llama3.1:8b`)**,
+  **frontier → Groq (`openai/gpt-oss-120b`)** — qa.answer and
+  reminders.create call cheap, intent classification calls frontier
+  specifically (see below for why the split)
 - Retry-with-backoff on transient errors (rate limits, 5xx) — every cloud
   provider tested has hit these live
 - Captures latency, token usage, reasoning/"thinking" text, and cost
@@ -149,14 +150,30 @@ earlier. Fixed with a third prompt guard: the system prompt now states
 Kyraan cannot store facts or remember across messages, and must never
 imply a fact was saved. Live-verified honest answers after the fix.
 
+**Local is viable again — llama3.1:8b (2026-08-25, later still):** pulled
+the 8B model (4.9GB, fits the dev machine comfortably) and reran the exact
+comparison that justified moving everything to frontier. Results: 12-13/14
+correct on intent classification (vs llama3.2's ~8/14, frontier's 14/14 —
+one "miss" was actually correct JSON wrapped in a markdown fence the
+parser doesn't strip yet, a general robustness gap independent of the
+model), 3/3 exact on qa.answer time accuracy (matching frontier exactly,
+vs llama3.2's 0/3), 4/4 clean and correct on reminder extraction (matching
+frontier exactly, vs llama3.2's malformed JSON/corrupted datetimes). Since
+llama3.1:8b matches frontier on two of three tasks, cheap tier now points
+at it and qa.answer/reminders.create call `tier="cheap"` again — cutting
+Groq call volume and cloud dependency for the two highest-frequency call
+sites. Intent classification stays on frontier specifically, still the
+measurably more reliable of the two there. Full walkthrough rerun clean:
+every response correct, zero crashes, $0.0000 cost, 48/48 tests pass.
+
 ## Key decisions made
 
 - **Stack**: Python, self-hosted (not cloud VM) — see `pyproject.toml`
-- **Model providers**: Groq is the sole active provider as of 2026-08-25,
-  after live-testing ruled out OpenCode Zen (account-wide rate limit trips
-  fast), Gemini's free tier (hard 20 requests/day cap), and local Ollama's
-  `llama3.2` (not reliable enough for structured/factual tasks — see the
-  robustness section above) for real use
+- **Model providers**: hybrid as of 2026-08-25 — local Ollama (`llama3.1:8b`)
+  for qa.answer/reminders.create, Groq for intent classification — after
+  live-testing ruled out OpenCode Zen (account-wide rate limit trips fast),
+  Gemini's free tier (hard 20 requests/day cap), and llama3.2 (the smaller
+  3B model, not reliable enough for structured/factual tasks) for real use
 - Real API keys for Gemini, OpenAI, OpenCode, Groq, and OpenRouter are in
   the local `.env` (gitignored, never committed) — Anthropic's is not yet
   obtained. Swapping a tier's provider is a one-line config edit, or a
@@ -192,15 +209,19 @@ imply a fact was saved. Live-verified honest answers after the fix.
   nothing here should be rolled out to family members yet
 - No RAG, relationship graph, agent router, tool registry, reflection loop,
   or curiosity queue — all Phase 2+, not started
-- Single point of failure: every model call now depends on Groq. If it
-  degrades or rate-limits under real (non-dev-loop) usage, there's no
-  automatic fallback provider wired in — would need to be re-added
+- Intent classification depends on Groq specifically, with no automatic
+  local fallback wired in — if it degrades or rate-limits under real
+  (non-dev-loop) usage, classification breaks even though qa.answer and
+  reminders.create would keep working locally. Would need to be added
   deliberately, informed by what actually breaks first
+- JSON parsing (intent classification, reminder extraction) doesn't strip
+  a markdown code fence if the model wraps its JSON in one — seen live
+  from llama3.1:8b once; the intent was actually correct, just unparsed
 
 ## Next steps
 
-1. Get `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`, run the real bot
-   end-to-end for the first time
+1. `TELEGRAM_BOT_TOKEN` is in `.env`; `TELEGRAM_OWNER_ID` still isn't —
+   still need it to run the real bot end-to-end for the first time
 2. **Wire the memory loop** — the missing half of Phase 1: extraction pass
    after `handle_message` calling the existing `propose_fact()`, memory
    reads feeding qa.answer's prompt, seed the empty `memory/` tree, and a
@@ -208,9 +229,7 @@ imply a fact was saved. Live-verified honest answers after the fix.
 3. CI for the test suite + rotation for `logs/events.jsonl`
 4. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
-5. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
-   — the dev machine, Apple M3 Pro/18GB, comfortably fits either) and
-   re-run the same reliability comparison against frontier, to see whether
-   local becomes viable again at that size
+5. Strip a markdown code fence before parsing model JSON output (intent
+   classification, reminder extraction) — small, low-risk robustness fix
 6. Phase 2 groundwork: tool registry design, first MCP server (likely
    Home Assistant or a calendar) — not started
