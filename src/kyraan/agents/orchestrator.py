@@ -186,10 +186,10 @@ def _structured_call(prompt: str, system: str):
     showed the local 8B extracting \"in 45mins\" as a PAST time and
     failing window JSON outright."""
     try:
-        return router.call(prompt=prompt, system=system, tier="frontier")
+        return router.call(prompt=prompt, system=system, tier="frontier", force_json=True)
     except router.ModelProviderError as exc:
         log_event("structured_fallback_cheap", error=str(exc))
-        return router.call(prompt=prompt, system=system, tier="cheap")
+        return router.call(prompt=prompt, system=system, tier="cheap", force_json=True)
 
 
 async def _extraction_note(chat_id: int, raw_text: str) -> str:

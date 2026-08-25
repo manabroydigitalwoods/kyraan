@@ -4,9 +4,16 @@ a personal assistant, not an open bot, until Phase 3's multi-user work.
 import asyncio
 import os
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
-from telegram.ext import Application, ContextTypes, JobQueue, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    ContextTypes,
+    JobQueue,
+    MessageHandler,
+    filters,
+)
 
 from kyraan.agents import orchestrator
 from kyraan.control_plane.dnd import local_now
@@ -34,6 +41,36 @@ async def _typing_loop(bot, chat_id: int) -> None:
         pass
 
 
+def _confirm_keyboard(chat_id: int) -> InlineKeyboardMarkup | None:
+    """Yes/No buttons whenever a confirmation is pending for this chat —
+    tap instead of typing, and a tap is unambiguous in a way a later
+    typed "yes" never is."""
+    if chat_id not in orchestrator._pending_confirmations:
+        return None
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes", callback_data="kyraan_yes"),
+        InlineKeyboardButton("❌ No", callback_data="kyraan_no"),
+    ]])
+
+
+async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if update.effective_user is None or update.effective_user.id != _owner_id():
+        await query.answer()
+        return
+    await query.answer()
+    word = "yes" if query.data == "kyraan_yes" else "no"
+    # Remove the buttons from the ask so a decided confirmation can't be
+    # tapped twice, then run the exact same path a typed yes/no takes.
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except Exception:
+        pass  # message may be old/edited — the confirm flow still decides
+    chat_id = update.effective_chat.id
+    reply = await orchestrator.handle_message(chat_id, word)
+    await context.bot.send_message(chat_id=chat_id, text=reply)
+
+
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.effective_user.id != _owner_id():
         logger.warning("Ignored message from non-owner user %s", update.effective_user)
@@ -46,7 +83,7 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply = await orchestrator.handle_message(chat_id, text)
     finally:
         typing.cancel()
-    await update.message.reply_text(reply)
+    await update.message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id))
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -102,6 +139,7 @@ def run() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
+    app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)$"))
 
     _wire_scheduler(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)

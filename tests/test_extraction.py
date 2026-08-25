@@ -196,3 +196,12 @@ async def test_fabrication_guard_holds_even_with_context(monkeypatch, isolated_m
         context="user: write 2 lines about tea\nassistant: Tea is lovely...",
     )
     assert queued == []  # Anupam appears in neither message nor context
+
+
+async def test_capitalized_category_paths_are_normalized(monkeypatch, isolated_memory):
+    """Seen live in the eval run: 'Preferences/murukku.md' (capital P from
+    the model) was rejected by the lowercase-only validator, silently
+    losing a clean stated fact."""
+    _mock_model(monkeypatch, '{"facts": [{"path": "Preferences/murukku.md", "content": "- Favourite snack is murukku"}]}')
+    queued = await extraction.propose_from_message("my favourite snack is murukku")
+    assert queued == ["- Favourite snack is murukku"]

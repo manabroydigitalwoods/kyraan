@@ -49,7 +49,7 @@ def test_rate_limited_provider_enters_cooldown(monkeypatch):
     monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [])
     attempts = []
 
-    def limited(provider, model, prompt, system, max_tokens):
+    def limited(provider, model, prompt, system, max_tokens, force_json=False):
         attempts.append(1)
         raise RuntimeError("Error code: 429 - rate limit reached")
 
@@ -75,7 +75,7 @@ def test_non_rate_errors_do_not_trigger_cooldown(monkeypatch):
     monkeypatch.setattr(router, "_cooldown_until", {})
     monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [])
 
-    def broken(provider, model, prompt, system, max_tokens):
+    def broken(provider, model, prompt, system, max_tokens, force_json=False):
         raise RuntimeError("connection reset")
 
     monkeypatch.setattr(router, "_dispatch", broken)

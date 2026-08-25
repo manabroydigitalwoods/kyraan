@@ -51,6 +51,7 @@ def propose_fact(relative_path: str, content: str, source: str) -> Path:
     `source` should be the verbatim user statement the fact was extracted
     from, so a reviewer can check it was stated, not inferred.
     """
+    relative_path = relative_path.strip().lower()  # 'Preferences/x.md' == 'preferences/x.md' — seen live rejected for a capital P
     _validate_path(relative_path)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_name = relative_path.replace("/", "__")

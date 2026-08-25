@@ -102,7 +102,7 @@ def normalize(raw_text: str, tier: str = "cheap", history: str = "") -> Normaliz
     # No max_tokens cap below the router's 1024 default — a reasoning-model
     # tier spends hidden tokens before the visible JSON, and a tight cap
     # truncates the output mid-string (seen live in reminder extraction).
-    response = router.call(prompt=raw_text, system=system, tier=tier)
+    response = router.call(prompt=raw_text, system=system, tier=tier, force_json=True)
     try:
         data = json.loads(router.strip_code_fence(response.text))
 

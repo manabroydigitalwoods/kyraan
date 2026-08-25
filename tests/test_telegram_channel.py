@@ -27,3 +27,18 @@ async def test_typing_loop_repeats_and_cancels_cleanly(monkeypatch):
 
     assert len(actions) >= 2  # re-sent, not one-shot
     assert actions[0][0] == 42 and "typing" in actions[0][1].lower()
+
+
+def test_confirm_keyboard_only_when_a_confirmation_is_pending():
+    from kyraan.agents import orchestrator
+
+    orchestrator._pending_confirmations.pop(77, None)
+    assert telegram_bot._confirm_keyboard(77) is None
+
+    orchestrator._pending_confirmations[77] = ("call", "handler", 0.0)
+    try:
+        kb = telegram_bot._confirm_keyboard(77)
+        buttons = kb.inline_keyboard[0]
+        assert [b.callback_data for b in buttons] == ["kyraan_yes", "kyraan_no"]
+    finally:
+        orchestrator._pending_confirmations.pop(77, None)

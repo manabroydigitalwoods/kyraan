@@ -269,7 +269,8 @@ def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_t
 
 
 def _call_openai_compatible(
-    provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int
+    provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int,
+    force_json: bool = False,
 ) -> _RawResult:
     messages = []
     if system:
@@ -281,10 +282,18 @@ def _call_openai_compatible(
     # renamed it to `max_completion_tokens` and rejects the old name — a
     # provider can declare which one it wants via max_tokens_param.
     token_param = provider_cfg.get("max_tokens_param", "max_tokens")
+    kwargs = {token_param: max_tokens}
+    if force_json:
+        # Schema-constrained generation: Groq, OpenAI, OpenRouter, and
+        # Ollama's OpenAI endpoint all honor response_format json_object —
+        # valid JSON is enforced at GENERATION time, retiring the
+        # fence-stripping / truncated-JSON / prose-wrapped-JSON bug family
+        # at its source (the parse guards remain as belt-and-braces).
+        kwargs["response_format"] = {"type": "json_object"}
     response = _get_openai_compatible_client(provider, provider_cfg).chat.completions.create(
         model=model,
         messages=messages,
-        **{token_param: max_tokens},
+        **kwargs,
     )
     usage_obj = getattr(response, "usage", None)
     usage = Usage(
@@ -297,7 +306,8 @@ def _call_openai_compatible(
     return _RawResult(text=response.choices[0].message.content or "", usage=usage, reasoning=reasoning)
 
 
-def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> _RawResult:
+def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int,
+              force_json: bool = False) -> _RawResult:
     provider_cfg = _provider_cfg(provider)
     kind = provider_cfg["kind"]
     if kind == "anthropic":
@@ -305,7 +315,7 @@ def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: i
     if kind == "gemini":
         return _call_gemini(provider_cfg, model, prompt, system, max_tokens)
     if kind == "openai_compatible":
-        return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens)
+        return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens, force_json)
     raise ValueError(f"Unknown provider kind {kind!r} for provider {provider!r}")
 
 
@@ -337,6 +347,7 @@ def call(
     system: str = "",
     tier: str = "cheap",
     max_tokens: int = 1024,
+    force_json: bool = False,
 ) -> RoutedResponse:
     global last_call, session_cost_usd
     # Hard stop at the daily budget (plan: "hard budget caps + alerts").
@@ -366,7 +377,7 @@ def call(
     for attempt in range(attempts):
         start = time.monotonic()
         try:
-            raw = _dispatch(provider, model, prompt, system, max_tokens)
+            raw = _dispatch(provider, model, prompt, system, max_tokens, force_json)
             latency_ms = (time.monotonic() - start) * 1000
             cost_usd = _cost_usd(tier_cfg, raw.usage)
             log_event(
