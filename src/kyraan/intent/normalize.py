@@ -17,9 +17,16 @@ KNOWN_INTENTS = [
 
 _SYSTEM_PROMPT = f"""You normalize a short user message into a structured intent.
 Valid intents: {", ".join(KNOWN_INTENTS)}.
-- reminders.create/list/cancel: anything about setting, listing, or cancelling a reminder.
+- reminders.create: setting/adding a new reminder. E.g. "remind me to call mom",
+  "set a reminder for 5pm".
+- reminders.list: asking whether/what reminders exist — even phrased as a yes/no
+  question, this is still reminders.list, not qa.answer. E.g. "what reminders do
+  I have", "do I have any reminders?", "any reminders?", "do I have a reminder
+  set?", "do i have reminder?".
+- reminders.cancel: removing an existing reminder. E.g. "cancel my reminder",
+  "delete that reminder".
 - qa.answer: everything else conversational — questions, greetings, small talk, or
-  anything that isn't a reminder request. This should be the common case for
+  anything that isn't about reminders. This should be the common case for
   ordinary chat, not a rare fallback.
 - unknown: only for input so garbled or empty that even "have a conversation"
   doesn't apply.
