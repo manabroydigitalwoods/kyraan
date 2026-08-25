@@ -34,14 +34,17 @@ the user to rephrase it as a clear reminder instead of denying you can do it."""
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
     try:
-        parsed = normalize(raw_text)
-        if parsed.confidence < 0.4:
-            # The cheap tier is a small local model — low confidence is
-            # sometimes genuine ambiguity, but often just that model's
-            # sampling variance on an easy input. Retry once on the
-            # frontier tier before giving up and asking the user to
-            # rephrase something a bigger model would have understood fine.
-            parsed = normalize(raw_text, tier="frontier")
+        # Structured JSON intent classification needs more reliability than
+        # the cheap tier's local 3B model consistently gives — verified
+        # live (2026-08-25): the cheap tier misclassified a clear reminder
+        # request ("set reminder in 5mis 'Call to RUma'" got routed to
+        # reminders.list) and missed simple questions like "what time is
+        # it?"/"who are you?", while frontier (still free, via Groq) was
+        # 14/14 correct across the same test set. Classification is a tiny,
+        # fast call even on the bigger model — there's no real cost to
+        # always using it here, so this isn't a cheap-first-then-escalate
+        # dance anymore, just the reliable tier directly.
+        parsed = normalize(raw_text, tier="frontier")
 
         if parsed.confidence < 0.4:
             return "I'm not confident I understood that — could you rephrase?"
@@ -84,21 +87,25 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
 
 async def _create_reminder(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
+        # frontier, not cheap — verified live (2026-08-25): the cheap
+        # tier's local model produced malformed JSON (a stray trailing
+        # "}}") and once embedded prose inside the when_iso value itself
+        # ("...remains the same, as no further datetime was provided."),
+        # corrupting the datetime outright. Frontier was clean and correct
+        # across every sample tested. Same reliability gap as intent
+        # classification — see handle_message's comment.
         extraction = router.call(
             prompt=text,
             system=_EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()),
-            tier="cheap",
+            tier="frontier",
             max_tokens=200,
         )
         try:
             data = json.loads(extraction.text)
             reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
-            # A small local model doesn't always produce valid JSON or a
-            # parseable datetime (e.g. a duplicated UTC offset like
-            # "+05:30+04:00", seen live) — surface a clear, specific
-            # message rather than falling through to handle_message's
-            # generic catch-all.
+            # Kept as a safety net even though frontier is far more
+            # reliable — no model is perfect, and this must never crash.
             log_event("reminder_extraction_failed", text=text, raw=extraction.text, error=str(exc))
             return "I couldn't work out a time for that reminder — try rephrasing with a clearer date/time."
         return f"Reminder set: \"{data['text']}\" at {data['when_iso']} (id {reminder.id[:8]})"
@@ -133,8 +140,17 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _answer(text: str) -> str:
     async def handler(args: dict) -> str:
-        response = router.call_with_escalation(
-            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat())
+        # frontier, not call_with_escalation()'s cheap-first path — verified
+        # live (2026-08-25): asked "what time is it?" with the correct
+        # current time given directly in the system prompt, the cheap
+        # tier's local model still answered wrong in 3/3 tries (14:40,
+        # 17:30, 15:50 — actual was 13:50); frontier was exactly right in
+        # 3/3. call_with_escalation() only escalates on an exception, and a
+        # confidently wrong answer isn't one, so it would never have caught
+        # this. Same reliability gap as intent classification and
+        # reminder extraction — see handle_message's comment.
+        response = router.call(
+            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat()), tier="frontier"
         )
         return response.text
 

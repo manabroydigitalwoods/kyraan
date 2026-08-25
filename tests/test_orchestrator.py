@@ -36,7 +36,7 @@ async def test_unexpected_handler_exception_does_not_crash(monkeypatch):
     def raise_unexpected(**kwargs):
         raise RuntimeError("something the code never anticipated")
 
-    monkeypatch.setattr(orchestrator.router, "call_with_escalation", raise_unexpected)
+    monkeypatch.setattr(orchestrator.router, "call", raise_unexpected)
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="hello")
     assert "went wrong" in result.lower()

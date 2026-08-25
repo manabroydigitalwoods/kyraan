@@ -261,22 +261,3 @@ def call(
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 
     raise ModelProviderError(f"{provider}/{model} failed after {attempts} attempts: {last_exc}") from last_exc
-
-
-def call_with_escalation(
-    prompt: str,
-    system: str = "",
-    confidence_floor: float = 0.6,
-    max_tokens: int = 1024,
-) -> RoutedResponse:
-    """Try the cheap tier; escalate to frontier if the cheap tier can't do it.
-
-    Escalation trigger is intentionally simple for Phase 1: the cheap-tier
-    call fails, or the caller already knows the task is hard and passes
-    tier='frontier' directly via `call()` instead of this helper.
-    """
-    try:
-        return call(prompt, system=system, tier="cheap", max_tokens=max_tokens)
-    except Exception as exc:
-        log_event("model_escalation", reason=str(exc))
-        return call(prompt, system=system, tier="frontier", max_tokens=max_tokens)
