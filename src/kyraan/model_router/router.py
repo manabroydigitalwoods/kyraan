@@ -129,10 +129,15 @@ def _call_openai_compatible(
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    # Most OpenAI-compatible gateways (Groq, OpenRouter, OpenCode, Ollama)
+    # accept the traditional `max_tokens`, but native OpenAI's gpt-5 family
+    # renamed it to `max_completion_tokens` and rejects the old name — a
+    # provider can declare which one it wants via max_tokens_param.
+    token_param = provider_cfg.get("max_tokens_param", "max_tokens")
     response = _get_openai_compatible_client(provider, provider_cfg).chat.completions.create(
         model=model,
-        max_tokens=max_tokens,
         messages=messages,
+        **{token_param: max_tokens},
     )
     usage_obj = getattr(response, "usage", None)
     usage = Usage(

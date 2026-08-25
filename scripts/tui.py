@@ -63,9 +63,6 @@ class KyraanTUI(App):
         border: solid $panel;
         padding: 1 2;
     }
-    #chat-input {
-        dock: bottom;
-    }
     """
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 

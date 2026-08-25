@@ -32,6 +32,7 @@ providers:
   openai:
     kind: openai_compatible
     api_key_env: OPENAI_API_KEY
+    max_tokens_param: max_completion_tokens   # gpt-5+ rejects the old `max_tokens` name
   opencode:
     kind: openai_compatible
     base_url: https://opencode.ai/zen/v1
