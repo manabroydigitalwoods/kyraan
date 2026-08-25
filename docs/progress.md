@@ -39,8 +39,9 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - Working providers: `ollama` (local), `groq`, `openrouter`, `opencode`,
   `gemini`, `openai` — all live-verified with real keys
 - Two tiers (`cheap`, `frontier`), each independently assigned a
-  provider+model; currently **cheap → local Ollama (`llama3.2`)**,
-  **frontier → Groq (`openai/gpt-oss-120b`)**
+  provider+model; configured as **cheap → local Ollama (`llama3.2`)**,
+  **frontier → Groq (`openai/gpt-oss-120b`)** — but see below, the
+  orchestrator currently calls frontier for everything
 - Retry-with-backoff on transient errors (rate limits, 5xx) — every cloud
   provider tested has hit these live
 - Captures latency, token usage, reasoning/"thinking" text, and cost
@@ -52,13 +53,12 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - Runtime tier overrides (`config.set_tier_override()`) — repoint a tier at
   a different provider/model for the rest of the process without editing
   `permissions.yaml` or restarting (exposed via the TUI's `/tier` command)
-- `call_with_escalation()`: cheap tier first, frontier on failure
 
 **Intent Normalization** (`src/kyraan/intent/`)
-- Cheap-tier classification into `reminders.create/list/cancel`,
-  `qa.answer`, or `unknown`, with a confidence score
-- Escalates to the frontier tier once before giving up, when the cheap
-  tier (a small local model) is genuinely unsure
+- Classification into `reminders.create/list/cancel`, `qa.answer`, or
+  `unknown`, with a confidence score; system prompt has concrete few-shot
+  example phrasings per intent (added after live misclassifications, see
+  below)
 - Hardened against malformed model output: JSON `null` fields, intent
   strings outside the known set — both used to crash or misroute
 
@@ -115,13 +115,34 @@ qa.answer system prompt against two hallucination patterns caught live:
 inventing reminder status/countdown details, and falsely denying a
 capability (short-delay reminders) Kyraan actually has.
 
+**The cheap tier (local llama3.2) is not reliable enough for Kyraan's
+actual workload — confirmed with evidence, not assumption.** A follow-up
+walkthrough kept surfacing misclassified reminder requests. Rather than
+patch prompts reactively again, compared cheap against frontier (Groq,
+still free) across every structured/factual task in the app: intent
+classification (~8/14 vs 14/14 correct on the same phrasings), qa.answer
+factual accuracy (asked "what time is it?" with the correct time given
+directly in the prompt — cheap wrong in 3/3 tries, frontier right in 3/3),
+and reminder datetime extraction (cheap produced malformed JSON and once
+embedded prose inside the datetime value itself, corrupting it). All three
+call sites now use frontier directly. `router.call_with_escalation()` was
+removed — it only escalated on an exception, and a confidently wrong
+answer was never one, so it couldn't have caught any of this; with intent
+normalization's escalation folded away too, it had no remaining callers.
+Local Ollama stays fully configured (a one-line `permissions.yaml` edit or
+a `/tier` command away) but isn't primary until a bigger local model
+proves reliable enough, or there's a specific reason (cost/offline/
+privacy) to prefer it over correctness. A full walkthrough rerun after
+this change: every response correct, zero crashes, $0.0000 cost.
+
 ## Key decisions made
 
 - **Stack**: Python, self-hosted (not cloud VM) — see `pyproject.toml`
-- **Model providers**: local Ollama + Groq as the working default, after
-  live-testing ruled out OpenCode Zen (account-wide rate limit trips fast)
-  and Gemini's free tier (hard 20 requests/day cap on `gemini-3.7-flash`)
-  as unworkable for real iteration
+- **Model providers**: Groq is the sole active provider as of 2026-08-25,
+  after live-testing ruled out OpenCode Zen (account-wide rate limit trips
+  fast), Gemini's free tier (hard 20 requests/day cap), and local Ollama's
+  `llama3.2` (not reliable enough for structured/factual tasks — see the
+  robustness section above) for real use
 - Real API keys for Gemini, OpenAI, OpenCode, Groq, and OpenRouter are in
   the local `.env` (gitignored, never committed) — Anthropic's is not yet
   obtained. Swapping a tier's provider is a one-line config edit, or a
@@ -144,6 +165,10 @@ capability (short-delay reminders) Kyraan actually has.
   nothing here should be rolled out to family members yet
 - No RAG, relationship graph, agent router, tool registry, reflection loop,
   or curiosity queue — all Phase 2+, not started
+- Single point of failure: every model call now depends on Groq. If it
+  degrades or rate-limits under real (non-dev-loop) usage, there's no
+  automatic fallback provider wired in — would need to be re-added
+  deliberately, informed by what actually breaks first
 
 ## Next steps
 
@@ -151,5 +176,9 @@ capability (short-delay reminders) Kyraan actually has.
    end-to-end for the first time
 2. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
-3. Phase 2 groundwork: tool registry design, first MCP server (likely
+3. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
+   — the dev machine, Apple M3 Pro/18GB, comfortably fits either) and
+   re-run the same reliability comparison against frontier, to see whether
+   local becomes viable again at that size
+4. Phase 2 groundwork: tool registry design, first MCP server (likely
    Home Assistant or a calendar) — not started
