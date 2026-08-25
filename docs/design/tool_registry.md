@@ -98,27 +98,32 @@ Declared alongside the tools:
 tool_servers:
   calendar:
     transport: builtin        # builtin | mcp-stdio
-    module: kyraan.tools.calendar_caldav
-  # later, e.g.:
-  # home_assistant:
-  #   transport: mcp-stdio
-  #   command: ["uvx", "home-assistant-mcp"]
+    module: kyraan.tools.google_calendar
+  some_external:
+    transport: mcp-stdio
+    command: ["uvx", "some-mcp-server"]
 ```
 
-MCP is the standard for anything external (per plan §3b), but the first
-calendar adapter can be in-process (`builtin`) behind the same interface —
-swapping it for a real MCP server later changes config, not callers.
+Both transports are IMPLEMENTED (2026-08-25): `builtin` imports a module;
+`mcp-stdio` spawns the command once and speaks MCP JSON-RPC over its
+stdio (initialize handshake, serialized tools/call, dead-child respawn,
+structured results as JSON text). Tested against a fake stdio server;
+moving a tool between transports is a config change, not a code change.
 
 ### 6. Loop engineering, minimal Phase 2 slice
 
 Full agentic tool-choice comes later; Phase 2 skills use
-**plan-then-execute** with hard rails (plan §3b):
+**plan-then-execute** with hard rails (plan §3b) — IMPLEMENTED in the
+kernel (2026-08-25):
 
-- `max_steps: 5` per skill invocation, absolute.
-- Loop detection: the same `(tool, args)` pair repeating breaks the loop
-  and asks the user instead of spinning.
+- Hard cap of 8 tool calls per skill invocation (raised from the sketch's
+  5: home.query legitimately fans out to 5 sensors).
+- Loop detection: an identical `(tool, args)` repeat inside one skill run
+  breaks out with an honest "that's a loop" message instead of spinning.
 - Human checkpoint **mid-loop**: a `confirm` tool inside a chain pauses at
   that step (the existing confirm flow), not after the chain finishes.
+- All metered per-skill-run via a contextvar, so concurrent chats meter
+  independently; deterministic composers (the brief) are unmetered.
 
 ### 7. Testing contract
 

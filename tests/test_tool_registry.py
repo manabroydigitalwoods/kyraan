@@ -208,3 +208,83 @@ def test_shipped_permissions_yaml_passes_validation():
     specs = registry.load()
     assert "calendar.list_events" in specs
     assert specs["calendar.list_events"].side_effects == "read"
+
+
+# --- Loop-engineering rails (plan §3b) ---
+
+async def test_repeat_identical_tool_call_inside_a_skill_breaks_out(patched_cfg, fake_adapter):
+    patched_cfg({"t.read": _tool()})
+
+    async def looping_handler(args):
+        await kernel.run_tool(kernel.ToolCall("t.read", {"x": "same"}))
+        await kernel.run_tool(kernel.ToolCall("t.read", {"x": "same"}))  # identical repeat
+
+    with pytest.raises(kernel.ToolFailed, match="loop"):
+        await kernel.run_skill(kernel.SkillCall("s.loopy", {}, confirmed=True), looping_handler)
+    assert len(fake_adapter) == 1  # the repeat never reached the adapter
+
+
+async def test_step_limit_caps_runaway_chains(patched_cfg, fake_adapter):
+    patched_cfg({"t.read": _tool()})
+
+    async def runaway_handler(args):
+        for i in range(50):
+            await kernel.run_tool(kernel.ToolCall("t.read", {"x": f"step{i}"}))
+
+    with pytest.raises(kernel.ToolFailed, match="safety limit"):
+        await kernel.run_skill(kernel.SkillCall("s.runaway", {}, confirmed=True), runaway_handler)
+    assert len(fake_adapter) == kernel._MAX_TOOL_STEPS
+
+
+async def test_distinct_calls_within_budget_all_run(patched_cfg, fake_adapter):
+    patched_cfg({"t.read": _tool()})
+
+    async def normal_handler(args):
+        for i in range(5):  # home.query-sized fan-out must keep working
+            await kernel.run_tool(kernel.ToolCall("t.read", {"x": f"entity{i}"}))
+        return "ok"
+
+    assert await kernel.run_skill(kernel.SkillCall("s.normal", {}, confirmed=True), normal_handler) == "ok"
+    assert len(fake_adapter) == 5
+
+
+# --- MCP-stdio transport ---
+
+import sys as _sys
+from pathlib import Path as _Path
+
+_FAKE_MCP = [_sys.executable, str(_Path(__file__).parent / "fake_mcp_server.py")]
+
+
+async def test_mcp_stdio_transport_round_trip(patched_cfg):
+    patched_cfg(
+        {"mcp.echo": _tool(server="mcp")},
+        servers={"mcp": {"transport": "mcp-stdio", "command": _FAKE_MCP}},
+    )
+    result = await kernel.run_tool(kernel.ToolCall("mcp.echo", {"x": "hello"}))
+    assert result == {"echoed_tool": "mcp.echo", "echoed_args": {"x": "hello"}}
+
+
+async def test_mcp_stdio_serializes_multiple_calls_on_one_process(patched_cfg):
+    patched_cfg(
+        {"mcp.echo": _tool(server="mcp")},
+        servers={"mcp": {"transport": "mcp-stdio", "command": _FAKE_MCP}},
+    )
+    for i in range(3):
+        result = await kernel.run_tool(kernel.ToolCall("mcp.echo", {"x": f"call{i}"}))
+        assert result["echoed_args"] == {"x": f"call{i}"}
+
+
+async def test_mcp_tool_error_is_surfaced(patched_cfg):
+    patched_cfg(
+        {"mcp.fail": _tool(server="mcp")},
+        servers={"mcp": {"transport": "mcp-stdio", "command": _FAKE_MCP}},
+    )
+    with pytest.raises(kernel.ToolFailed, match="deliberate failure"):
+        await kernel.run_tool(kernel.ToolCall("mcp.fail", {"x": "y"}))
+
+
+def test_server_transport_validation(patched_cfg):
+    patched_cfg({"t.x": _tool(server="bad")}, servers={"bad": {"transport": "mcp-stdio"}})
+    with pytest.raises(ValueError, match="needs a command"):
+        registry.load()

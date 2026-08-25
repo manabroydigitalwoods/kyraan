@@ -265,6 +265,12 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
   confirm-gated writes, both live-proven
 - `calendar.list` is untested against a real Google ICS feed until
   `GOOGLE_CALENDAR_ICS_URL` is set in `.env` (owner setup, see design doc)
+- Phase 2 engineering is COMPLETE at family scope (2026-08-25 night):
+  loop rails (8-step cap + repeat detection, kernel-enforced), MCP-stdio
+  transport (real JSON-RPC client, tested against a stdio server), and a
+  live outage drill (HA stopped: honest surfaced error after retries; HA
+  restarted: full recovery). Remaining Phase 2 scope is user-side (Tapo
+  fleet re-provisioning) and the §3a fork (work tools in or out)
 - No RAG, relationship graph, agent router, reflection loop, or curiosity
   queue — Phase 3+, not started
 - Intent classification prefers Groq but degrades automatically to the

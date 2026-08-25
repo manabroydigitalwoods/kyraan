@@ -2,8 +2,17 @@
 config/permissions.yaml's `tools:` section and validated here at load.
 No tool exists outside the registry, exactly as the kernel refuses to run
 an unregistered skill. Design: docs/design/tool_registry.md.
+
+Two transports behind one adapter interface: `builtin` (an importable
+module exposing `async def call(tool_name, args)`) and `mcp-stdio` (a
+child process speaking MCP JSON-RPC over stdio — the plan's standard for
+external tools). Callers can't tell them apart; moving a tool between
+transports is a config change.
 """
+import asyncio
 import importlib
+import itertools
+import json as _json
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -73,6 +82,14 @@ def load() -> dict:
     cfg = config.load()
     raw_tools = cfg.get("tools", {}) or {}
     servers = cfg.get("tool_servers", {}) or {}
+    for sname, sentry in servers.items():
+        transport = (sentry or {}).get("transport", "builtin")
+        if transport == "builtin" and not (sentry or {}).get("module"):
+            raise ValueError(f"tool server {sname!r}: builtin transport needs a module")
+        if transport == "mcp-stdio" and not (sentry or {}).get("command"):
+            raise ValueError(f"tool server {sname!r}: mcp-stdio transport needs a command list")
+        if transport not in ("builtin", "mcp-stdio"):
+            raise ValueError(f"tool server {sname!r}: unknown transport {transport!r}")
     all_names = set(raw_tools)
     specs = {}
     for name, entry in raw_tools.items():
@@ -101,21 +118,93 @@ def get(tool_name: str) -> ToolSpec:
     return specs[tool_name]
 
 
+class MCPStdioAdapter:
+    """Minimal MCP client: spawns the configured command once, handshakes
+    (initialize / initialized), then serializes tools/call requests over
+    the child's stdio. One in-flight request at a time — MCP stdio is a
+    single ordered stream. A dead child is respawned on the next call."""
+
+    def __init__(self, command: list):
+        self._command = command
+        self._proc: asyncio.subprocess.Process | None = None
+        self._lock = asyncio.Lock()
+        self._ids = itertools.count(1)
+
+    async def _ensure_started(self) -> None:
+        if self._proc is not None and self._proc.returncode is None:
+            return
+        self._proc = await asyncio.create_subprocess_exec(
+            *self._command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await self._request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "kyraan", "version": "0.1.0"},
+        })
+        self._notify("notifications/initialized", {})
+
+    def _notify(self, method: str, params: dict) -> None:
+        line = _json.dumps({"jsonrpc": "2.0", "method": method, "params": params}) + "\n"
+        self._proc.stdin.write(line.encode())
+
+    async def _request(self, method: str, params: dict) -> dict:
+        req_id = next(self._ids)
+        line = _json.dumps({"jsonrpc": "2.0", "id": req_id, "method": method, "params": params}) + "\n"
+        self._proc.stdin.write(line.encode())
+        await self._proc.stdin.drain()
+        while True:
+            raw = await self._proc.stdout.readline()
+            if not raw:
+                raise TransientToolError(f"MCP server {self._command[0]} closed its stdio mid-request")
+            try:
+                message = _json.loads(raw)
+            except _json.JSONDecodeError:
+                continue  # servers may log stray lines to stdout; skip them
+            if message.get("id") != req_id:
+                continue  # notification or stale reply — not ours
+            if "error" in message:
+                raise ToolError(f"MCP server error: {message['error'].get('message', message['error'])}")
+            return message.get("result", {})
+
+    async def call(self, tool_name: str, args: dict) -> object:
+        async with self._lock:
+            try:
+                await self._ensure_started()
+                result = await self._request("tools/call", {"name": tool_name, "arguments": args})
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                self._proc = None
+                raise TransientToolError(f"MCP server pipe broke: {exc}") from exc
+        if result.get("isError"):
+            raise ToolError(f"MCP tool {tool_name!r} reported an error: {result.get('content')}")
+        content = result.get("content") or []
+        texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+        joined = "\n".join(texts)
+        try:
+            return _json.loads(joined)  # structured results ride as JSON text
+        except _json.JSONDecodeError:
+            return joined
+
+
 @lru_cache
-def _adapter_module(server: str):
+def _adapter(server: str):
     servers = config.load().get("tool_servers", {}) or {}
     entry = servers[server]
     transport = entry.get("transport", "builtin")
     if transport == "builtin":
         return importlib.import_module(entry["module"])
-    raise ToolError(
-        f"tool server {server!r}: transport {transport!r} not implemented yet — "
-        "builtin is the only Phase 2 transport (MCP-stdio is the designed next step)"
-    )
+    if transport == "mcp-stdio":
+        return MCPStdioAdapter(list(entry["command"]))
+    raise ToolError(f"tool server {server!r}: unknown transport {transport!r} (builtin | mcp-stdio)")
+
+
+# Back-compat name used by tests/monkeypatches.
+_adapter_module = _adapter
 
 
 async def dispatch(spec: ToolSpec, args: dict):
     """Hand the call to the tool's adapter. Adapters expose one interface:
     `async def call(tool_name, args)` — builtin or MCP, callers can't tell."""
-    module = _adapter_module(spec.server)
-    return await module.call(spec.name, args)
+    return await _adapter(spec.server).call(spec.name, args)

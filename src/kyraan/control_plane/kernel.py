@@ -39,6 +39,14 @@ class SkillCall:
 # confirmation into each other.
 _skill_confirmed: contextvars.ContextVar[bool] = contextvars.ContextVar("skill_confirmed", default=False)
 
+# Loop-engineering rails (plan §3b): every skill invocation gets a hard
+# tool-step budget, and an identical (tool, args) repeat breaks out
+# instead of spinning — both tied to the skill run via a contextvar, so
+# concurrent chats meter independently. 8, not the design sketch's 5,
+# because home.query legitimately reads 5 sensors in one pass.
+_MAX_TOOL_STEPS = 8
+_tool_steps: contextvars.ContextVar[list | None] = contextvars.ContextVar("tool_steps", default=None)
+
 
 async def run_skill(call: SkillCall, handler: Callable[[dict], Awaitable[object]]) -> object:
     """Gate + execute a skill. `handler` does the actual work."""
@@ -53,6 +61,7 @@ async def run_skill(call: SkillCall, handler: Callable[[dict], Awaitable[object]
 
     log_event("tool_call", skill=call.skill_name, args=call.args, permission=skill_cfg["permission"])
     token = _skill_confirmed.set(call.confirmed)
+    steps_token = _tool_steps.set([])
     try:
         result = await handler(call.args)
         log_event("tool_result", skill=call.skill_name, ok=True)
@@ -62,6 +71,7 @@ async def run_skill(call: SkillCall, handler: Callable[[dict], Awaitable[object]
         raise
     finally:
         _skill_confirmed.reset(token)
+        _tool_steps.reset(steps_token)
 
 
 class ToolFailed(Exception):
@@ -120,6 +130,24 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
     if spec.permission == "confirm" and not (call.confirmed or _skill_confirmed.get()):
         log_event("confirmation_required", tool=spec.name, args=call.args)
         raise ConfirmationRequired(spec.name, call.args)
+
+    steps = _tool_steps.get()
+    if steps is not None:
+        import json as _json
+
+        signature = (spec.name, _json.dumps(call.args, sort_keys=True, default=str))
+        if signature in steps:
+            log_event("tool_loop_detected", tool=spec.name, args=call.args)
+            raise ToolFailed(
+                f"stopped: {spec.name} was about to run twice with identical arguments — "
+                "that's a loop, not progress; tell me differently what you need"
+            )
+        if len(steps) >= _MAX_TOOL_STEPS:
+            log_event("tool_step_limit", tool=spec.name, steps=len(steps))
+            raise ToolFailed(
+                f"stopped: this request hit the {_MAX_TOOL_STEPS}-tool-call safety limit for one action"
+            )
+        steps.append(signature)
 
     _validate_args(spec, call.args)
     log_event("tool_call", tool=spec.name, args=call.args, permission=spec.permission)
