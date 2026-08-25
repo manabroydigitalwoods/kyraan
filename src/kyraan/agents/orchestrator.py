@@ -117,6 +117,34 @@ _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_red
 _skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extraction", default=False)
 
 
+_CLOCK_RE = None
+
+
+def _anchor_clock_time(raw_text: str, when_iso: str) -> str:
+    """The user's explicitly stated clock time ALWAYS beats the model's
+    extraction — seen live twice: "8pm" extracted as 20:49, and "9pm"
+    extracted as 8:00 PM. When the message contains exactly one am/pm
+    clock time, the extracted datetime's clock is corrected to it
+    deterministically (date and timezone kept from the model)."""
+    global _CLOCK_RE
+    import re
+    if _CLOCK_RE is None:
+        _CLOCK_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", re.I)
+    matches = _CLOCK_RE.findall(raw_text)
+    if len(matches) != 1:
+        return when_iso
+    hh, mm, ap = matches[0]
+    hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+    minute = int(mm) if mm else 0
+    parsed = scheduler._parse_when(when_iso)
+    if (parsed.hour, parsed.minute) == (hour, minute):
+        return when_iso
+    corrected = parsed.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    log_event("clock_time_anchored", stated=f"{hh}:{mm or '00'}{ap}", model_gave=when_iso,
+              corrected=corrected.isoformat())
+    return corrected.isoformat()
+
+
 def record_proactive(chat_id: int, text: str) -> None:
     """Proactive sends (reminders, briefs) belong in conversation history
     too — found live: \"Thanks for the reminder\" got \"I didn't actually
@@ -347,6 +375,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         extracted = _structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
+            data["when_iso"] = _anchor_clock_time(text, data["when_iso"])
             existing = scheduler.find_duplicate(chat_id, data["text"], data["when_iso"])
             if existing:
                 return (
@@ -465,7 +494,7 @@ async def _create_event(chat_id: int, text: str) -> str:
         data = json.loads(router.strip_code_fence(extracted.text))
         args = {
             "title": str(data["title"]),
-            "start": clean_iso(data["start_iso"]),
+            "start": clean_iso(_anchor_clock_time(text, str(data["start_iso"]))),
             "end": clean_iso(data["end_iso"]),
         }
         location = data.get("location")

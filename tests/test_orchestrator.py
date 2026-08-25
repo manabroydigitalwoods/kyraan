@@ -945,3 +945,30 @@ async def test_hallucinated_normalization_is_replaced_with_raw_text(monkeypatch)
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
     await orchestrator.handle_message(chat_id=0, raw_text="Do you know my father?")
     assert captured["prompt"] == "Do you know my father?"  # raw, not the hallucination
+
+
+async def test_stated_clock_time_beats_model_extraction(monkeypatch, isolated_store):
+    """Seen live twice: '9pm' extracted as 8:00 PM, '8pm' as 20:49. An
+    explicit am/pm time in the message deterministically corrects the
+    extracted clock."""
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call mom at 9pm tonight")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(text='{"text": "call mom", "when_iso": "2099-01-01T20:00:00+00:00"}'),
+    )
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call mom at 9pm tonight")
+    assert "9:00 PM" in result  # corrected from the model's 8pm
+    stored = orchestrator.scheduler.store.list_pending(0)[0]
+    assert "T21:00:00" in stored.when_iso
+
+
+async def test_no_stated_clock_leaves_extraction_alone(monkeypatch, isolated_store):
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call mom in 45 minutes")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(text='{"text": "call mom", "when_iso": "2099-01-01T20:15:00+00:00"}'),
+    )
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call mom in 45 minutes")
+    assert "8:15 PM" in result  # untouched

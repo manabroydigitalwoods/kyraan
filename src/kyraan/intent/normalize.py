@@ -58,7 +58,8 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   the AC on", "AC off please". Only for device switching — "remind me to
   turn off the AC" is reminders.create.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
-  anything that isn't about reminders. This should be the common case for
+  anything that isn't about reminders. Asking the current TIME ("what time
+  is it", "wat tym is it") is qa.answer — the clock, never calendar.list. This should be the common case for
   ordinary chat, not a rare fallback.
 - unknown: only for input so garbled or empty that even "have a conversation"
   doesn't apply.
