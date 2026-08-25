@@ -72,20 +72,23 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await context.bot.send_message(chat_id=chat_id, text=reply)
 
 
-# Burst coalescing: humans send thoughts as several quick messages
-# ("but this is normal" / "I can send message" / "like this") — answering
-# each fragment separately serially is what made a live session feel like
-# "randomly answering". Messages arriving within the debounce window are
-# combined and answered as ONE message, exactly how a person reads a
-# burst. Requires concurrent_updates so later fragments can join the
-# buffer while the window is open; a per-chat lock keeps actual
-# processing strictly serialized.
+# Burst coalescing, modeled on how two humans chat: B watches A's typing
+# indicator and replies only when A's thought looks COMPLETE; if a new
+# message lands while B is mid-reply, B stops, reads it, and rethinks.
+# Telegram never sends bots the typing indicator, so both halves are
+# inferred: thought-completeness from the message's shape
+# (orchestrator.thought_open), and "stop and rethink" from a fragment
+# arriving while a reply is still being planned (supersede — the draft is
+# retracted and re-planned with the full thought). Requires
+# concurrent_updates so later fragments can join while a window is open;
+# a per-chat lock keeps actual processing strictly serialized.
 _BURST_WINDOW_S = 2.5           # typing a follow-up message takes 2-5s
 _BURST_MAX_WAIT_S = 8.0
-_FRAGMENT_EXTRA_WAIT_S = 10.0   # a bare time-phrase almost certainly has
+_FRAGMENT_EXTRA_WAIT_S = 10.0   # an open thought almost certainly has
                                 # more coming — wait patiently for it
 _burst_buffers: dict = {}
 _burst_flushing: set = set()
+_burst_superseded: dict = {}
 _chat_locks: dict = {}
 
 
@@ -103,46 +106,78 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     chat_id = update.effective_chat.id
     _burst_buffers.setdefault(chat_id, []).append((update.message, update.message.text or ""))
     if chat_id in _burst_flushing:
-        return  # an open window will pick this fragment up
+        # A window is open or a reply is being composed. The new fragment
+        # supersedes any draft: composition checks the event at its safe
+        # point (before anything with side effects runs) and starts over
+        # with the full thought.
+        event = _burst_superseded.get(chat_id)
+        if event is not None:
+            event.set()
+        return
     _burst_flushing.add(chat_id)
+    typing = None
     try:
-        waited = 0.0
-        while waited < _BURST_MAX_WAIT_S * 3:  # hard cap ~20s+
-            buffered = _burst_buffers[chat_id]
-            seen = len(buffered)
-            # An active burst (>1 message) or an open fragment gets a
-            # longer quiet requirement — the user is mid-thought.
-            combined_now = "\n".join(t for _, t in buffered if t)
-            quiet = _BURST_WINDOW_S
-            if seen > 1 or orchestrator.is_time_fragment(combined_now):
-                quiet = _BURST_WINDOW_S * 2
-            await asyncio.sleep(quiet)
-            waited += quiet
-            if len(_burst_buffers[chat_id]) == seen:
-                if orchestrator.is_time_fragment(combined_now) and waited < _FRAGMENT_EXTRA_WAIT_S:
-                    continue  # fragment stays open a while longer
-                break  # quiet — the thought is complete
-        fragments = _burst_buffers.pop(chat_id, [])
+        while True:
+            # Gather: wait for quiet, patiently while the last message
+            # reads as an unfinished thought — the substitute for watching
+            # the typing indicator, which Telegram never sends bots.
+            waited = 0.0
+            last_text = ""
+            while waited < _BURST_MAX_WAIT_S * 3:  # hard cap ~20s+
+                buffered = _burst_buffers.get(chat_id, [])
+                seen = len(buffered)
+                last_text = buffered[-1][1] if buffered else ""
+                quiet = _BURST_WINDOW_S
+                if seen > 1 or orchestrator.thought_open(last_text):
+                    quiet = _BURST_WINDOW_S * 2
+                await asyncio.sleep(quiet)
+                waited += quiet
+                if len(_burst_buffers.get(chat_id, [])) == seen:
+                    if orchestrator.thought_open(last_text) and waited < _FRAGMENT_EXTRA_WAIT_S:
+                        continue  # thought still open — keep waiting
+                    break  # quiet and complete — reply now
+            # The event exists BEFORE the buffer is popped, so a fragment
+            # arriving in between lands in this pop, and one arriving
+            # after it sets the event — no gap either way.
+            event = _burst_superseded[chat_id] = asyncio.Event()
+            fragments = _burst_buffers.pop(chat_id, [])
+            if not fragments:
+                return
+            if typing is None:
+                typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
+            try:
+                async with _lock_for(chat_id):
+                    # The burst is evaluated TOGETHER and answered as ONE
+                    # composed reply, quoted onto the message it covers.
+                    results = await orchestrator.handle_burst(
+                        chat_id, [text for _, text in fragments], superseded=event
+                    )
+            except orchestrator.BurstSuperseded:
+                # The user kept typing while the reply was being planned —
+                # nothing ran yet, so retract the draft, fold these
+                # fragments back in front of the newcomers, stop "typing",
+                # and re-read the whole thought.
+                _burst_buffers[chat_id] = fragments + _burst_buffers.get(chat_id, [])
+                typing.cancel()
+                typing = None
+                continue
+            typing.cancel()
+            typing = None
+            for position, (idx, reply) in enumerate(results):
+                source = fragments[min(idx, len(fragments) - 1)][0]
+                markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
+                await source.reply_text(reply, reply_markup=markup, do_quote=True)
+            # A fragment that arrived after composition passed its safe
+            # point couldn't retract this reply — it starts the next round
+            # now (with this reply already in context) instead of sitting
+            # unprocessed until some future message wakes the flusher.
+            if not _burst_buffers.get(chat_id):
+                return
     finally:
         _burst_flushing.discard(chat_id)
-    if not fragments:
-        return
-
-    typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
-    try:
-        async with _lock_for(chat_id):
-            # The burst is evaluated TOGETHER; the resolver decides one
-            # combined answer vs per-message answers, and each reply is
-            # quoted onto the message it covers.
-            results = await orchestrator.handle_burst(
-                chat_id, [text for _, text in fragments]
-            )
-    finally:
-        typing.cancel()
-    for position, (idx, reply) in enumerate(results):
-        source = fragments[min(idx, len(fragments) - 1)][0]
-        markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
-        await source.reply_text(reply, reply_markup=markup, do_quote=True)
+        _burst_superseded.pop(chat_id, None)
+        if typing is not None:
+            typing.cancel()
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:

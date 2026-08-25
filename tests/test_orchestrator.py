@@ -1158,3 +1158,65 @@ async def test_filler_folds_into_minimal_requests(monkeypatch):
     assert len(handled) == 2  # five fragments, two real requests
     assert len(results) == 1  # one reply
     assert results[0][0] == 4  # quoted on the last fragment
+
+
+def test_thought_open_reads_message_shape_like_a_human():
+    """The channel's substitute for the typing indicator Telegram never
+    gives bots: a message that trails off on a connector, opens with a
+    continuation word, or is a bare time phrase means more is coming."""
+    assert orchestrator.thought_open("to buy something")            # leading connector
+    assert orchestrator.thought_open("I have an idea to build a")   # trailing article
+    assert orchestrator.thought_open("very important")              # intensifier addendum
+    assert orchestrator.thought_open("tomorrow morning")            # time fragment
+    assert orchestrator.thought_open("I'll go there and,")          # trailing comma
+    assert not orchestrator.thought_open("what is the plan?")
+    assert not orchestrator.thought_open("hello")
+    assert not orchestrator.thought_open("turn off the AC.")
+    assert not orchestrator.thought_open("today moring I have to go to siliguri")
+
+
+async def test_burst_superseded_when_a_fragment_lands_mid_planning(monkeypatch):
+    """A fragment arriving while the plan is still being made retracts the
+    draft BEFORE anything runs — the channel re-plans with the full
+    thought (the human move: stop typing, read, rethink)."""
+    import asyncio
+
+    event = asyncio.Event()
+
+    def fake_call(prompt, system="", **kwargs):
+        event.set()  # the late fragment lands during planning
+        return _FakeRouted(text='{"requests": ["do the thing"]}')
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    async def must_not_run(chat_id, text):
+        raise AssertionError("no request may execute after a supersede")
+
+    monkeypatch.setattr(orchestrator, "handle_message", must_not_run)
+    with pytest.raises(orchestrator.BurstSuperseded):
+        await orchestrator.handle_burst(
+            1, ["today morning I have to go", "to siliguri"], superseded=event)
+
+
+async def test_reminder_intent_without_remind_wording_is_demoted(monkeypatch):
+    """Seen live: 'to buy something' — a fragment of a story about the
+    user's morning — became a junk reminder at 12:00 AM. reminders.create
+    without any remind-ish wording is the classifier over-reaching; the
+    message is answered as conversation and nothing is scheduled."""
+    _mock_normalize(monkeypatch, "reminders.create", "to buy something")
+
+    created = []
+    monkeypatch.setattr(orchestrator.scheduler, "create_reminder",
+                        lambda *a, **k: created.append(1))
+
+    async def fake_answer(chat_id, text):
+        return "Sounds like a busy morning."
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="to buy something")
+    assert "busy morning" in result
+    assert created == []  # no reminder was ever attempted

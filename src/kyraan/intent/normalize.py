@@ -91,6 +91,11 @@ SELF-CONTAINED command with the context folded in. Examples:
   that at 9am" -> reminders.create, "remind me to call the plumber at 9am"
 - assistant offered an action; user says "go ahead" / "yes do it"
   -> the offered action's intent, normalized_text spelling that action out.
+- user said "today morning I have to go to siliguri"; next message "to buy
+  something" -> qa.answer, normalized_text "this morning I have to go to
+  siliguri to buy something". A fragment CONTINUING A STATEMENT stays part
+  of that statement — it NEVER becomes a reminder, event, or any action
+  unless the user actually asked for one.
 A message that stands alone is classified as-is — never force context onto it.
 
 Recent conversation (oldest first):

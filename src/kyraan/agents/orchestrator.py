@@ -146,6 +146,56 @@ def is_time_fragment(text: str) -> bool:
                for w in words)
 
 
+# Words that cannot END a finished English thought (prepositions,
+# conjunctions, articles, bare auxiliaries) and words that START a message
+# which is really the continuation of the previous one ("to buy something"
+# after "I have to go to siliguri", seen live misread as a standalone
+# request and turned into a junk reminder).
+_TRAILING_OPEN = {
+    "to", "and", "or", "but", "the", "a", "an", "my", "your", "our", "his",
+    "her", "their", "for", "with", "of", "in", "at", "on", "so", "then",
+    "about", "because", "if", "when", "while", "than", "into", "from",
+    "by", "as", "will", "would", "can", "could", "should", "must", "have",
+    "has", "had", "am", "are", "was", "were", "be", "been", "very",
+    "really", "just", "also", "plus", "i", "we", "they", "he", "she",
+}
+_LEADING_OPEN = {
+    "to", "and", "but", "or", "also", "then", "because", "so", "plus",
+    "with", "for", "very", "really",
+}
+
+# A genuine reminder request contains remind-ish wording somewhere in the
+# raw or normalized text ("remind", "reminder", "wake me", "don't
+# forget", "tell me at 9", ...). A reminders.create classification
+# without ANY of these is the classifier inventing intent.
+_REMIND_WORDS = (
+    "remind", "remember", "alarm", "alert", "wake me", "notify",
+    "forget", "ping me", "timer", "tell me", "let me know",
+)
+
+
+def thought_open(text: str) -> bool:
+    """Deterministic "is the user still mid-thought?" — the channel's
+    substitute for a human watching the typing indicator (Telegram never
+    sends bots one). A message that trails off on a connector, ends in a
+    comma/ellipsis, opens with a continuation word, or is a bare
+    time-phrase means more is coming: wait, like a person would."""
+    t = text.strip()
+    if not t:
+        return False
+    if is_time_fragment(t):
+        return True
+    if t.endswith((",", ";", ":", "-", "—", "...", "…")):
+        return True
+    if t.endswith(("?", "!", ".")):
+        return False
+    words = [w.strip(".,!?…\"'") for w in t.lower().split()]
+    words = [w for w in words if w]
+    if not words:
+        return False
+    return words[-1] in _TRAILING_OPEN or words[0] in _LEADING_OPEN
+
+
 _CLOCK_RE = None
 
 
@@ -248,18 +298,39 @@ Examples:
   -> {{"requests": ["remind me to call the plumber tomorrow at 9am"]}}
 - ["is the AC on?", "any new emails?"]
   -> {{"requests": ["is the AC on?", "any new emails?"]}}
+- ["today morning I have to go to siliguri", "to buy something", "very important"]
+  -> {{"requests": ["this morning I have to go to siliguri to buy something very important"]}}
+  (fragments of one STATEMENT merge into that statement — a story stays a
+  story, it never becomes a reminder or any other action)
 The messages, numbered:
 {numbered}"""
 
 
-async def handle_burst(chat_id: int, texts: list) -> list:
+class BurstSuperseded(Exception):
+    """A new fragment arrived while a burst reply was still being planned —
+    the draft is stale and NO action has run yet, so the channel retracts
+    it and re-plans with the full thought. The human move: you're typing a
+    reply, a new message lands, you stop, read it, and rethink."""
+
+
+async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
     """Evaluate a burst TOGETHER, act on the minimal set of requests it
     contains, and ALWAYS answer with ONE composed reply — a human never
     sends five messages back (seen live: a 5-fragment casual burst got 5
-    scattered replies). Returns [(quote_index, reply)] — a single tuple."""
+    scattered replies). Returns [(quote_index, reply)] — a single tuple.
+
+    `superseded` (an asyncio.Event the channel sets when another fragment
+    arrives) is checked before anything with side effects runs: stale
+    during planning -> BurstSuperseded. Once execution starts the reply is
+    finished regardless — late fragments become the next burst."""
+    def _stale() -> bool:
+        return superseded is not None and superseded.is_set()
+
     texts = [t for t in texts if t]
     if not texts:
         return [(0, "")]
+    if _stale():
+        raise BurstSuperseded
     if len(texts) == 1:
         return [(0, await handle_message(chat_id, texts[0]))]
 
@@ -288,6 +359,13 @@ async def handle_burst(chat_id: int, texts: list) -> list:
                 raise ValueError("empty or oversized plan")
         except Exception as exc:
             log_event("burst_plan_fallback", chat_id=chat_id, error=str(exc))
+
+    if _stale():
+        # Planning took long enough for another fragment to land — the
+        # plan no longer covers the whole thought. Nothing ran yet;
+        # retract and let the channel re-plan with everything.
+        log_event("burst_superseded", chat_id=chat_id, n=len(texts))
+        raise BurstSuperseded
 
     replies = []
     for request in requests:
@@ -413,6 +491,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             _skip_extraction.set(True)
             return "Go on — I'm listening…"
         if parsed.intent == "reminders.create":
+            wording = f"{raw_text} {parsed.normalized_text}".lower()
+            if not any(w in wording for w in _REMIND_WORDS):
+                # Seen live: "to buy something" — a fragment of a STORY
+                # about the user's morning — became a junk midnight
+                # reminder. Nobody asks for a reminder without remind-ish
+                # wording; without it the classifier is over-reaching, so
+                # treat the message as conversation instead.
+                log_event("reminder_intent_demoted", chat_id=chat_id, text=raw_text)
+                return await _answer(chat_id, parsed.normalized_text)
             return await _create_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "reminders.list":
             return await _list_reminders(chat_id)

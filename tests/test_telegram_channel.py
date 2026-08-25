@@ -53,7 +53,7 @@ async def test_burst_messages_combine_into_one_answer(monkeypatch):
 
     handled = []
 
-    async def fake_burst(chat_id, texts):
+    async def fake_burst(chat_id, texts, superseded=None):
         handled.append(texts)
         return [(len(texts) - 1, "combined answer")]
 
@@ -86,3 +86,82 @@ async def test_burst_messages_combine_into_one_answer(monkeypatch):
 
     assert handled == [["but this is normal", "I can send message", "like this"]]
     assert replies == ["combined answer"]  # one reply for the whole burst
+
+
+def _channel_harness(monkeypatch, chat_id=9):
+    """Owner update factory + reply capture for _on_message tests."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    monkeypatch.setattr(telegram_bot, "_BURST_WINDOW_S", 0.05)
+    replies = []
+
+    def make_update(text):
+        async def reply_text(reply, reply_markup=None, do_quote=False):
+            replies.append(reply)
+        message = SimpleNamespace(text=text, reply_text=reply_text)
+        return SimpleNamespace(
+            effective_user=SimpleNamespace(id=1),
+            effective_chat=SimpleNamespace(id=chat_id),
+            message=message,
+        )
+
+    class FakeBot:
+        async def send_chat_action(self, chat_id, action):
+            pass
+
+    return make_update, SimpleNamespace(bot=FakeBot()), replies
+
+
+async def test_late_fragment_supersedes_the_draft(monkeypatch):
+    """The human rhythm: a new message landing while the reply is still
+    being planned makes Kyraan stop, read it, and re-plan with the FULL
+    thought — the first draft (covering only the early fragments) must
+    never be sent."""
+    from kyraan.agents import orchestrator
+
+    make_update, ctx, replies = _channel_harness(monkeypatch)
+    calls = []
+
+    async def fake_burst(chat_id, texts, superseded=None):
+        calls.append(list(texts))
+        await asyncio.sleep(0.3)  # planning time — the late fragment lands here
+        if superseded is not None and superseded.is_set():
+            raise orchestrator.BurstSuperseded
+        return [(len(texts) - 1, " + ".join(texts))]
+
+    monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
+
+    loop = asyncio.get_event_loop()
+    first = loop.create_task(telegram_bot._on_message(make_update("today morning I have to go to siliguri"), ctx))
+    await asyncio.sleep(0.2)  # window closes; composition begins
+    late = loop.create_task(telegram_bot._on_message(make_update("to buy something"), ctx))
+    await asyncio.gather(first, late)
+
+    # Retracted once, then re-planned with the whole thought, one reply.
+    assert calls[-1] == ["today morning I have to go to siliguri", "to buy something"]
+    assert replies == ["today morning I have to go to siliguri + to buy something"]
+
+
+async def test_fragment_after_the_safe_point_starts_the_next_round(monkeypatch):
+    """A fragment too late to retract the reply must not sit unprocessed
+    until a future message wakes the flusher — the same flusher drains it
+    as a follow-up round."""
+    from kyraan.agents import orchestrator
+
+    make_update, ctx, replies = _channel_harness(monkeypatch)
+    late_sent = False
+
+    async def fake_burst(chat_id, texts, superseded=None):
+        nonlocal late_sent
+        if not late_sent:
+            late_sent = True
+            # Simulate the fragment arriving after the safe point: it
+            # lands in the buffer but this composition finishes anyway.
+            await telegram_bot._on_message(make_update("late follow-up"), ctx)
+        return [(len(texts) - 1, " + ".join(texts))]
+
+    monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
+    await telegram_bot._on_message(make_update("first thought"), ctx)
+
+    assert replies == ["first thought", "late follow-up"]
