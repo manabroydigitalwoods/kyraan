@@ -1,0 +1,49 @@
+# Kyraan guardrail config — Phase 0/1.
+# Every skill/action must be listed here with an explicit permission level.
+# Unlisted actions default to "confirm" (see control_plane/kernel.py).
+
+defaults:
+  permission: confirm   # auto | confirm
+  model_tier: cheap      # cheap | frontier
+
+model_tiers:
+  cheap:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+  frontier:
+    provider: anthropic
+    model: claude-sonnet-5
+
+# Skills known to Phase 1. Add new skills here as they're built —
+# the kernel refuses to run a skill that isn't registered.
+skills:
+  reminders.create:
+    permission: auto
+    model_tier: cheap
+  reminders.list:
+    permission: auto
+    model_tier: cheap
+  reminders.cancel:
+    permission: auto
+    model_tier: cheap
+  qa.answer:
+    permission: auto
+    model_tier: cheap
+  memory.write:
+    permission: confirm   # extraction proposes; human approves during the manual-review weeks
+    model_tier: cheap
+
+dnd:
+  timezone_env: KYRAAN_TIMEZONE
+  quiet_hours:
+    start: "22:00"
+    end: "07:00"
+  # proactive messages queued during quiet hours are held until it ends;
+  # user-initiated chat is never gated by DND.
+
+curiosity_queue:
+  max_per_day: 2
+
+cost_monitor:
+  daily_budget_usd: 5.00
+  alert_threshold_pct: 80

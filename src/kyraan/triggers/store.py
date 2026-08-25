@@ -1,0 +1,61 @@
+"""Durable storage for reminders — plain JSON, reloaded into the scheduler
+on startup so a restart doesn't lose pending reminders.
+"""
+import json
+import uuid
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+DATA_DIR = Path(__file__).resolve().parents[3] / "data"
+DATA_DIR.mkdir(exist_ok=True)
+REMINDERS_PATH = DATA_DIR / "reminders.json"
+
+
+@dataclass
+class Reminder:
+    id: str
+    chat_id: int
+    text: str
+    when_iso: str
+    sent: bool = False
+
+
+def _load_all() -> list[dict]:
+    if not REMINDERS_PATH.exists():
+        return []
+    return json.loads(REMINDERS_PATH.read_text())
+
+
+def _save_all(records: list[dict]) -> None:
+    REMINDERS_PATH.write_text(json.dumps(records, indent=2))
+
+
+def add(chat_id: int, text: str, when_iso: str) -> Reminder:
+    reminder = Reminder(id=str(uuid.uuid4()), chat_id=chat_id, text=text, when_iso=when_iso)
+    records = _load_all()
+    records.append(asdict(reminder))
+    _save_all(records)
+    return reminder
+
+
+def list_pending(chat_id: int | None = None) -> list[Reminder]:
+    records = [r for r in _load_all() if not r["sent"]]
+    if chat_id is not None:
+        records = [r for r in records if r["chat_id"] == chat_id]
+    return [Reminder(**r) for r in records]
+
+
+def mark_sent(reminder_id: str) -> None:
+    records = _load_all()
+    for r in records:
+        if r["id"] == reminder_id:
+            r["sent"] = True
+    _save_all(records)
+
+
+def cancel(reminder_id: str) -> bool:
+    records = _load_all()
+    remaining = [r for r in records if r["id"] != reminder_id]
+    changed = len(remaining) != len(records)
+    _save_all(remaining)
+    return changed
