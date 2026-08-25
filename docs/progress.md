@@ -8,7 +8,9 @@ day-to-day commits speak for themselves in `git log`.
 ## Where we are
 
 **Phase 0 (Foundations) and Phase 1 (Core Brain)** are built and working,
-started and iterated on 2026-08-25. Phases 2–5 are not started.
+started and iterated on 2026-08-25 — including the first real end-to-end
+Telegram session the same day. What remains inside Phase 1's spirit is the
+memory loop (see Known limitations). Phases 2–5 are not started.
 
 ## Goal, restated
 
@@ -166,6 +168,19 @@ sites. Intent classification stays on frontier specifically, still the
 measurably more reliable of the two there. Full walkthrough rerun clean:
 every response correct, zero crashes, $0.0000 cost, 48/48 tests pass.
 
+**First real Telegram run (2026-08-25, ~14:25 IST): Phase 1's stated goal
+is met.** Bot created via BotFather (`@kyraan_assistant_bot`), owner id
+taken from the first `getUpdates`, both wired into `.env`, and
+`python -m kyraan.main` run for the first time. The owner drove a live
+session over real Telegram: greetings, Q&A, reminders list/create — every
+event in `logs/events.jsonl` clean (`ok=True` throughout, all skill calls
+gated `auto` through the kernel), pending pre-startup messages processed
+on boot as expected. The dev harnesses and the real channel share the
+identical orchestrator path, and that held: nothing behaved differently
+over Telegram. Post-run hygiene to remember: the token was pasted into a
+chat during setup, so revoke + reissue via BotFather (`/revoke`) is
+prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
+
 ## Key decisions made
 
 - **Stack**: Python, self-hosted (not cloud VM) — see `pyproject.toml`
@@ -181,9 +196,6 @@ every response correct, zero crashes, $0.0000 cost, 48/48 tests pass.
 
 ## Known limitations / not yet done
 
-- **Telegram bot token + owner ID**: still not set — the real bot has
-  never been run end-to-end, only the CLI/TUI dev harnesses (which use the
-  identical orchestrator code path)
 - **The memory subsystem is unwired**: `memory/store.py` (propose/promote/
   reject) is built and tested, but nothing calls `propose_fact` — there is
   no extraction pass in the orchestrator, nothing reads memory into
@@ -220,8 +232,9 @@ every response correct, zero crashes, $0.0000 cost, 48/48 tests pass.
 
 ## Next steps
 
-1. `TELEGRAM_BOT_TOKEN` is in `.env`; `TELEGRAM_OWNER_ID` still isn't —
-   still need it to run the real bot end-to-end for the first time
+1. Revoke + reissue the bot token via BotFather (it passed through a chat
+   during setup), and `/setjoingroups` → Disable; also decide how the bot
+   should run long-term (launchd/systemd service vs. manual start)
 2. **Wire the memory loop** — the missing half of Phase 1: extraction pass
    after `handle_message` calling the existing `propose_fact()`, memory
    reads feeding qa.answer's prompt, seed the empty `memory/` tree, and a
