@@ -67,8 +67,30 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         pass  # message may be old/edited — the confirm flow still decides
     chat_id = update.effective_chat.id
-    reply = await orchestrator.handle_message(chat_id, word)
+    async with _lock_for(chat_id):
+        reply = await orchestrator.handle_message(chat_id, word)
     await context.bot.send_message(chat_id=chat_id, text=reply)
+
+
+# Burst coalescing: humans send thoughts as several quick messages
+# ("but this is normal" / "I can send message" / "like this") — answering
+# each fragment separately serially is what made a live session feel like
+# "randomly answering". Messages arriving within the debounce window are
+# combined and answered as ONE message, exactly how a person reads a
+# burst. Requires concurrent_updates so later fragments can join the
+# buffer while the window is open; a per-chat lock keeps actual
+# processing strictly serialized.
+_BURST_WINDOW_S = 1.5
+_BURST_MAX_WAIT_S = 6.0
+_burst_buffers: dict = {}
+_burst_flushing: set = set()
+_chat_locks: dict = {}
+
+
+def _lock_for(chat_id: int) -> asyncio.Lock:
+    if chat_id not in _chat_locks:
+        _chat_locks[chat_id] = asyncio.Lock()
+    return _chat_locks[chat_id]
 
 
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -77,18 +99,35 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     chat_id = update.effective_chat.id
-    text = update.message.text or ""
+    _burst_buffers.setdefault(chat_id, []).append((update.message, update.message.text or ""))
+    if chat_id in _burst_flushing:
+        return  # an open window will pick this fragment up
+    _burst_flushing.add(chat_id)
+    try:
+        waited = 0.0
+        while waited < _BURST_MAX_WAIT_S:
+            seen = len(_burst_buffers[chat_id])
+            await asyncio.sleep(_BURST_WINDOW_S)
+            waited += _BURST_WINDOW_S
+            if len(_burst_buffers[chat_id]) == seen:
+                break  # window went quiet — the thought is complete
+        fragments = _burst_buffers.pop(chat_id, [])
+    finally:
+        _burst_flushing.discard(chat_id)
+    if not fragments:
+        return
+    last_message = fragments[-1][0]
+    combined = "\n".join(text for _, text in fragments if text)
+
     typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
     try:
-        reply = await orchestrator.handle_message(chat_id, text)
+        async with _lock_for(chat_id):
+            reply = await orchestrator.handle_message(chat_id, combined)
     finally:
         typing.cancel()
-    # Quote the message being answered — when the owner sends several
-    # messages in a burst, replies land serially seconds later and read
-    # as random without a visual link to their question (seen live: a
-    # rapid-fire session felt like "randomly answering" partly because
-    # nothing showed which answer belonged to which message).
-    await update.message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id), do_quote=True)
+    # Quote the last message of the burst so the answer is visually
+    # anchored to what it answers.
+    await last_message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id), do_quote=True)
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -142,7 +181,7 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
 def run() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)$"))
 
