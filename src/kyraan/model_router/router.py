@@ -9,12 +9,41 @@ config-only change; no code here needs to know about it. A tier just names
 a `provider` + `model`; swapping either in permissions.yaml is the only
 change needed to move a tier between providers.
 """
+import json
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from kyraan.control_plane import config
+from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
+
+# Durable per-day spend, keyed by local date — so the daily budget cap
+# can't be dodged by restarting the process (session_cost_usd resets,
+# this doesn't). Plain JSON like every other Phase 1/2 store.
+COST_LEDGER_PATH = Path(__file__).resolve().parents[3] / "data" / "cost_ledger.json"
+
+
+def _read_ledger() -> dict:
+    try:
+        return json.loads(COST_LEDGER_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def today_cost_usd() -> float:
+    return float(_read_ledger().get(local_now().date().isoformat(), 0.0))
+
+
+def _record_cost(cost_usd: float) -> None:
+    if cost_usd <= 0:
+        return
+    ledger = _read_ledger()
+    key = local_now().date().isoformat()
+    ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
+    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
 _anthropic_client = None
 _gemini_client = None
@@ -234,6 +263,19 @@ def call(
     max_tokens: int = 1024,
 ) -> RoutedResponse:
     global last_call, session_cost_usd
+    # Hard stop at the daily budget (plan: "hard budget caps + alerts").
+    # Checked against the durable ledger, not session_cost_usd, so a
+    # restart can't reset the cap. With all-free tiers spend stays 0 and
+    # this never triggers.
+    budget = daily_budget_usd()
+    spent_today = today_cost_usd()
+    if budget > 0 and spent_today >= budget:
+        log_event("budget_exhausted", spent_today=spent_today, budget=budget)
+        raise ModelProviderError(
+            f"daily model budget exhausted (${spent_today:.2f} of ${budget:.2f} spent today) — "
+            "raise cost_monitor.daily_budget_usd in config/permissions.yaml or wait for tomorrow"
+        )
+
     tier_cfg = config.load()["model_tiers"][tier]
     model = tier_cfg["model"]
     provider = tier_cfg["provider"]
@@ -271,6 +313,7 @@ def call(
             )
             last_call = response
             session_cost_usd += cost_usd
+            _record_cost(cost_usd)
             return response
         except Exception as exc:
             last_exc = exc
