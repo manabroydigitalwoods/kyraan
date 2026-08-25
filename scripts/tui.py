@@ -82,6 +82,12 @@ class KyraanTUI(App):
         width: auto;
         align: left top;
     }
+    .user-message {
+        background: $boost;
+        border-left: thick $accent;
+        padding: 0 1;
+        margin: 1 0;
+    }
     """
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
@@ -173,6 +179,15 @@ class KyraanTUI(App):
         log.scroll_end()
         self.transcript_lines.append(Text.from_markup(text).plain)
 
+    async def _log_user(self, text: str) -> None:
+        """The user's own message — boxed with a left accent bar (matching
+        OpenCode's UI) instead of a bare `>` prefix, so a long conversation
+        stays visually easy to scan for "who said this"."""
+        log = self.query_one("#chat-log", VerticalScroll)
+        await log.mount(Static(text, classes="user-message"))
+        log.scroll_end()
+        self.transcript_lines.append(f"> {text}")
+
     async def _log_markdown(self, text: str) -> None:
         """CommonMark — for actual model output, which may contain **bold**,
         lists, code fences, etc. that should render, not show as literal
@@ -222,7 +237,7 @@ class KyraanTUI(App):
 
     async def _process_message(self, text: str) -> None:
         self.last_user_message = text
-        await self._log(f"[bold green]>[/bold green] {text}")
+        await self._log_user(text)
         input_widget = self.query_one("#chat-input", Input)
         input_widget.disabled = True
         thinking = await self._show_thinking()

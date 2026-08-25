@@ -16,6 +16,11 @@ _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
 The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
 {{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
 
+_ANSWER_SYSTEM = """You are Kyraan, a personal assistant. Be direct and concise —
+match reply length to the question. A greeting gets a short, friendly reply,
+not a lecture about your own capabilities or limitations. Skip disclaimers,
+meta-commentary about being an AI, and unsolicited lists of what you can do."""
+
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
     try:
@@ -90,7 +95,7 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _answer(text: str) -> str:
     async def handler(args: dict) -> str:
-        response = router.call_with_escalation(prompt=args["text"])
+        response = router.call_with_escalation(prompt=args["text"], system=_ANSWER_SYSTEM)
         return response.text
 
     return await kernel.run_skill(SkillCall("qa.answer", {"text": text}), handler)
