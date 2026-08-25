@@ -466,3 +466,37 @@ async def test_qa_prompt_forbids_pretending_to_create_calendar_events(monkeypatc
     await orchestrator.handle_message(chat_id=0, raw_text="can you set an event in my calendar")
     assert "CANNOT create, edit, or delete calendar" in captured["system"]
     assert "never present a reminder as a calendar event" in captured["system"]
+
+
+async def test_duplicate_reminder_is_refused_with_the_existing_id(monkeypatch, isolated_store):
+    """Found live: asking again after a reminder was already set created a
+    second identical one — two pings for one intent."""
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call suman at 7pm")
+    monkeypatch.setattr(
+        orchestrator.router,
+        "call",
+        lambda **kwargs: _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T19:00:00+05:30"}'),
+    )
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+
+    first = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 7pm")
+    assert "Reminder set" in first
+
+    second = await orchestrator.handle_message(chat_id=0, raw_text="set a reminder to call suman at 7pm")
+    assert "Already set" in second and "didn't add a duplicate" in second
+    assert len(orchestrator.scheduler.store.list_pending(0)) == 1
+
+
+async def test_same_text_at_a_different_time_is_not_a_duplicate(monkeypatch, isolated_store):
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call suman")
+    responses = iter([
+        _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T19:00:00+05:30"}'),
+        _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T21:00:00+05:30"}'),
+    ])
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: next(responses))
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 7pm")
+    second = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 9pm too")
+    assert "Reminder set" in second
+    assert len(orchestrator.scheduler.store.list_pending(0)) == 2

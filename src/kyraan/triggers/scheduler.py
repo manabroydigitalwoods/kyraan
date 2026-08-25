@@ -114,6 +114,22 @@ def _schedule(reminder: store.Reminder) -> None:
     )
 
 
+def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | None:
+    """An existing pending reminder with the same text (case-insensitive)
+    at the same moment. Found live: "ok then set a reminder for it" after
+    the reminder already existed silently created a second identical one —
+    two pings for one intent. Same text at a *different* time is not a
+    duplicate (call mom at 8 and again at 9 is legitimate)."""
+    when = _parse_when(when_iso)
+    for r in store.list_pending(chat_id):
+        try:
+            if r.text.casefold() == text.casefold() and _parse_when(r.when_iso) == when:
+                return r
+        except ValueError:
+            continue
+    return None
+
+
 def create_reminder(chat_id: int, text: str, when_iso: str) -> store.Reminder:
     # Validate before persisting — a bad when_iso (e.g. a model producing a
     # duplicated UTC offset, seen live) must never be written to disk, or

@@ -18,3 +18,13 @@ def test_log_rotates_at_size_threshold_archiving_old_events(monkeypatch, tmp_pat
     assert "x" * 200 in archives[0].read_text()  # old events archived, not lost
     assert "first_after_rotation" in event_log.read_text()
     assert "x" * 200 not in event_log.read_text()  # fresh file started
+
+
+def test_tests_never_write_the_production_audit_log():
+    """The autouse conftest fixture must have redirected EVENT_LOG away
+    from the real logs/ directory for every test in the suite."""
+    assert "logs" not in str(logging_setup.EVENT_LOG.parent.name) or "pytest" in str(logging_setup.EVENT_LOG)
+    logging_setup.log_event("test_isolation_probe")
+    real = logging_setup.LOG_DIR / "events.jsonl"
+    if real.exists():
+        assert "test_isolation_probe" not in real.read_text()[-2000:]

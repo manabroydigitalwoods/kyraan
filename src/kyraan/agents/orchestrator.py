@@ -251,6 +251,12 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         )
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
+            existing = scheduler.find_duplicate(chat_id, data["text"], data["when_iso"])
+            if existing:
+                return (
+                    f"Already set: \"{existing.text}\" at {existing.when_iso} "
+                    f"(id {existing.id[:8]}) — I didn't add a duplicate."
+                )
             reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             # Kept as a safety net even though frontier is far more
