@@ -7,10 +7,10 @@ day-to-day commits speak for themselves in `git log`.
 
 ## Where we are
 
-**Phase 0 (Foundations) and Phase 1 (Core Brain)** are built and working,
-started and iterated on 2026-08-25 — including the first real end-to-end
-Telegram session the same day. What remains inside Phase 1's spirit is the
-memory loop (see Known limitations). Phases 2–5 are not started.
+**Phase 0 (Foundations) and Phase 1 (Core Brain) are complete** — built,
+iterated, and live-verified on 2026-08-25, including the first real
+end-to-end Telegram session and the full memory loop (extraction →
+human review → recall) the same day. Phases 2–5 are not started.
 
 ## Goal, restated
 
@@ -65,10 +65,24 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - Hardened against malformed model output: JSON `null` fields, intent
   strings outside the known set — both used to crash or misroute
 
-**Memory** (`src/kyraan/memory/`)
-- MD files only (no RAG/graph yet, per plan)
-- Check-before-write: extraction proposes into `memory/pending_review/`,
-  a human promotes or rejects — nothing reaches live memory unreviewed
+**Memory** (`src/kyraan/memory/`) — the full Phase 1 loop, wired 2026-08-25
+- MD files only (no RAG/graph yet, per plan); tree seeded (owner, work)
+  and versioned in git — auditable and reversible, per the plan's
+  "trace *why* by reading a memory file" principle
+- **Extraction** (`extraction.py`): every message ≥ 8 chars runs a
+  conservative extraction pass (the auto-permission `memory.propose`
+  skill — kill-switch-gated, logged). Only explicitly *stated*,
+  self-contained facts; proposals carry the verbatim source statement
+- Check-before-write: extraction proposes into `memory/pending_review/`
+  (gitignored), a human promotes or rejects via
+  `scripts/review_memory.py` — nothing reaches live memory unreviewed,
+  and the reply is annotated "📝 Noted for review" so saving is visible
+- **Reads**: qa.answer's prompt carries every live fact
+  (`load_all_facts()`, char-capped) plus a rolling per-chat 10-exchange
+  conversation window for follow-ups and pronouns
+- Fact paths validated against a strict layout at propose *and* promote
+  time — closes a traversal hole where a model-generated target like
+  `../../.env` could have written outside the memory tree
 
 **Triggers** (`src/kyraan/triggers/`)
 - Reminders are the only proactive trigger so far
@@ -94,7 +108,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 48 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 60 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
 math, orchestrator error handling (including a pin on the qa.answer
@@ -196,14 +210,15 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 
 ## Known limitations / not yet done
 
-- **The memory subsystem is unwired**: `memory/store.py` (propose/promote/
-  reject) is built and tested, but nothing calls `propose_fact` — there is
-  no extraction pass in the orchestrator, nothing reads memory into
-  qa.answer's prompt, and the `memory/` tree is empty (Phase 0's manual
-  seeding was never done). Phase 1's "conservative extraction" item is
-  therefore not actually complete — the store exists, the pipeline doesn't
-- **No conversation context**: every message is handled statelessly;
-  follow-up questions ("what about tomorrow?") have nothing to refer to
+- Conversation history is in-memory and per-process — a restart forgets
+  the session (durable facts are the memory tree's job, but "what did we
+  just talk about?" won't survive a restart)
+- Extraction quality depends on the cheap local model — it reliably finds
+  clearly stated facts but can phrase them tersely; the human review step
+  is the quality gate, and every proposal carries the verbatim source
+  statement for exactly that reason
+- Memory reads load the whole tree into the prompt each call — fine at
+  Phase 1 scale, needs RAG (Phase 3) once the tree outgrows the char cap
 - `cancel_reminder`'s cancel path is best-effort in both dev harnesses (an
   already-scheduled asyncio task still fires even if the record is
   cancelled) — fine for dev, not for production
@@ -235,14 +250,11 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 1. Revoke + reissue the bot token via BotFather (it passed through a chat
    during setup), and `/setjoingroups` → Disable; also decide how the bot
    should run long-term (launchd/systemd service vs. manual start)
-2. **Wire the memory loop** — the missing half of Phase 1: extraction pass
-   after `handle_message` calling the existing `propose_fact()`, memory
-   reads feeding qa.answer's prompt, seed the empty `memory/` tree, and a
-   short rolling conversation history in the same change
+2. Review pending memory proposals as they accumulate
+   (`python scripts/review_memory.py`) — the manual-review weeks the plan
+   calls for start now
 3. CI for the test suite + rotation for `logs/events.jsonl`
 4. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
-5. Strip a markdown code fence before parsing model JSON output (intent
-   classification, reminder extraction) — small, low-risk robustness fix
-6. Phase 2 groundwork: tool registry design, first MCP server (likely
+5. Phase 2 groundwork: tool registry design, first MCP server (likely
    Home Assistant or a calendar) — not started
