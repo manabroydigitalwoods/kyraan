@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import tui as tui_module  # noqa: E402
 from kyraan.control_plane import kill_switch  # noqa: E402
 from kyraan.model_router import router  # noqa: E402
+from textual.widgets import Collapsible  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +62,64 @@ async def test_kill_and_unkill_slash_commands_toggle_the_real_kill_switch():
         await pilot.press("enter")
         await pilot.pause()
         assert not kill_switch.is_engaged()
+
+
+async def test_reasoning_shows_as_a_collapsed_thought_section(monkeypatch):
+    async def fake_handle_message(chat_id, text):
+        return "mocked reply"
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fake_handle_message)
+    monkeypatch.setattr(
+        router,
+        "last_call",
+        router.RoutedResponse(
+            text="mocked reply",
+            tier_used="frontier",
+            provider="groq",
+            model="openai/gpt-oss-120b",
+            latency_ms=500.0,
+            usage=router.Usage(input_tokens=20, output_tokens=15),
+            reasoning="step by step hidden reasoning",
+        ),
+    )
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"hi")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        thoughts = app.query(Collapsible)
+        assert len(thoughts) == 1
+        assert thoughts.first().collapsed is True
+        assert thoughts.first().title.startswith("Thought · 500ms")
+
+
+async def test_no_reasoning_means_no_thought_section(monkeypatch):
+    async def fake_handle_message(chat_id, text):
+        return "mocked reply"
+
+    monkeypatch.setattr(tui_module.orchestrator, "handle_message", fake_handle_message)
+    monkeypatch.setattr(
+        router,
+        "last_call",
+        router.RoutedResponse(
+            text="mocked reply",
+            tier_used="cheap",
+            provider="ollama",
+            model="llama3.2",
+            latency_ms=42.0,
+            usage=router.Usage(input_tokens=10, output_tokens=5),
+        ),
+    )
+
+    app = tui_module.KyraanTUI()
+    async with app.run_test() as pilot:
+        await pilot.press(*"hi")
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert len(app.query(Collapsible)) == 0
 
 
 async def test_reminders_command_does_not_call_the_model(monkeypatch):

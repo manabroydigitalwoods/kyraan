@@ -1,7 +1,8 @@
 """Dev-only local TUI: same orchestrator.handle_message path as chat.py, but
 a full-screen dashboard (session stats, per-turn provider/model/latency/
-tokens, live sidebar) in the style of Claude Code / OpenCode's terminal UI,
-built on Textual (https://textual.textualize.io/).
+tokens, live sidebar, collapsible "Thought" sections) in the style of
+Claude Code / OpenCode's terminal UI, built on Textual
+(https://textual.textualize.io/).
 
 Not part of the installed package — run directly: `python scripts/tui.py`
 
@@ -13,6 +14,10 @@ worker thread would be destroyed before a delayed reminder ever fires), so
 schedule_fn uses asyncio.run_coroutine_threadsafe(..., app_loop) — safe to
 call from any thread, unlike scheduling on "whatever loop is current".
 
+The chat area is a VerticalScroll of mounted widgets (Static per line,
+Collapsible for reasoning) rather than a RichLog — a Collapsible is a real
+interactive widget and can't be written into a text-only log stream.
+
 Same reminder-cancellation limitation as chat.py: cancel_fn is a no-op, so
 an already-scheduled reminder still fires even if cancelled from the store.
 """
@@ -23,7 +28,7 @@ from dotenv import load_dotenv
 from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, VerticalScroll
-from textual.widgets import Footer, Header, Input, RichLog, Static
+from textual.widgets import Collapsible, Footer, Header, Input, LoadingIndicator, Static
 
 from kyraan.agents import orchestrator
 from kyraan.control_plane import config, kill_switch
@@ -63,6 +68,13 @@ class KyraanTUI(App):
         border: solid $panel;
         padding: 1 2;
     }
+    #thinking {
+        height: 1;
+        display: none;
+    }
+    #thinking.active {
+        display: block;
+    }
     """
     BINDINGS = [("ctrl+c", "quit", "Quit")]
 
@@ -77,18 +89,18 @@ class KyraanTUI(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="body"):
-            yield RichLog(id="chat-log", wrap=True, markup=True, highlight=False)
+            yield VerticalScroll(id="chat-log")
             yield Static(id="sidebar")
+        yield LoadingIndicator(id="thinking")
         yield Input(placeholder="Ask anything, or /help for commands...", id="chat-input")
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.app_loop = asyncio.get_running_loop()
         scheduler.init(schedule_fn=self._schedule_fn, cancel_fn=self._cancel_fn, send_fn=self._send_fn)
         self.title = "Kyraan"
         self.sub_title = "local TUI — real model calls, no Telegram needed"
-        log = self.query_one("#chat-log", RichLog)
-        log.write("[bold cyan]Kyraan[/bold cyan] — type a message, or /help for commands.\n")
+        await self._log("[bold cyan]Kyraan[/bold cyan] — type a message, or /help for commands.")
         self._refresh_sidebar()
 
     def _tier_line(self, tier: str) -> str:
@@ -122,8 +134,22 @@ class KyraanTUI(App):
                 f"model    {last.model}",
                 f"latency  {last.latency_ms:.0f}ms",
                 f"tokens   in={last.usage.input_tokens} out={last.usage.output_tokens}",
+                f"reasoning {'yes' if last.reasoning else 'no'}",
             ]
         self.query_one("#sidebar", Static).update("\n".join(lines))
+
+    async def _log(self, text: str) -> None:
+        log = self.query_one("#chat-log", VerticalScroll)
+        await log.mount(Static(text))
+        log.scroll_end()
+
+    async def _log_thought(self, reasoning: str, latency_ms: float) -> None:
+        log = self.query_one("#chat-log", VerticalScroll)
+        await log.mount(Collapsible(Static(reasoning), title=f"Thought · {latency_ms:.0f}ms", collapsed=True))
+        log.scroll_end()
+
+    def _set_thinking(self, active: bool) -> None:
+        self.query_one("#thinking", LoadingIndicator).set_class(active, "active")
 
     def _schedule_fn(self, job_name: str, run_at: datetime, payload: dict) -> None:
         delay = max((run_at - local_now()).total_seconds(), 0)
@@ -139,7 +165,7 @@ class KyraanTUI(App):
         pass  # best-effort no-op — see module docstring
 
     async def _send_fn(self, chat_id: int, text: str) -> None:
-        self.query_one("#chat-log", RichLog).write(f"\n[bold yellow]\U0001f514 {text}[/bold yellow]")
+        await self._log(f"[bold yellow]\U0001f514 {text}[/bold yellow]")
 
     async def _call_orchestrator(self, text: str) -> str:
         def runner() -> str:
@@ -152,7 +178,6 @@ class KyraanTUI(App):
         text = event.value.strip()
         input_widget = self.query_one("#chat-input", Input)
         input_widget.value = ""
-        log = self.query_one("#chat-log", RichLog)
 
         if not text:
             return
@@ -160,21 +185,25 @@ class KyraanTUI(App):
             self.exit()
             return
         if text.startswith("/"):
-            self._handle_slash(text, log)
+            await self._handle_slash(text)
             return
 
-        log.write(f"\n[bold green]>[/bold green] {text}")
+        await self._log(f"[bold green]>[/bold green] {text}")
         input_widget.disabled = True
+        self._set_thinking(True)
         try:
             reply = await self._call_orchestrator(text)
         finally:
+            self._set_thinking(False)
             input_widget.disabled = False
             input_widget.focus()
 
-        log.write(reply)
         last = router.last_call
+        if last is not None and last.reasoning:
+            await self._log_thought(last.reasoning, last.latency_ms)
+        await self._log(reply)
         if last is not None:
-            log.write(
+            await self._log(
                 f"[dim]{last.tier_used} · {last.provider}/{last.model} · "
                 f"{last.latency_ms:.0f}ms · in={last.usage.input_tokens} out={last.usage.output_tokens}[/dim]"
             )
@@ -183,26 +212,26 @@ class KyraanTUI(App):
         self.message_count += 1
         self._refresh_sidebar()
 
-    def _handle_slash(self, cmd: str, log: RichLog) -> None:
+    async def _handle_slash(self, cmd: str) -> None:
         if cmd == "/help":
-            log.write(HELP_TEXT)
+            await self._log(HELP_TEXT)
         elif cmd == "/clear":
-            log.clear()
+            await self.query_one("#chat-log", VerticalScroll).remove_children()
         elif cmd == "/kill":
             kill_switch.engage("engaged from TUI")
-            log.write("[bold red]Kill switch engaged.[/bold red]")
+            await self._log("[bold red]Kill switch engaged.[/bold red]")
         elif cmd == "/unkill":
             kill_switch.disengage()
-            log.write("[bold green]Kill switch disengaged.[/bold green]")
+            await self._log("[bold green]Kill switch disengaged.[/bold green]")
         elif cmd == "/reminders":
             pending = scheduler.store.list_pending(CHAT_ID)
             if not pending:
-                log.write("[dim]No pending reminders.[/dim]")
+                await self._log("[dim]No pending reminders.[/dim]")
             else:
                 for r in pending:
-                    log.write(f"[dim]-[/dim] [cyan]{r.id[:8]}[/cyan] {r.text} [dim]at {r.when_iso}[/dim]")
+                    await self._log(f"[dim]-[/dim] [cyan]{r.id[:8]}[/cyan] {r.text} [dim]at {r.when_iso}[/dim]")
         else:
-            log.write(f"[dim]Unknown command: {cmd} (try /help)[/dim]")
+            await self._log(f"[dim]Unknown command: {cmd} (try /help)[/dim]")
         self._refresh_sidebar()
 
 

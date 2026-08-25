@@ -85,9 +85,17 @@ class RoutedResponse:
     model: str
     latency_ms: float
     usage: Usage
+    reasoning: str | None = None
 
 
-def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
+@dataclass
+class _RawResult:
+    text: str
+    usage: Usage
+    reasoning: str | None = None
+
+
+def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> _RawResult:
     response = _get_anthropic_client(provider_cfg).messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -95,14 +103,16 @@ def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, ma
         messages=[{"role": "user", "content": prompt}],
     )
     text = "".join(block.text for block in response.content if block.type == "text")
+    # Extended thinking (when enabled) comes back as separate "thinking" blocks.
+    thinking = "".join(block.thinking for block in response.content if block.type == "thinking")
     usage = Usage(
         input_tokens=getattr(response.usage, "input_tokens", None),
         output_tokens=getattr(response.usage, "output_tokens", None),
     )
-    return text, usage
+    return _RawResult(text=text, usage=usage, reasoning=thinking or None)
 
 
-def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
+def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> _RawResult:
     from google.genai import types
 
     response = _get_gemini_client(provider_cfg).models.generate_content(
@@ -118,12 +128,12 @@ def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_t
         input_tokens=getattr(meta, "prompt_token_count", None) if meta else None,
         output_tokens=getattr(meta, "candidates_token_count", None) if meta else None,
     )
-    return response.text or "", usage
+    return _RawResult(text=response.text or "", usage=usage)
 
 
 def _call_openai_compatible(
     provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int
-) -> tuple[str, Usage]:
+) -> _RawResult:
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -144,10 +154,13 @@ def _call_openai_compatible(
         input_tokens=getattr(usage_obj, "prompt_tokens", None) if usage_obj else None,
         output_tokens=getattr(usage_obj, "completion_tokens", None) if usage_obj else None,
     )
-    return response.choices[0].message.content or "", usage
+    # "Reasoning" models (Groq's, OpenRouter's free tier, OpenAI's gpt-5
+    # family) put hidden chain-of-thought here, separate from .content.
+    reasoning = getattr(response.choices[0].message, "reasoning", None)
+    return _RawResult(text=response.choices[0].message.content or "", usage=usage, reasoning=reasoning)
 
 
-def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
+def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> _RawResult:
     provider_cfg = _provider_cfg(provider)
     kind = provider_cfg["kind"]
     if kind == "anthropic":
@@ -185,7 +198,7 @@ def call(
     for attempt in range(attempts):
         start = time.monotonic()
         try:
-            text, usage = _dispatch(provider, model, prompt, system, max_tokens)
+            raw = _dispatch(provider, model, prompt, system, max_tokens)
             latency_ms = (time.monotonic() - start) * 1000
             log_event(
                 "model_call",
@@ -195,11 +208,18 @@ def call(
                 prompt_chars=len(prompt),
                 attempt=attempt,
                 latency_ms=round(latency_ms),
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
+                input_tokens=raw.usage.input_tokens,
+                output_tokens=raw.usage.output_tokens,
+                had_reasoning=raw.reasoning is not None,
             )
             response = RoutedResponse(
-                text=text, tier_used=tier, provider=provider, model=model, latency_ms=latency_ms, usage=usage
+                text=raw.text,
+                tier_used=tier,
+                provider=provider,
+                model=model,
+                latency_ms=latency_ms,
+                usage=raw.usage,
+                reasoning=raw.reasoning,
             )
             last_call = response
             return response
