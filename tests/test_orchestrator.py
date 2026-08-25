@@ -368,15 +368,15 @@ async def test_calendar_intent_formats_events_from_the_tool(monkeypatch):
         assert call.tool_name == "calendar.list_events"
         assert call.args == {"start": "2026-08-25T00:00:00+05:30", "end": "2026-08-25T23:59:59+05:30"}
         return [
-            {"title": "Standup", "start": "2026-08-25T09:30:00+05:30", "end": "2026-08-25T09:45:00+05:30", "all_day": False, "location": None},
-            {"title": "Holiday", "start": "2026-08-25T00:00:00+05:30", "end": "2026-08-26T00:00:00+05:30", "all_day": True, "location": None},
+            {"title": "Standup", "start": "2026-08-25T09:30:00+00:00", "end": "2026-08-25T09:45:00+00:00", "all_day": False, "location": None},
+            {"title": "Holiday", "start": "2026-08-25T00:00:00+00:00", "end": "2026-08-26T00:00:00+00:00", "all_day": True, "location": None},
         ]
 
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="what's on my calendar today")
     assert "Calendar today:" in result
-    assert "09:30 — Standup" in result
+    assert "9:30 AM — Standup" in result
     assert "all day — Holiday" in result
 
 
@@ -515,7 +515,7 @@ async def test_calendar_create_asks_then_creates_the_exact_confirmed_event(monke
     def fake_call(prompt, system="", **kwargs):
         extraction_calls.append(prompt)
         return _FakeRouted(
-            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+05:30", "end_iso": "2099-01-02T18:00:00+05:30", "location": null}'
+            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
         )
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
@@ -528,13 +528,13 @@ async def test_calendar_create_asks_then_creates_the_exact_confirmed_event(monke
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
 
     ask = await orchestrator.handle_message(chat_id=0, raw_text="add call suman tomorrow 5pm to my calendar")
-    assert "About to create a calendar event" in ask and "Call Suman" in ask and "17:00" in ask
+    assert "About to create a calendar event" in ask and "Call Suman" in ask and "5:00 PM" in ask
     assert dispatched == []  # nothing written before the yes
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert "Event created" in result and "https://cal/ev1" in result
     assert dispatched == [("calendar.create_event", {
-        "title": "Call Suman", "start": "2099-01-02T17:00:00+05:30", "end": "2099-01-02T18:00:00+05:30"})]
+        "title": "Call Suman", "start": "2099-01-02T17:00:00+00:00", "end": "2099-01-02T18:00:00+00:00"})]
     assert len(extraction_calls) == 1  # confirm did NOT re-extract
 
 
@@ -545,7 +545,7 @@ async def test_calendar_create_no_cancels_without_writing(monkeypatch):
     monkeypatch.setattr(
         orchestrator.router, "call",
         lambda **kwargs: _FakeRouted(
-            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+05:30", "end_iso": "2099-01-02T18:00:00+05:30", "location": null}'
+            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
         ),
     )
     dispatched = []
@@ -571,7 +571,7 @@ async def test_event_extraction_junk_is_cleaned_before_the_ask(monkeypatch):
     monkeypatch.setattr(
         orchestrator.router, "call",
         lambda **kwargs: _FakeRouted(
-            text='{"title": "Test Event", "start_iso": "2099-01-02T15:00:00.000123+05:30", "end_iso": "2099-01-02T16:00:00.000124+05:30", "location": "null"}'
+            text='{"title": "Test Event", "start_iso": "2099-01-02T15:00:00.000123+00:00", "end_iso": "2099-01-02T16:00:00.000124+00:00", "location": "null"}'
         ),
     )
     dispatched = []
@@ -584,7 +584,7 @@ async def test_event_extraction_junk_is_cleaned_before_the_ask(monkeypatch):
 
     ask = await orchestrator.handle_message(chat_id=0, raw_text="add test event tomorrow 3pm to my calendar")
     assert ".000123" not in ask and "at null" not in ask
-    assert "2099-01-02T15:00:00+05:30" in ask
+    assert "3:00 PM" in ask and "T15:00:00.000123" not in ask
 
     await orchestrator.handle_message(chat_id=0, raw_text="yes")
-    assert dispatched == [{"title": "Test Event", "start": "2099-01-02T15:00:00+05:30", "end": "2099-01-02T16:00:00+05:30"}]
+    assert dispatched == [{"title": "Test Event", "start": "2099-01-02T15:00:00+00:00", "end": "2099-01-02T16:00:00+00:00"}]

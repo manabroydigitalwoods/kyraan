@@ -7,7 +7,7 @@ import json
 from collections import defaultdict, deque
 
 from kyraan.control_plane import kernel
-from kyraan.control_plane.dnd import local_now
+from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.intent.normalize import normalize
@@ -266,7 +266,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
             existing = scheduler.find_duplicate(chat_id, data["text"], data["when_iso"])
             if existing:
                 return (
-                    f"Already set: \"{existing.text}\" at {existing.when_iso} "
+                    f"Already set: \"{existing.text}\" at {humanize(existing.when_iso)} "
                     f"(id {existing.id[:8]}) — I didn't add a duplicate."
                 )
             reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
@@ -275,7 +275,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
             # reliable — no model is perfect, and this must never crash.
             log_event("reminder_extraction_failed", text=text, raw=extracted.text, error=str(exc))
             return "I couldn't work out a time for that reminder — try rephrasing with a clearer date/time."
-        return f"Reminder set: \"{data['text']}\" at {data['when_iso']} (id {reminder.id[:8]})"
+        return f"Reminder set: \"{data['text']}\" at {humanize(data['when_iso'])} (id {reminder.id[:8]})"
 
     return await _gated(chat_id, SkillCall("reminders.create", {"text": text}), handler)
 
@@ -285,7 +285,7 @@ async def _list_reminders(chat_id: int) -> str:
         pending = scheduler.store.list_pending(chat_id)
         if not pending:
             return "No pending reminders."
-        return "\n".join(f"- [{r.id[:8]}] {r.text} at {r.when_iso}" for r in pending)
+        return "\n".join(f"- [{r.id[:8]}] {r.text} at {humanize(r.when_iso)}" for r in pending)
 
     return await _gated(chat_id, SkillCall("reminders.list", {}), handler)
 
@@ -324,7 +324,7 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
             # is destructive and silent when it's wrong (a live walkthrough
             # only passed here because the intended reminder happened to be
             # first in the list). Ask instead.
-            listing = "\n".join(f"- [{r.id[:8]}] {r.text} at {r.when_iso}" for r in pending)
+            listing = "\n".join(f"- [{r.id[:8]}] {r.text} at {humanize(r.when_iso)}" for r in pending)
             return (
                 "You have more than one pending reminder — which should I cancel? "
                 f"Reply like \"cancel {pending[0].id[:8]}\":\n{listing}"
@@ -360,7 +360,7 @@ async def _list_calendar(chat_id: int, text: str) -> str:
             return f"Nothing on the calendar {label}."
         lines = []
         for e in events:
-            when = "all day" if e["all_day"] else e["start"][11:16]
+            when = "all day" if e["all_day"] else humanize(e["start"])
             where = f" ({e['location']})" if e.get("location") else ""
             lines.append(f"- {when} — {e['title']}{where}")
         return f"Calendar {label}:\n" + "\n".join(lines)
@@ -405,10 +405,14 @@ async def _create_event(chat_id: int, text: str) -> str:
         except kernel.ToolFailed as exc:
             return f"Couldn't create the event: {exc}"
         link = f"\n{created['link']}" if created.get("link") else ""
-        return f"Event created on your calendar: \"{created['title']}\" at {handler_args['start']}{link}"
+        return f"Event created on your calendar: \"{created['title']}\" at {humanize(handler_args['start'])}{link}"
 
     where = f" at {args['location']}" if args.get("location") else ""
-    describe = f"About to create a calendar event: \"{args['title']}\" {args['start']} → {args['end']}{where}"
+    start_h = humanize(args["start"])
+    same_day = scheduler._parse_when(args["start"]).date() == scheduler._parse_when(args["end"]).date()
+    end_dt = scheduler._parse_when(args["end"])
+    end_h = end_dt.strftime("%I:%M %p").lstrip("0") if same_day else humanize(args["end"])
+    describe = f"About to create a calendar event: \"{args['title']}\" {start_h} → {end_h}{where}"
     return await _gated(chat_id, SkillCall("calendar.create", args), handler, describe=describe)
 
 

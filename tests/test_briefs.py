@@ -42,8 +42,8 @@ async def test_compose_shows_events_and_todays_reminders(isolated_store, fake_ca
     text = await briefs.compose(1)
 
     assert "Morning brief" in text
-    assert "09:30 — Standup (Meet)" in text
-    assert "23:00 — call Suman" in text
+    assert "9:30 AM — Standup (Meet)" in text
+    assert "11:00 PM — call Suman" in text
     assert "far future" not in text and "someone else's" not in text
 
 

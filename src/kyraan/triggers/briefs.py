@@ -8,7 +8,7 @@ comes tomorrow, and stale "good morning" messages at noon help nobody.
 from datetime import time, timedelta
 
 from kyraan.control_plane import config, kernel
-from kyraan.control_plane.dnd import local_now
+from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.triggers import scheduler, store
 
@@ -37,7 +37,7 @@ async def compose(chat_id: int) -> str:
             lines.append("")
             lines.append("Calendar today:")
             for e in events:
-                when = "all day" if e["all_day"] else e["start"][11:16]
+                when = "all day" if e["all_day"] else humanize(e["start"])
                 where = f" ({e['location']})" if e.get("location") else ""
                 lines.append(f"- {when} — {e['title']}{where}")
         else:
@@ -60,7 +60,7 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.append("Reminders today:")
         for when, text in sorted(todays):
-            lines.append(f"- {when.strftime('%H:%M')} — {text}")
+            lines.append(f"- {humanize(when)} — {text}")
     else:
         lines.append("")
         lines.append("No reminders today.")
