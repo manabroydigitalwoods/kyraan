@@ -45,6 +45,10 @@ def list_pending(chat_id: int | None = None) -> list[Reminder]:
     return [Reminder(**r) for r in records]
 
 
+def get(reminder_id: str) -> Reminder | None:
+    return next((Reminder(**r) for r in _load_all() if r["id"] == reminder_id), None)
+
+
 def mark_sent(reminder_id: str) -> None:
     records = _load_all()
     for r in records:

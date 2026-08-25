@@ -96,3 +96,26 @@ def test_future_reminder_is_scheduled_unannotated(isolated_store):
 
     assert captured["payload"]["text"] == "water plants"
     assert captured["run_at"] == _parse_when("2099-01-01T10:00:00+00:00")
+
+
+async def test_fire_is_idempotent_against_duplicate_scheduling(isolated_store):
+    """Found live: a reminder fired twice 0.8s apart when two bot processes
+    briefly overlapped across a restart. fire() must consult the store and
+    send at most once, no matter how many jobs point at the reminder."""
+    r = store.add(chat_id=0, text="water plants", when_iso="2099-01-01T10:00:00+00:00")
+    sends = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+
+    await scheduler.fire(r.id, 0, r.text)  # first fire: sends
+    await scheduler.fire(r.id, 0, r.text)  # duplicate job: must not send
+    assert sends == ["Reminder: water plants"]
+
+    store.cancel(r.id)
+    r2 = store.add(chat_id=0, text="other", when_iso="2099-01-01T10:00:00+00:00")
+    store.cancel(r2.id)
+    await scheduler.fire(r2.id, 0, r2.text)  # cancelled record: must not send
+    assert sends == ["Reminder: water plants"]

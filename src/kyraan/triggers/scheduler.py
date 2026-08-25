@@ -37,6 +37,17 @@ def init(schedule_fn: ScheduleFn, cancel_fn: CancelFn, send_fn: SendFn) -> None:
 
 
 async def fire(reminder_id: str, chat_id: int, text: str) -> None:
+    # Idempotency guard — the store is the single source of truth on
+    # whether this reminder still owes a send. Found live (2026-08-25): a
+    # reminder fired twice, 0.8s apart, when two bot processes briefly
+    # overlapped across a restart — fire() trusted whoever scheduled it
+    # and sent unconditionally. Now a duplicate job, an overlapping
+    # process, or a stale schedule sends nothing the second time.
+    record = store.get(reminder_id)
+    if record is None or record.sent:
+        log_event("reminder_fire_skipped", reminder_id=reminder_id,
+                  reason="already sent" if record else "record gone (cancelled?)")
+        return
     if not kernel.can_send_proactively():
         assert _schedule_fn is not None
         _schedule_fn(
