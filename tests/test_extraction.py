@@ -124,3 +124,16 @@ async def test_long_pastes_never_reach_extraction(monkeypatch, isolated_memory):
 
     monkeypatch.setattr(router, "call", explode)
     assert await extraction.propose_from_message("Mamata Banerjee " * 200) == []
+
+
+async def test_fabricated_facts_sharing_no_words_are_dropped(monkeypatch, isolated_memory):
+    """Walkthrough v3 (degraded mode): 'make it 4 lines' produced 'Name is
+    Anupam' + two more invented facts. Zero content-word overlap with the
+    message = hallucination, dropped deterministically."""
+    _mock_model(monkeypatch, '{"facts": ['
+        '{"path": "people/anupam.md", "content": "- Name is Anupam"}, '
+        '{"path": "preferences/tea.md", "content": "- Favourite tea is masala chai"}]}')
+
+    queued = await extraction.propose_from_message("my favourite tea is masala chai")
+    assert queued == ["- Favourite tea is masala chai"]  # the fabricated one is gone
+    assert len(list(isolated_memory.glob("*.md"))) == 1

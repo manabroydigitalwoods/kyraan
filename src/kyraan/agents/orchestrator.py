@@ -112,6 +112,7 @@ _EXTRACTION_MIN_CHARS = 8
 # ride the history into the cloud classifier or qa prompts (owner's §3a
 # resolution: work email metadata stays off third-party models).
 _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_redaction", default=None)
+_skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extraction", default=False)
 
 
 def record_proactive(chat_id: int, text: str) -> None:
@@ -143,6 +144,19 @@ def _classifier_context(chat_id: int, entries: int = 6, clip: int = 200) -> str:
     )
 
 
+def _structured_call(prompt: str, system: str):
+    """Structured extraction (reminder times, event fields, calendar
+    windows) is exactness-critical: frontier first, local fallback when
+    the cloud tier is down/exhausted — walkthrough v3 (degraded mode)
+    showed the local 8B extracting \"in 45mins\" as a PAST time and
+    failing window JSON outright."""
+    try:
+        return router.call(prompt=prompt, system=system, tier="frontier")
+    except router.ModelProviderError as exc:
+        log_event("structured_fallback_cheap", error=str(exc))
+        return router.call(prompt=prompt, system=system, tier="cheap")
+
+
 async def _extraction_note(raw_text: str) -> str:
     """Run fact extraction and return a reply suffix naming what was queued
     ("" when nothing was). Extraction is best-effort: it must never break
@@ -162,8 +176,11 @@ async def _extraction_note(raw_text: str) -> str:
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
+    skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
-    reply += await _extraction_note(raw_text)
+    if not _skip_extraction.get():
+        reply += await _extraction_note(raw_text)
+    _skip_extraction.reset(skip_token)
     quota_warning = router.quota_alert_due()
     if quota_warning:
         reply += f"\n\n⚠️ {quota_warning}."
@@ -234,6 +251,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         log_event("intent_classified", chat_id=chat_id, intent=parsed.intent,
                   confidence=parsed.confidence, normalized=parsed.normalized_text)
         if parsed.confidence < 0.4:
+            _skip_extraction.set(True)  # a message we couldn't parse can't state reliable facts
             return "I'm not confident I understood that — could you rephrase?"
 
         if parsed.intent == "reminders.create":
@@ -310,11 +328,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         # tier (frontier, or if this ever points at one again) spends
         # hidden tokens before the visible JSON, and a 200-token cap
         # truncated the output mid-string live (2026-08-25).
-        extracted = router.call(
-            prompt=text,
-            system=_EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()),
-            tier="cheap",
-        )
+        extracted = _structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
             existing = scheduler.find_duplicate(chat_id, data["text"], data["when_iso"])
@@ -391,11 +405,7 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _list_calendar(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
-        window = router.call(
-            prompt=args["text"],
-            system=_EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()),
-            tier="cheap",
-        )
+        window = _structured_call(args["text"], _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(window.text))
             start, end = data["start_iso"], data["end_iso"]
@@ -427,9 +437,7 @@ async def _create_event(chat_id: int, text: str) -> str:
     # into the stashed SkillCall args — so what the user confirms is
     # byte-identical to what runs. Re-extracting on "yes" could produce a
     # different time than the one shown (model nondeterminism).
-    extracted = router.call(
-        prompt=text, system=_EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()), tier="cheap"
-    )
+    extracted = _structured_call(text, _EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()))
     def clean_iso(value: str) -> str:
         # _parse_when gives the same protections events as reminders get
         # (naive -> local tz, model's spurious Z -> local wall time), and
@@ -452,6 +460,16 @@ async def _create_event(chat_id: int, text: str) -> str:
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         log_event("event_extraction_failed", text=text, raw=extracted.text, error=str(exc))
         return "I couldn't work out the event details — try e.g. \"add a meeting with Suman tomorrow 5pm to my calendar\"."
+
+    # A fabricated or mistyped PAST event dies before the confirm ask —
+    # walkthrough v3 (degraded mode): "book a flight to delhi" misrouted
+    # into an ask for "Delhi Trip, Jan 2024".
+    from datetime import timedelta as _td
+    if scheduler._parse_when(args["start"]) < local_now() - _td(minutes=5):
+        return (
+            f"That start time ({humanize(args['start'])}) is in the past — "
+            "tell me a future time for the event."
+        )
 
     async def handler(handler_args: dict) -> str:
         try:

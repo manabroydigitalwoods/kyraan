@@ -73,8 +73,17 @@ async def propose_from_message(raw_text: str) -> list[str]:
             log_event("extraction_malformed", raw=response.text)
             return []
 
+        message_words = {w.strip(".,!?'\"").lower() for w in args["text"].split() if len(w) > 3}
         queued = []
         for fact in facts[:_MAX_FACTS_PER_MESSAGE]:
+            # Anti-fabrication: a real extraction reuses the message's own
+            # words. Seen live (degraded mode): "make it 4 lines" produced
+            # "Name is Anupam" and two more invented facts. A fact sharing
+            # zero content words with the message is hallucination.
+            fact_words = {w.strip(".,!?'\"").lower() for w in str(fact.get("content", "")).split() if len(w) > 3}
+            if message_words and not (fact_words & message_words):
+                log_event("extraction_fact_fabricated", fact=fact, source=args["text"])
+                continue
             try:
                 store.propose_fact(fact["path"], fact["content"], source=args["text"])
             except (KeyError, TypeError, ValueError) as exc:

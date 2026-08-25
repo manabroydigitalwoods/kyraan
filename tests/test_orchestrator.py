@@ -872,3 +872,56 @@ async def test_fresh_confirmation_still_works_within_ttl(monkeypatch):
     await orchestrator.handle_message(chat_id=0, raw_text="add test tomorrow 3pm to calendar")
     result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert "Event created" in result
+
+
+async def test_low_confidence_messages_skip_extraction(monkeypatch):
+    def unsure(raw_text, tier="cheap", history=""):
+        return NormalizedIntent(intent="unknown", confidence=0.1, normalized_text=raw_text)
+
+    monkeypatch.setattr(orchestrator, "normalize", unsure)
+    calls = []
+
+    async def counting(raw_text):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", counting)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="asdkjh qwe zzz ppqq")
+    assert "rephrase" in result and calls == []
+
+
+async def test_structured_extraction_falls_back_to_cheap(monkeypatch, isolated_store):
+    """Reminder/event/window extraction goes frontier-first for exactness,
+    local when the cloud tier is exhausted (seen live: 'in 45mins'
+    extracted as a PAST time by the local model — frontier is the fix
+    whenever it's available)."""
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to test in 45 minutes")
+    tiers = []
+
+    def fake_call(prompt, system="", tier="cheap", **kwargs):
+        tiers.append(tier)
+        if tier == "frontier":
+            raise orchestrator.router.ModelProviderError("429")
+        return _FakeRouted(text='{"text": "test", "when_iso": "2099-01-01T10:00:00+00:00"}')
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="remind me to test in 45 minutes")
+    assert "Reminder set" in result
+    assert tiers == ["frontier", "cheap"]
+
+
+async def test_past_event_start_is_refused_before_the_ask(monkeypatch, isolated_store):
+    """Walkthrough v3: 'book a flight to delhi' misrouted into a confirm
+    ask for 'Delhi Trip, Jan 2024' — a past start dies before any ask."""
+    _mock_normalize(monkeypatch, "calendar.create", "add delhi trip to my calendar")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"title": "Delhi Trip", "start_iso": "2024-01-22T12:00:00+00:00", "end_iso": "2024-01-29T13:00:00+00:00", "location": null}'
+        ),
+    )
+    result = await orchestrator.handle_message(chat_id=0, raw_text="add delhi trip to my calendar")
+    assert "in the past" in result
+    assert "reply \"yes\"" not in result  # no confirm ask was created
+    assert orchestrator._pending_confirmations == {}
