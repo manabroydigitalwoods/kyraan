@@ -17,8 +17,12 @@ KNOWN_INTENTS = [
 
 _SYSTEM_PROMPT = f"""You normalize a short user message into a structured intent.
 Valid intents: {", ".join(KNOWN_INTENTS)}.
-- reminders.create: setting/adding a new reminder. E.g. "remind me to call mom",
-  "set a reminder for 5pm".
+- reminders.create: setting/adding a new reminder — the user wants to be
+  NOTIFIED at some future moment. E.g. "remind me to call mom", "set a
+  reminder for 5pm". NOT the same as asking to remember a fact: "remember
+  that <fact>" / "note that <fact>" is storing information, not scheduling a
+  notification — that's qa.answer, even when the fact mentions a time. E.g.
+  "remember that my son's school starts at 8am" -> qa.answer.
 - reminders.list: asking whether/what reminders exist — even phrased as a yes/no
   question, this is still reminders.list, not qa.answer. E.g. "what reminders do
   I have", "do I have any reminders?", "any reminders?", "do I have a reminder
