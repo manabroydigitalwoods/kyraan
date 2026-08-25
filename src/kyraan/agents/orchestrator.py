@@ -24,9 +24,10 @@ that full day; "this week" runs to Sunday night. Respond with ONLY JSON:
 
 _EXTRACT_EVENT_SYSTEM = """Extract a calendar event from the user's message.
 The current date/time is {now} (includes a UTC offset). Use a stated clock
-time EXACTLY — "5pm" means 17:00:00, never the current minutes/seconds
-carried over. If no end time is given, make the event 1 hour long. Respond
-with ONLY JSON:
+time EXACTLY — "5pm" means 17:00:00, never the current minutes/seconds or
+microseconds carried over. If no end time is given, make the event 1 hour
+long. location is JSON null when no place was mentioned — never the string
+"null". Respond with ONLY JSON:
 {{"title": "<short event title>", "start_iso": "<ISO 8601, same UTC offset as above>", "end_iso": "<ISO 8601, same offset>", "location": "<place or null>"}}"""
 
 _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
@@ -375,12 +376,25 @@ async def _create_event(chat_id: int, text: str) -> str:
     extracted = router.call(
         prompt=text, system=_EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()), tier="cheap"
     )
+    def clean_iso(value: str) -> str:
+        # _parse_when gives the same protections events as reminders get
+        # (naive -> local tz, model's spurious Z -> local wall time), and
+        # microsecond junk from the model (seen live: 15:00:00.000123) is
+        # noise, never intent.
+        return scheduler._parse_when(str(value)).replace(microsecond=0).isoformat()
+
     try:
         data = json.loads(router.strip_code_fence(extracted.text))
-        args = {"title": str(data["title"]), "start": str(data["start_iso"]), "end": str(data["end_iso"])}
-        if data.get("location"):
-            args["location"] = str(data["location"])
-        scheduler._parse_when(args["start"]), scheduler._parse_when(args["end"])  # validate before gating
+        args = {
+            "title": str(data["title"]),
+            "start": clean_iso(data["start_iso"]),
+            "end": clean_iso(data["end_iso"]),
+        }
+        location = data.get("location")
+        # Models sometimes emit the STRING "null" instead of JSON null —
+        # seen live as an event 'at null'.
+        if location and str(location).strip().lower() not in ("null", "none"):
+            args["location"] = str(location)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         log_event("event_extraction_failed", text=text, raw=extracted.text, error=str(exc))
         return "I couldn't work out the event details — try e.g. \"add a meeting with Suman tomorrow 5pm to my calendar\"."

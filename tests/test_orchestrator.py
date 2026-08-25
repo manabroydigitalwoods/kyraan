@@ -559,3 +559,32 @@ async def test_calendar_create_no_cancels_without_writing(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="no")
     assert "cancelled" in result.lower()
     assert dispatched == []
+
+
+async def test_event_extraction_junk_is_cleaned_before_the_ask(monkeypatch):
+    """Seen live in the first real confirmation ask: microsecond noise
+    (15:00:00.000123) and the string "null" as a location ('at null').
+    Both must be scrubbed before the user sees or confirms anything."""
+    from kyraan.tools import registry as reg
+
+    _mock_normalize(monkeypatch, "calendar.create", "add test event tomorrow 3pm to my calendar")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"title": "Test Event", "start_iso": "2099-01-02T15:00:00.000123+05:30", "end_iso": "2099-01-02T16:00:00.000124+05:30", "location": "null"}'
+        ),
+    )
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append(args)
+        return {"id": "ev1", "link": None, "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="add test event tomorrow 3pm to my calendar")
+    assert ".000123" not in ask and "at null" not in ask
+    assert "2099-01-02T15:00:00+05:30" in ask
+
+    await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert dispatched == [{"title": "Test Event", "start": "2099-01-02T15:00:00+05:30", "end": "2099-01-02T16:00:00+05:30"}]
