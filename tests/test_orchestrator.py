@@ -90,3 +90,22 @@ async def test_well_formed_reminder_still_works(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="remind me to test")
     assert "Reminder set" in result
     assert "couldn't work out a time" not in result.lower()
+
+
+async def test_qa_system_prompt_forbids_claiming_to_save_memories(monkeypatch):
+    """Found live (2026-08-25): "remember that my wife's name is Mira" got
+    "Got it—I've noted that" back, while nothing was written anywhere —
+    extraction isn't wired up yet. Until it is, the qa.answer system prompt
+    must tell the model it has no memory, so it can't falsely claim a fact
+    was saved."""
+    _mock_normalize(monkeypatch, "qa.answer")
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["system"] = system
+        return _FakeRouted(text="I can't store memories yet.")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="remember that my wife's name is Mira")
+    assert "cannot save facts" in captured["system"]

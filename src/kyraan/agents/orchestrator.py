@@ -29,7 +29,12 @@ reminder's state, say you're not sure and suggest checking, never invent
 specifics like time remaining. Kyraan genuinely can set reminders,
 including short-delay ones — never claim that capability doesn't exist; if
 a message looks like a reminder request that landed here by mistake, ask
-the user to rephrase it as a clear reminder instead of denying you can do it."""
+the user to rephrase it as a clear reminder instead of denying you can do it.
+You cannot save facts or remember anything across messages yet — each
+message reaches you with no memory of earlier ones. If asked to remember,
+note, or save something, say plainly that you can't store memories yet —
+never reply "noted" or "got it, I'll remember" or otherwise imply the
+information was saved, because it wasn't."""
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
