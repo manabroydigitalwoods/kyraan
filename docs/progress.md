@@ -43,9 +43,15 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
   **frontier → Groq (`openai/gpt-oss-120b`)**
 - Retry-with-backoff on transient errors (rate limits, 5xx) — every cloud
   provider tested has hit these live
-- Captures latency, token usage, and reasoning/"thinking" text per call
-  (`RoutedResponse`) — provider SDKs disagree on field names, so any of
-  these can come back `None` rather than raising
+- Captures latency, token usage, reasoning/"thinking" text, and cost
+  (`RoutedResponse`) per call — provider SDKs disagree on field names, so
+  any of these can come back `None`/`0` rather than raising
+- Cost tracking: a tier can declare `pricing` (USD per 1M tokens, tied to
+  the specific model); `router.session_cost_usd` accumulates spend,
+  checked against `cost_monitor.daily_budget_usd` in the TUI sidebar
+- Runtime tier overrides (`config.set_tier_override()`) — repoint a tier at
+  a different provider/model for the rest of the process without editing
+  `permissions.yaml` or restarting (exposed via the TUI's `/tier` command)
 - `call_with_escalation()`: cheap tier first, frontier on failure
 
 **Intent Normalization** (`src/kyraan/intent/`)
@@ -76,15 +82,20 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `scripts/chat.py` — a local CLI exercising the real orchestrator without
   needing Telegram credentials; colored output, slash commands
   (`/help /reminders /kill /unkill /clear /quit`)
-- `scripts/tui.py` — a full-screen Textual dashboard: session stats,
-  per-turn provider/model/latency/token display, a thinking spinner, and
-  collapsible "Thought" sections showing a reasoning model's hidden
-  chain-of-thought (matching OpenCode's UI pattern)
+- `scripts/tui.py` — a full-screen Textual dashboard: session stats
+  (including cost vs. daily budget), per-turn provider/model/latency/token
+  display, an inline thinking indicator, collapsible "Thought" sections
+  for a reasoning model's hidden chain-of-thought, real Markdown rendering
+  of replies, `/retry` (resend last message), `/tier` (runtime
+  provider/model override), and `/export` (save the transcript)
+- `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
+  a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 21 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 33 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
-dispatch, intent normalization against malformed output, and headless
-Textual Pilot tests for the TUI.
+dispatch, intent normalization against malformed output, cost-calculation
+math, and headless Textual Pilot tests for the TUI (including retry, tier
+override, and transcript export).
 
 ## Key decisions made
 
@@ -93,9 +104,10 @@ Textual Pilot tests for the TUI.
   live-testing ruled out OpenCode Zen (account-wide rate limit trips fast)
   and Gemini's free tier (hard 20 requests/day cap on `gemini-3.7-flash`)
   as unworkable for real iteration
-- Real API keys for Anthropic *(not yet obtained)*, Gemini, OpenAI,
-  OpenCode, Groq, and OpenRouter are in the local `.env` (gitignored,
-  never committed) — swapping a tier's provider is a one-line config edit
+- Real API keys for Gemini, OpenAI, OpenCode, Groq, and OpenRouter are in
+  the local `.env` (gitignored, never committed) — Anthropic's is not yet
+  obtained. Swapping a tier's provider is a one-line config edit, or a
+  `/tier` command in the TUI for a temporary session-only switch
 
 ## Known limitations / not yet done
 
@@ -105,9 +117,10 @@ Textual Pilot tests for the TUI.
 - `cancel_reminder`'s cancel path is best-effort in both dev harnesses (an
   already-scheduled asyncio task still fires even if the record is
   cancelled) — fine for dev, not for production
-- No cost tracking against `cost_monitor.daily_budget_usd` in
-  `permissions.yaml` yet — token usage is captured per-call but not summed
-  against a budget or alerted on
+- Cost tracking (`router.session_cost_usd` vs. `cost_monitor.
+  daily_budget_usd`) is process-lifetime only — not persisted across
+  restarts, no alerting/hard-stop at the budget yet, just a visible number
+  in the TUI sidebar
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
