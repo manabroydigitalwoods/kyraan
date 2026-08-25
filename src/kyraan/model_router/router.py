@@ -321,6 +321,51 @@ def _call_openai_compatible(
     return _RawResult(text=text, usage=usage, reasoning=reasoning)
 
 
+def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str,
+                        max_tokens: int, force_json: bool = False) -> _RawResult:
+    """Ollama's native /api/chat — needed because its OpenAI-compatible
+    endpoint IGNORES the `think` parameter (verified live on 0.30.10),
+    and a thinking model like Qwen3 then burns 8-12s of hidden reasoning
+    per call (or eats the whole token budget and returns empty text).
+    Natively, think:false answered the same probe in 0.5s vs 8.5s."""
+    import json as _json
+    import urllib.request
+
+    base = (provider_cfg.get("base_url")
+            or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"))
+    base = base.removesuffix("/v1")
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": messages,
+        "options": {"num_predict": max_tokens},
+    }
+    if "think" in provider_cfg:
+        payload["think"] = provider_cfg["think"]
+    if force_json:
+        payload["format"] = "json"
+    request = urllib.request.Request(
+        base + "/api/chat", _json.dumps(payload).encode(),
+        {"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=120) as response:
+        data = _json.load(response)
+    message = data.get("message", {})
+    usage = Usage(
+        input_tokens=data.get("prompt_eval_count"),
+        output_tokens=data.get("eval_count"),
+    )
+    return _RawResult(
+        text=message.get("content", ""),
+        usage=usage,
+        reasoning=message.get("thinking") or None,
+    )
+
+
 def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int,
               force_json: bool = False) -> _RawResult:
     provider_cfg = _provider_cfg(provider)
@@ -329,6 +374,8 @@ def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: i
         return _call_anthropic(provider_cfg, model, prompt, system, max_tokens)
     if kind == "gemini":
         return _call_gemini(provider_cfg, model, prompt, system, max_tokens)
+    if kind == "ollama_native":
+        return _call_ollama_native(provider_cfg, model, prompt, system, max_tokens, force_json)
     if kind == "openai_compatible":
         return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens, force_json)
     raise ValueError(f"Unknown provider kind {kind!r} for provider {provider!r}")

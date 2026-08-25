@@ -15,9 +15,27 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from openai import OpenAI
+import urllib.request
 
 from kyraan.intent.normalize import _CONTEXT_SECTION, _SYSTEM_PROMPT
+
+
+def ollama_chat(model: str, system: str, prompt: str, max_tokens: int = 1024) -> str:
+    """Native /api/chat — the OpenAI-compat endpoint ignores think:false
+    and Qwen3 then burns 8-12s of hidden reasoning per call."""
+    payload = {
+        "model": model, "stream": False, "format": "json",
+        "messages": [{"role": "system", "content": system},
+                     {"role": "user", "content": prompt}],
+        "options": {"num_predict": max_tokens},
+    }
+    if "qwen" in model:
+        payload["think"] = False
+    req = urllib.request.Request("http://localhost:11434/api/chat",
+                                 json.dumps(payload).encode(),
+                                 {"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return json.load(resp)["message"].get("content", "")
 
 _HELP_HISTORY = (
     "user: I need help\n"
@@ -59,21 +77,13 @@ CASES = [
 
 
 def run(model: str) -> None:
-    client = OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
     right = 0
     bad_json = 0
     started = time.monotonic()
     rows = []
     for text, history, accepted in CASES:
         system = _SYSTEM_PROMPT + (_CONTEXT_SECTION.format(history=history) if history else "")
-        response = client.chat.completions.create(
-            model=model,
-            messages=[{"role": "system", "content": system},
-                      {"role": "user", "content": text}],
-            max_tokens=1024,
-            response_format={"type": "json_object"},
-        )
-        raw = response.choices[0].message.content or ""
+        raw = ollama_chat(model, system, text)
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.S).strip()
         try:
             intent = json.loads(raw).get("intent")

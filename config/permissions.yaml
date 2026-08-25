@@ -52,8 +52,13 @@ providers:
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
   ollama:
-    kind: openai_compatible
-    base_url: http://localhost:11434/v1   # overridden by OLLAMA_BASE_URL env if set
+    kind: ollama_native   # native /api/chat — the OpenAI-compat endpoint
+                          # IGNORES think:false (verified on 0.30.10) and
+                          # Qwen3 then burns 8-12s of hidden reasoning per
+                          # call. base_url via OLLAMA_BASE_URL env if set.
+    think: false          # qwen3-only knob: remove this line if the cheap
+                          # model ever goes back to a non-thinking model
+                          # (llama rejects the parameter outright)
 
 model_tiers:
   # Each tier just names a provider (must exist above) + that provider's
@@ -83,7 +88,12 @@ model_tiers:
   # reliable of the two there (see orchestrator.py).
   cheap:
     provider: ollama
-    model: llama3.1:8b
+    model: qwen3:8b       # benchmarked 2026-08-26 vs llama3.1:8b on the
+                          # production prompts + every live failure:
+                          # classification 18/18 vs 17/18, burst planning
+                          # kept all sub-asks where llama dropped them
+                          # (planned ['hi!'] for the 5-msg burst), equal
+                          # extraction, same 1.8s/case with think off.
   frontier:
     provider: groq            # back to free 2026-08-26 (owner's call: the
     model: openai/gpt-oss-120b  # paid OpenAI seat worked beautifully but
