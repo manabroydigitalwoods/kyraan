@@ -314,12 +314,12 @@ async def test_history_is_per_chat_and_rolls_over(monkeypatch):
     _mock_normalize(monkeypatch, "qa.answer")
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="ok then"))
 
-    for i in range(15):  # 15 exchanges = 30 entries > the 20-entry window
+    for i in range(25):  # 25 exchanges = 50 entries > the 40-entry window
         await orchestrator.handle_message(chat_id=1, raw_text=f"message number {i}")
 
     block = orchestrator._history_block(1)
-    assert "message number 0" not in block  # rolled out
-    assert "message number 14" in block
+    assert "message number 0 " not in block + " "  # rolled out
+    assert "message number 24" in block
     assert orchestrator._history_block(2) == "(no conversation yet)"  # other chats unaffected
 
 
@@ -789,3 +789,9 @@ async def test_qa_prompt_carries_the_generated_capability_brief(monkeypatch):
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
     await orchestrator.handle_message(chat_id=0, raw_text="can you book a cab?")
     assert "CAPABILITY_SENTINEL" in captured["system"]
+
+
+async def test_history_render_clips_long_entries(monkeypatch):
+    orchestrator._history[9].append(("user", "paste " * 500))
+    block = orchestrator._history_block(9)
+    assert len(block) < 700 and block.endswith("…")

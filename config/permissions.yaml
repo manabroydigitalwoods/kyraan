@@ -96,7 +96,11 @@ skills:
     model_tier: cheap
   qa.answer:
     permission: auto
-    model_tier: cheap
+    model_tier: frontier  # moved 2026-08-25 evening: the local 8B collapsed
+                          # on multi-turn continuations and contradicted the
+                          # capability brief (claimed internet access) —
+                          # instruction-following over a large system prompt
+                          # needs the bigger model; Groq remains free
   memory.propose:
     permission: auto      # only writes to memory/pending_review/ — the human
                           # review step IS the gate, so proposing is safe to

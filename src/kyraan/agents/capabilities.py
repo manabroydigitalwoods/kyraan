@@ -53,6 +53,21 @@ def capability_brief() -> str:
         not_connected.append("Smart home (needs the Home Assistant URL + token)")
 
     lines.append("- A morning brief arrives daily at 07:30 (calendar, reminders, home status).")
+    lines.append("")
+    lines.append(
+        "YOU HAVE NO INTERNET ACCESS: no web search, no browsing, no news, no "
+        "live data of any kind — your tools reach only the calendar, email "
+        "metadata, and home devices listed above, and your general knowledge "
+        "ends at your training cutoff. Never claim to look anything up online."
+    )
+    lines.append(
+        "IF ASKED ABOUT DATA OR PRIVACY, answer with exactly these truths: "
+        "everything runs on the owner's own computer; facts you're told are "
+        "stored as local files only after the owner reviews them; conversation "
+        "text is processed by the configured AI models (a local one and Groq's "
+        "cloud API) to generate replies; nothing is ever used to train models; "
+        "email bodies are never read; nothing is shared with anyone else."
+    )
 
     if not_connected:
         lines.append("")

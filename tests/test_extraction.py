@@ -114,3 +114,13 @@ async def test_questions_never_reach_the_extraction_model(monkeypatch, isolated_
     monkeypatch.setattr(router, "call", explode)
     assert await extraction.propose_from_message("who is ruma?") == []
     assert list(isolated_memory.glob("*")) == []
+
+
+async def test_long_pastes_never_reach_extraction(monkeypatch, isolated_memory):
+    """Seen live: a pasted Wikipedia biography produced two junk proposals,
+    one targeting a nonsense path. Articles are not personal statements."""
+    def explode(**kwargs):
+        raise AssertionError("model must not be called for a long paste")
+
+    monkeypatch.setattr(router, "call", explode)
+    assert await extraction.propose_from_message("Mamata Banerjee " * 200) == []

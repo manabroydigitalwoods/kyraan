@@ -18,7 +18,10 @@ from kyraan.model_router import router
 _EXTRACT_FACTS_SYSTEM = """You extract durable personal facts from one user message.
 The current date/time is {now}.
 Extract ONLY what the user explicitly states about themselves, their family,
-their work, their routines, or their preferences. Never infer. Never extract
+their work, their routines, or their preferences — people the user
+PERSONALLY knows. Never extract facts about public figures, politicians,
+celebrities, or general/encyclopedic knowledge: those are not personal
+memory and must return an empty list. Never infer. Never extract
 from questions, requests, or commands — "who is Mira?" or "what time does
 school start?" state nothing and must return an empty list (a reminder
 request is not a fact either).
@@ -47,6 +50,12 @@ async def propose_from_message(raw_text: str) -> list[str]:
     # live despite the instruction. Conservative by design: skipping a rare
     # fact-inside-a-question costs little; polluting review costs trust.
     if raw_text.rstrip().endswith("?"):
+        return []
+    # A long paste is an article, not a personal statement — seen live: a
+    # Wikipedia biography produced two junk proposals, one to a nonsense
+    # path. Personal facts arrive in sentences, not essays.
+    if len(raw_text) > 1200:
+        log_event("extraction_skipped_long", chars=len(raw_text))
         return []
 
     async def handler(args: dict) -> list[str]:

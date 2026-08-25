@@ -91,7 +91,8 @@ _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 # memory. In-memory on purpose (like _pending_confirmations) — a restart
 # forgets the conversation, which is honest, and durable facts are the
 # memory tree's job, not this window's.
-_HISTORY_MAX_ENTRIES = 20  # 10 user/assistant exchanges
+_HISTORY_MAX_ENTRIES = 40  # 20 exchanges — 20 rolled out mid-session live
+                           # ("you never shared Mamata data" after 17 turns)
 _history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
 
 # Below this length a message can't state a durable fact ("yes", "hi",
@@ -113,8 +114,15 @@ def record_proactive(chat_id: int, text: str) -> None:
     log_chat(chat_id, "proactive", text)
 
 
-def _history_block(chat_id: int) -> str:
-    return "\n".join(f"{role}: {text}" for role, text in _history[chat_id]) or "(no conversation yet)"
+def _history_block(chat_id: int, clip: int = 600) -> str:
+    """Per-entry clip: one pasted article must not drown the prompt (and
+    with Ollama's default 4K context it literally truncated the system
+    instructions — the likely cause of a live garbled reply)."""
+    rendered = "\n".join(
+        f"{role}: {text[:clip] + '…' if len(text) > clip else text}"
+        for role, text in _history[chat_id]
+    )
+    return rendered or "(no conversation yet)"
 
 
 def _classifier_context(chat_id: int, entries: int = 6, clip: int = 200) -> str:
@@ -596,6 +604,14 @@ async def _answer(chat_id: int, text: str) -> str:
         # 3/3 tries (14:40, 17:30, 15:50 — actual was 13:50); llama3.1:8b
         # was exactly right in 3/3, matching frontier. See
         # config/permissions.yaml's model_tiers comment.
+        # Tier comes from config — moved to frontier 2026-08-25 evening:
+        # chat.jsonl showed the local 8B collapsing on multi-turn
+        # continuations ("make 2 paragraphs" -> garbled time-talk) and
+        # contradicting the capability brief ("Yes, I have internet
+        # access") — instruction-following over a now-large system prompt
+        # is exactly where it's weakest (Ollama's default context also
+        # truncates big prompts silently).
+        tier = kernel.config.skill_config("qa.answer")["model_tier"]
         response = router.call(
             prompt=args["text"],
             system=_ANSWER_SYSTEM.format(
@@ -604,7 +620,7 @@ async def _answer(chat_id: int, text: str) -> str:
                 facts=memory_store.load_all_facts() or "(no facts stored yet)",
                 history=_history_block(chat_id),
             ),
-            tier="cheap",
+            tier=tier,
         )
         return response.text
 

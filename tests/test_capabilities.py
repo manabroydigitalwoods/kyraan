@@ -35,3 +35,10 @@ def test_reminders_and_memory_are_always_live(monkeypatch):
     brief = capabilities.capability_brief()
     assert "Reminders: create, list, cancel" in brief
     assert "Remember stated personal facts" in brief
+
+
+def test_brief_denies_internet_and_answers_privacy():
+    brief = capabilities.capability_brief()
+    assert "NO INTERNET ACCESS" in brief
+    assert "Never claim to look anything up online" in brief
+    assert "nothing is ever used to train models" in brief
