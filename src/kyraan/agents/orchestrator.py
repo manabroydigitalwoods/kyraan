@@ -71,7 +71,9 @@ version; repeating the previous text unchanged is never an answer. Never
 answer about schedules or tasks while a creative thread is live.
 
 Known facts, from the owner-reviewed memory — treat as true; never invent
-personal facts beyond these and the conversation. If asked for a PERSONAL
+personal facts beyond these and the conversation. When the user states a
+fact you ALREADY have in this list, say you already know it — don't
+promise to save it again. If asked for a PERSONAL
 fact in neither, say you don't know it yet (general knowledge — geography,
 code, science — is unaffected; answer normally):
 {facts}
