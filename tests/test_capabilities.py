@@ -42,3 +42,19 @@ def test_brief_denies_internet_and_answers_privacy():
     assert "NO INTERNET ACCESS" in brief
     assert "Never claim to look anything up online" in brief
     assert "nothing is ever used to train models" in brief
+
+
+def test_privacy_answer_tracks_tier_providers(monkeypatch):
+    """The privacy truths must follow the ACTUAL model config — after the
+    local-only switch, claiming Groq processes conversations would be a
+    false statement in the other direction."""
+    from kyraan.control_plane import config
+
+    base = config.load()
+    monkeypatch.setattr(capabilities.config, "load", lambda: {
+        **base, "model_tiers": {"cheap": {"provider": "ollama"}, "frontier": {"provider": "ollama"}}})
+    assert "no conversation ever leaves the machine" in capabilities.capability_brief()
+
+    monkeypatch.setattr(capabilities.config, "load", lambda: {
+        **base, "model_tiers": {"cheap": {"provider": "ollama"}, "frontier": {"provider": "groq"}}})
+    assert "groq cloud API" in capabilities.capability_brief()

@@ -1269,6 +1269,35 @@ async def test_home_query_without_any_home_word_is_demoted(monkeypatch):
     assert result == "Let's talk about that."
 
 
+async def test_verbatim_repetition_retries_then_admits(monkeypatch):
+    """Seen live: 'I can't book cabs yet.' sent to three different
+    questions. A reply identical to a recent assistant reply gets one
+    retry naming the problem; a stuck model admits it instead of looping."""
+    _mock_normalize(monkeypatch, "qa.answer", "on what")
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+
+    # Retry produces something fresh -> the fresh reply wins.
+    orchestrator._history[51].clear()
+    orchestrator._history[51].append(("assistant", "I can't book cabs yet."))
+    replies = iter([_FakeRouted(text="I can't book cabs yet."),
+                    _FakeRouted(text="Sorry — what would you like help with?")])
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: next(replies))
+    result = await orchestrator.handle_message(chat_id=51, raw_text="on what")
+    assert result.startswith("Sorry — what would you like help with?")
+
+    # Retry repeats too -> honest admission, never the loop.
+    orchestrator._history[52].clear()
+    orchestrator._history[52].append(("assistant", "I can't book cabs yet."))
+    monkeypatch.setattr(orchestrator.router, "call",
+                        lambda **kw: _FakeRouted(text="I can't book cabs yet."))
+    result = await orchestrator.handle_message(chat_id=52, raw_text="on what")
+    assert "repeating myself" in result
+
+
 def test_home_word_guard_still_passes_real_home_questions():
     assert orchestrator._mentions_home("is the AC on?")
     assert orchestrator._mentions_home("how humid is it inside")

@@ -342,7 +342,13 @@ def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str
         "model": model,
         "stream": False,
         "messages": messages,
-        "options": {"num_predict": max_tokens},
+        # num_ctx MUST be set explicitly: Ollama's ~4K default silently
+        # truncates Kyraan's qa prompt (capabilities + facts + 40-entry
+        # history) and the model then answers garbage fragments — seen
+        # live 2026-08-26: 6-token replies parroting a capability-manifest
+        # line ("I can't book cabs yet.") to three different questions.
+        "options": {"num_predict": max_tokens,
+                    "num_ctx": provider_cfg.get("context_length", 16384)},
     }
     if "think" in provider_cfg:
         payload["think"] = provider_cfg["think"]

@@ -976,6 +976,24 @@ async def _answer(chat_id: int, text: str) -> str:
                 "reduced for a few minutes — don't argue or deflect."
             )
             response = router.call(prompt=args["text"], system=system, tier="cheap")
-        return response.text
+            tier = "cheap"
+        reply = response.text
+        recent = [t.strip() for role, t in list(_history[chat_id])[-6:] if role == "assistant"]
+        if reply.strip() and reply.strip() in recent:
+            # A human never sends the same sentence twice in a row —
+            # verbatim repetition is a small-model failure mode (seen
+            # live 2026-08-26: "I can't book cabs yet." to three
+            # different questions). One retry with the problem named;
+            # if it STILL repeats, admit it instead of looping.
+            log_event("qa_repetition_detected", chat_id=chat_id, reply=reply[:80])
+            retry = router.call(prompt=args["text"], system=system + (
+                "\n\nIMPORTANT: your previous draft repeated one of your own "
+                "earlier replies word-for-word. Answer THIS message "
+                "specifically; do not reuse any earlier sentence."), tier=tier)
+            if retry.text.strip() and retry.text.strip() not in recent:
+                return retry.text
+            return ("I'm repeating myself — sorry, I didn't process that "
+                    "properly. Could you say it another way?")
+        return reply
 
     return await _gated(chat_id, SkillCall("qa.answer", {"text": text}), handler)

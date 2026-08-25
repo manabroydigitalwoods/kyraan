@@ -63,12 +63,27 @@ def capability_brief() -> str:
         "metadata, and home devices listed above, and your general knowledge "
         "ends at your training cutoff. Never claim to look anything up online."
     )
+    # The privacy answer must track the ACTUAL tier config — after the
+    # 2026-08-26 switch to local-only qwen3, "Groq's cloud API" would have
+    # been a false claim in the other direction.
+    tiers = config.load().get("model_tiers", {})
+    tier_providers = {t.get("provider") for t in tiers.values()}
+    if tier_providers <= {"ollama"}:
+        model_truth = (
+            "conversation text is processed entirely by a LOCAL AI model on "
+            "this same computer — no conversation ever leaves the machine"
+        )
+    else:
+        cloud = ", ".join(sorted(p for p in tier_providers if p != "ollama"))
+        model_truth = (
+            "conversation text is processed by the configured AI models (a "
+            f"local one and the {cloud} cloud API) to generate replies"
+        )
     lines.append(
         "IF ASKED ABOUT DATA OR PRIVACY, answer with exactly these truths: "
         "everything runs on the owner's own computer; facts you're told are "
-        "stored as local files only after the owner reviews them; conversation "
-        "text is processed by the configured AI models (a local one and Groq's "
-        "cloud API) to generate replies; nothing is ever used to train models; "
+        f"stored as local files only after the owner reviews them; {model_truth}; "
+        "nothing is ever used to train models; "
         "email bodies are never read; nothing is shared with anyone else."
     )
 

@@ -85,3 +85,34 @@ def test_non_rate_errors_do_not_trigger_cooldown(monkeypatch):
     with pytest.raises(router.ModelProviderError):
         router.call(prompt="x", tier="frontier")
     assert router._cooldown_until == {}
+
+
+def test_ollama_native_payload_sets_context_think_and_json(monkeypatch):
+    """The native path exists precisely for think:false and a real context
+    window — Ollama's ~4K default silently truncated the qa prompt and
+    produced garbage loop replies (live 2026-08-26)."""
+    import io
+    import json
+    import urllib.request
+
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        return io.BytesIO(json.dumps({
+            "message": {"content": "{\"ok\": true}", "thinking": ""},
+            "prompt_eval_count": 5, "eval_count": 3,
+        }).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = router._call_ollama_native(
+        {"think": False, "context_length": 16384},
+        "qwen3:8b", "hi", "sys", 512, force_json=True)
+
+    assert captured["url"].endswith("/api/chat")
+    assert captured["payload"]["options"] == {"num_predict": 512, "num_ctx": 16384}
+    assert captured["payload"]["think"] is False
+    assert captured["payload"]["format"] == "json"
+    assert result.text == "{\"ok\": true}"
+    assert result.usage.input_tokens == 5 and result.usage.output_tokens == 3

@@ -53,6 +53,10 @@ providers:
     api_key_env: OPENROUTER_API_KEY
   ollama:
     kind: ollama_native   # native /api/chat — the OpenAI-compat endpoint
+    context_length: 16384 # Ollama's ~4K default silently truncated the qa
+                          # prompt and produced garbage loop replies (live
+                          # 2026-08-26); qwen3 handles 32K, 16K is the
+                          # memory-safe sweet spot on this 18GB Mac
                           # IGNORES think:false (verified on 0.30.10) and
                           # Qwen3 then burns 8-12s of hidden reasoning per
                           # call. base_url via OLLAMA_BASE_URL env if set.
@@ -95,16 +99,17 @@ model_tiers:
                           # (planned ['hi!'] for the 5-msg burst), equal
                           # extraction, same 1.8s/case with think off.
   frontier:
-    provider: groq            # back to free 2026-08-26 (owner's call: the
-    model: openai/gpt-oss-120b  # paid OpenAI seat worked beautifully but
-                              # isn't in budget). The proven-working paid
-                              # alternative, one edit away whenever wanted:
+    provider: ollama          # owner's call 2026-08-26: qwen3:8b EVERYWHERE,
+    model: qwen3:8b           # no cloud at all. Groq's free tier was
+                              # permanently exhausted in practice — every
+                              # message burned three doomed 429 retries
+                              # before falling back anyway, so one local
+                              # brain beats a dead cloud one. Benchmarks:
+                              # 18/18 classification, perfect burst plans.
+                              # Paid alternative when ever wanted:
                               #   provider: openai
-                              #   model: gpt-5.4-mini   # ~$0.50/day here
+                              #   model: gpt-5.4-mini   # ~$0.50/day
                               #   pricing: {input_per_million: 0.75, output_per_million: 4.50}
-                              # (gpt-5-mini is org-verification-gated; the
-                              # openai provider above keeps reasoning_effort
-                              # low so JSON never truncates.)
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.
