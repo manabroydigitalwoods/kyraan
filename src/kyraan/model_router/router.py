@@ -8,6 +8,7 @@ Each tier picks a provider in config/permissions.yaml's `provider` field:
     default (see permissions.yaml)
   - openai: native OpenAI API (OPENAI_API_KEY)
   - ollama: a local Ollama server's OpenAI-compatible endpoint, no key needed
+  - gemini: native Google AI Studio API (GEMINI_API_KEY), e.g. Flash models
 
 Swapping a tier's `provider`/`model` in permissions.yaml is the only change
 needed to move a tier between these — nothing else in the codebase changes.
@@ -26,6 +27,7 @@ _OPENAI_COMPATIBLE = {
 }
 
 _anthropic_client = None
+_gemini_client = None
 _openai_compatible_clients: dict[str, object] = {}
 
 
@@ -36,6 +38,15 @@ def _get_anthropic_client():
 
         _anthropic_client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     return _anthropic_client
+
+
+def _get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None:
+        from google import genai
+
+        _gemini_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    return _gemini_client
 
 
 def _get_openai_compatible_client(provider: str):
@@ -88,9 +99,25 @@ def _call_openai_compatible(provider: str, model: str, prompt: str, system: str,
     return response.choices[0].message.content or ""
 
 
+def _call_gemini(model: str, prompt: str, system: str, max_tokens: int) -> str:
+    from google.genai import types
+
+    response = _get_gemini_client().models.generate_content(
+        model=model,
+        contents=prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=system or None,
+            max_output_tokens=max_tokens,
+        ),
+    )
+    return response.text or ""
+
+
 def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> str:
     if provider == "anthropic":
         return _call_anthropic(model, prompt, system, max_tokens)
+    if provider == "gemini":
+        return _call_gemini(model, prompt, system, max_tokens)
     if provider in _OPENAI_COMPATIBLE:
         return _call_openai_compatible(provider, model, prompt, system, max_tokens)
     raise ValueError(f"Unknown model provider: {provider!r}")

@@ -7,17 +7,18 @@ defaults:
   model_tier: cheap      # cheap | frontier
 
 model_tiers:
-  # provider is one of: anthropic | opencode | openai | ollama
-  # (see src/kyraan/model_router/router.py). Using OpenCode Zen's free tier
-  # as a stand-in for now — swap provider/model per tier as real keys or a
-  # local Ollama model become available; nothing else in the codebase
-  # changes. Full OpenCode catalog: https://opencode.ai/zen/v1/models.
+  # provider is one of: anthropic | opencode | openai | ollama | gemini
+  # (see src/kyraan/model_router/router.py). Using Google AI Studio's free
+  # Gemini Flash tier for now (OpenCode Zen's free models kept hitting an
+  # account-wide rate limit) — swap provider/model per tier as real
+  # Anthropic/OpenAI keys or a local Ollama model become available; nothing
+  # else in the codebase changes.
   cheap:
-    provider: opencode
-    model: big-pickle
+    provider: gemini
+    model: gemini-flash-latest
   frontier:
-    provider: opencode
-    model: nemotron-3-ultra-free
+    provider: gemini
+    model: gemini-flash-latest
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.
