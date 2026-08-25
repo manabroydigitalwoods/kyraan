@@ -179,3 +179,18 @@ async def test_legacy_send_fn_returning_none_still_logs_sent(isolated_store):
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=legacy_send_fn)
     await scheduler.fire(r.id, 0, r.text)
     assert '"reminder_sent"' in logging_setup.EVENT_LOG.read_text()
+
+
+def test_init_only_chat_never_schedules_other_chats_reminders(isolated_store):
+    """Audit finding: a dev harness scheduled the OWNER's pending reminders
+    with its console send_fn — firing first, marking sent, and suppressing
+    the real Telegram delivery. only_chat fences harnesses to their own."""
+    store.add(chat_id=0, text="dev thing", when_iso="2099-01-01T10:00:00+00:00")
+    store.add(chat_id=42, text="owner's real reminder", when_iso="2099-01-01T11:00:00+00:00")
+
+    scheduled = []
+    scheduler.init(
+        schedule_fn=lambda name, run_at, payload: scheduled.append(payload["text"]),
+        cancel_fn=lambda *a, **k: None, send_fn=None, only_chat=0,
+    )
+    assert scheduled == ["dev thing"]

@@ -126,7 +126,7 @@ class KyraanTUI(App):
 
     async def on_mount(self) -> None:
         self.app_loop = asyncio.get_running_loop()
-        scheduler.init(schedule_fn=self._schedule_fn, cancel_fn=self._cancel_fn, send_fn=self._send_fn)
+        scheduler.init(schedule_fn=self._schedule_fn, cancel_fn=self._cancel_fn, send_fn=self._send_fn, only_chat=CHAT_ID)
         self.title = "Kyraan"
         self.sub_title = f"local TUI — real model calls — {_build_stamp()}"
         await self._log("[bold cyan]Kyraan[/bold cyan] — type a message, or /help for commands.")

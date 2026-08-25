@@ -105,7 +105,7 @@ def handle_slash(cmd: str) -> bool:
 
 async def main() -> None:
     load_dotenv()
-    scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)
+    scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn, only_chat=CHAT_ID)
     console.print(f"[bold cyan]Kyraan[/bold cyan] local CLI — real model calls. [dim]{_build_stamp()}[/dim]")
     console.print("Type [bold]/help[/bold] for commands, Ctrl-D to quit.\n")
 

@@ -23,10 +23,16 @@ _cancel_fn: CancelFn | None = None
 _send_fn: SendFn | None = None
 
 
-def init(schedule_fn: ScheduleFn, cancel_fn: CancelFn, send_fn: SendFn) -> None:
+def init(schedule_fn: ScheduleFn, cancel_fn: CancelFn, send_fn: SendFn,
+         only_chat: int | None = None) -> None:
+    """only_chat: dev harnesses pass their own chat id so they never
+    schedule (and steal) the owner's real reminders — audit finding: a
+    long-running TUI would have fired the owner's 9 PM reminder to its
+    console, marked it sent, and the idempotency guard would then have
+    suppressed the real Telegram delivery."""
     global _schedule_fn, _cancel_fn, _send_fn
     _schedule_fn, _cancel_fn, _send_fn = schedule_fn, cancel_fn, send_fn
-    for reminder in store.list_pending():
+    for reminder in store.list_pending(only_chat):
         try:
             _schedule(reminder)
         except ValueError as exc:
