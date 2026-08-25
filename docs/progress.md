@@ -245,9 +245,11 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
-- Calendar writes (calendar.create) are built and confirm-gated per event
-  — pulled ahead of the soak by owner decision; awaiting the one-time
-  OAuth setup (scripts/setup_google_oauth.py) before first live write
+- Calendar writes are LIVE (2026-08-25 16:33 IST): OAuth ceremony done,
+  first real event created over Telegram through the full confirm gate —
+  ask named the exact event, "yes" wrote it, audit log clean at both the
+  skill and tool level. Tool #1 (Google Calendar) is complete: reads +
+  confirm-gated writes, both live-proven
 - `calendar.list` is untested against a real Google ICS feed until
   `GOOGLE_CALENDAR_ICS_URL` is set in `.env` (owner setup, see design doc)
 - No RAG, relationship graph, agent router, reflection loop, or curiosity
