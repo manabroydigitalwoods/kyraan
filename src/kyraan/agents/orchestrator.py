@@ -174,6 +174,43 @@ _REMIND_WORDS = (
     "forget", "ping me", "timer", "tell me", "let me know",
 )
 
+def _cloud_tier_in_use() -> bool:
+    tiers = kernel.config.load().get("model_tiers", {})
+    return any(t.get("provider") != "ollama" for t in tiers.values())
+
+
+# "are these latest emails", "is that all?" — a question ABOUT the reply
+# Kyraan just sent. Re-running the tool and reprinting the same text (seen
+# live 2026-08-26, twice in one session) reads as a broken record; a human
+# answers the question. Shape: interrogative opener + a demonstrative
+# pointing back at the previous reply.
+_META_STARTERS = ("are", "is", "was", "were", "do", "does", "did", "really", "so")
+_META_DEMONSTRATIVES = {"these", "this", "that", "those", "it", "they", "them"}
+
+
+def _is_meta_question(text: str) -> bool:
+    words = [w.strip(".,!?\"'").lower() for w in text.split()]
+    words = [w for w in words if w]
+    return bool(words) and words[0] in _META_STARTERS and bool(set(words) & _META_DEMONSTRATIVES)
+
+
+# The exact last reply each chat received (unredacted — _history may hold
+# a redacted placeholder when a cloud tier is active).
+_last_sent_reply: dict = {}
+
+
+async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) -> str:
+    """Deterministic backstop behind the classifier: a read-intent reply
+    identical to the previous reply, triggered by a meta-question, means
+    the classifier re-ran a tool the user was asking ABOUT — answer the
+    question instead."""
+    last = _last_sent_reply.get(chat_id, "")
+    if reply.strip() and reply.strip() == last.strip() and _is_meta_question(raw_text):
+        log_event("meta_question_rerouted", chat_id=chat_id, intent=intent, text=raw_text)
+        return await _answer(chat_id, raw_text)
+    return reply
+
+
 # A genuine home/climate question names something in the home. A
 # home.query classification whose text mentions none of these is the
 # classifier guessing ("on my smoke havite" got the full AC dump, live).
@@ -411,6 +448,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     _history[chat_id].append(("user", raw_text))
     _history[chat_id].append(("assistant", _history_redaction.get() or reply))
     _history_redaction.reset(redaction_token)
+    _last_sent_reply[chat_id] = reply
     log_chat(chat_id, "user", raw_text)
     log_chat(chat_id, "assistant", reply)
     return reply
@@ -529,17 +567,20 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 return await _answer(chat_id, parsed.normalized_text)
             return await _create_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "reminders.list":
-            return await _list_reminders(chat_id)
+            return await _read_or_meta(chat_id, raw_text, parsed.intent,
+                                       await _list_reminders(chat_id))
         if parsed.intent == "reminders.cancel":
             return await _cancel_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.list":
-            return await _list_calendar(chat_id, parsed.normalized_text)
+            return await _read_or_meta(chat_id, raw_text, parsed.intent,
+                                       await _list_calendar(chat_id, parsed.normalized_text))
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.cancel":
             return await _cancel_event(chat_id, parsed.normalized_text)
         if parsed.intent == "email.check":
-            return await _check_email(chat_id, parsed.normalized_text)
+            return await _read_or_meta(chat_id, raw_text, parsed.intent,
+                                       await _check_email(chat_id, parsed.normalized_text))
         if parsed.intent == "home.query":
             wording = f"{raw_text} {parsed.normalized_text}"
             if not _mentions_home(wording):
@@ -550,7 +591,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 # AC/climate dump) the classifier is guessing — converse.
                 log_event("home_query_demoted", chat_id=chat_id, text=raw_text)
                 return await _answer(chat_id, parsed.normalized_text)
-            return await _home_query(chat_id, parsed.normalized_text)
+            return await _read_or_meta(chat_id, raw_text, parsed.intent,
+                                       await _home_query(chat_id, parsed.normalized_text))
         if parsed.intent == "home.control":
             return await _home_control(chat_id, parsed.normalized_text)
         # qa.answer, and anything the classifier couldn't place ("unknown"
@@ -751,8 +793,10 @@ async def _cancel_event(chat_id: int, text: str) -> str:
     stop = {"cancel", "cancle", "delete", "remove", "the", "a", "an", "event",
             "events", "all", "my", "from", "calendar", "please", "meeting",
             "meetings", "appointment", "today", "tomorrow", "this", "that",
-            "week", "yes", "right", "now", "it", "them", "and", "of", "for"}
-    content = {w.strip(".,!?\"'").lower() for w in text.split()} - stop - {""}
+            "week", "yes", "right", "now", "it", "them", "and", "of", "for",
+            "can", "you", "everything", "every"}
+    words = {w.strip(".,!?\"'").lower() for w in text.split()}
+    content = words - stop - {""}
     if content:
         targets = [e for e in events
                    if content & {w.strip(".,!?\"'").lower() for w in e["title"].split()}]
@@ -760,8 +804,15 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             listing = "\n".join(f"- {humanize(e['start'])} — {e['title']}" for e in events[:8])
             return (f"I couldn't match that to an event {label}. On the calendar:\n"
                     f"{listing}\nWhich one should I cancel?")
+    elif words & {"all", "everything", "every"}:
+        targets = list(events)  # explicitly asked for everything in the window
     else:
-        targets = list(events)  # "cancel all events today" — the window is the filter
+        # Bare "can you cancel" with no object — a human asks which, never
+        # defaults to sweeping the whole calendar (live 2026-08-26: it
+        # escalated straight to a DELETE-4-events ask).
+        listing = "\n".join(f"- {humanize(e['start'])} — {e['title']}" for e in events[:8])
+        return (f"Cancel which event? On the calendar {label}:\n{listing}\n"
+                "Name the one to cancel — or say \"cancel all events\" for all of them.")
 
     # Recurring occurrences share their series id — deleting it removes
     # the whole series, so collapse duplicates and say it out loud.
@@ -892,9 +943,14 @@ async def _check_email(chat_id: int, text: str = "") -> str:
     ))
 
     async def handler(_args: dict) -> str:
-        # The reply the user sees carries senders/subjects; the history
-        # records only a placeholder, so none of it reaches cloud models.
-        _history_redaction.set("[showed the unread email summary]")
+        # The reply the user sees carries senders/subjects; when any model
+        # tier is a CLOUD provider the history records only a placeholder,
+        # so none of it reaches third parties. With local-only tiers
+        # (2026-08-26) redaction is pure capability loss — qa couldn't see
+        # the listing the user's follow-up ("are these latest emails?")
+        # was asking about — so the real text stays in history.
+        if _cloud_tier_in_use():
+            _history_redaction.set("[showed the unread email summary]")
         try:
             result = await kernel.run_tool(kernel.ToolCall("email.unread", {"limit": 5}))
         except kernel.ToolFailed as exc:

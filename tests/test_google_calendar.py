@@ -174,3 +174,21 @@ async def test_delete_event_treats_gone_as_done(monkeypatch):
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
     result = await google_calendar.call("calendar.delete_event", {"event_id": "abc123"})
     assert result == {"id": "abc123", "deleted": False, "already_gone": True}
+
+
+async def test_recurring_flag_from_original_vevents_not_expansion(monkeypatch):
+    """The expansion library stamps RECURRENCE-ID on EVERY occurrence it
+    emits — one-off events included — so recurrence must be read from the
+    original VEVENTs (live: all four events in a delete ask carried a
+    false whole-series warning)."""
+    ics = b"""BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//T//EN\r\n"""
+    ics += b"""BEGIN:VEVENT\r\nUID:oneoff@google.com\r\nDTSTART:20990102T100000Z\r\nDTEND:20990102T110000Z\r\nSUMMARY:One-off\r\nEND:VEVENT\r\n"""
+    ics += b"""BEGIN:VEVENT\r\nUID:daily@google.com\r\nDTSTART:20990102T090000Z\r\nDTEND:20990102T093000Z\r\nRRULE:FREQ=DAILY;COUNT=3\r\nSUMMARY:Daily standup\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n"""
+    monkeypatch.setattr(google_calendar, "_fetch_ics", lambda: ics)
+
+    events = await google_calendar.call(
+        "calendar.list_events",
+        {"start": "2099-01-02T00:00:00+00:00", "end": "2099-01-02T23:59:59+00:00"},
+    )
+    flags = {e["title"]: e["recurring"] for e in events}
+    assert flags == {"One-off": False, "Daily standup": True}

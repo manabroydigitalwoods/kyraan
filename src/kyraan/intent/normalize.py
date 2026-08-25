@@ -79,7 +79,11 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. Asking the current TIME ("what time
   is it", "wat tym is it") is qa.answer — the clock, never calendar.list. This should be the common case for
-  ordinary chat, not a rare fallback.
+  ordinary chat, not a rare fallback. A question ABOUT the assistant's
+  previous reply is ALWAYS qa.answer, never a re-run of the tool that
+  produced it: after an email listing, "are these latest emails?" is
+  qa.answer (the user is asking about the list, not asking to fetch it
+  again); after a calendar listing, "is that all?" is qa.answer.
 - unknown: only for input so garbled or empty that even "have a conversation"
   doesn't apply.
 Handle typos, slang, and shorthand. Respond with ONLY a JSON object:

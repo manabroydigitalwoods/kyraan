@@ -681,10 +681,12 @@ async def test_unsensored_room_gets_an_honest_no_sensor_answer(monkeypatch):
     assert "The AC" not in result
 
 
-async def test_email_check_formats_metadata_and_redacts_history(monkeypatch):
-    """The §3a data boundary: the user sees senders/subjects, but the
-    conversation history — which feeds the cloud classifier and qa
-    prompts — records only a placeholder."""
+async def test_email_check_redacts_history_only_when_a_cloud_tier_is_active(monkeypatch):
+    """The §3a data boundary: with any CLOUD model tier, history records
+    only a placeholder so subjects never reach third parties. With
+    local-only tiers (2026-08-26) redaction is pure capability loss — qa
+    couldn't see the listing a follow-up was asking about — so the real
+    text stays."""
     _mock_normalize(monkeypatch, "email.check")
 
     async def fake_run_tool(call, **kwargs):
@@ -696,14 +698,18 @@ async def test_email_check_formats_metadata_and_redacts_history(monkeypatch):
 
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
 
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
     result = await orchestrator.handle_message(chat_id=0, raw_text="any new emails?")
     assert "about 3 unread" in result
     assert "Suman Das: Invoice pending" in result
     assert "noreply@bank.com: Statement" in result
-
     history = orchestrator._history_block(0)
     assert "Invoice pending" not in history and "Suman Das" not in history
     assert "[showed the unread email summary]" in history
+
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: False)
+    await orchestrator.handle_message(chat_id=1, raw_text="any new emails?")
+    assert "Invoice pending" in orchestrator._history_block(1)  # local-only: qa can see it
 
 
 async def test_email_failure_surfaces_and_history_stays_clean(monkeypatch):
@@ -1389,3 +1395,47 @@ async def test_cancel_no_denies_without_deleting(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="no")
     assert "cancelled, nothing was done" in result
     assert deleted == []
+
+
+async def test_bare_cancel_asks_which_never_sweeps(monkeypatch):
+    """'can you cancel' with no object escalated straight to a
+    DELETE-4-events ask (live 2026-08-26). No object and no 'all' ->
+    list and ask; only an explicit all/everything sweeps the window."""
+    _mock_normalize(monkeypatch, "calendar.cancel", "can you cancel")
+    deleted = _cancel_flow_fixtures(monkeypatch)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="can you cancel")
+    assert "Cancel which event?" in result and "Train to NJP" in result
+    assert "DELETE" not in result
+    assert deleted == []
+
+
+async def test_meta_question_about_a_listing_answers_instead_of_reprinting(monkeypatch):
+    """'are these latest emails' re-ran email.check and reprinted the
+    identical listing (live, twice in one session). Identical read-reply
+    + meta-question shape -> answer the question via qa."""
+    _mock_normalize(monkeypatch, "email.check", "are these latest emails")
+    listing = "You have about 201 unread. Latest:\n- A: x\n- B: y"
+
+    async def fake_check(chat_id, text=""):
+        return listing
+
+    async def fake_answer(chat_id, text):
+        return "Yes — those are the five most recent unread ones."
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator, "_check_email", fake_check)
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    orchestrator._last_sent_reply[61] = listing  # previous turn showed it
+
+    result = await orchestrator.handle_message(chat_id=61, raw_text="are these latest emails")
+    assert result.startswith("Yes — those are the five most recent")
+
+    # A straight re-ask ("check emails") is NOT a meta-question — the
+    # listing prints again, truthfully.
+    _mock_normalize(monkeypatch, "email.check", "check emails")
+    result = await orchestrator.handle_message(chat_id=61, raw_text="check emails")
+    assert result.startswith("You have about 201 unread")

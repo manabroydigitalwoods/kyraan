@@ -72,6 +72,15 @@ def _list_events(start_iso: str, end_iso: str) -> list[dict]:
         window_end = window_end.replace(tzinfo=local_now().tzinfo)
 
     calendar = icalendar.Calendar.from_ical(_fetch_ics())
+    # Recurrence must be read from the ORIGINAL VEVENTs: the expansion
+    # library strips RRULE and stamps RECURRENCE-ID onto EVERY occurrence
+    # it emits — one-off events included — so flagging from the expanded
+    # occurrence marked everything "recurring" (live 2026-08-26: all four
+    # events in a delete-confirm ask carried a false whole-series warning).
+    recurring_uids = {
+        str(v.get("UID")) for v in calendar.walk("VEVENT")
+        if v.get("RRULE") or v.get("RDATE")
+    }
     # recurring_ical_events expands RRULEs — a weekly standup appears once
     # per occurrence in the window, not once per VEVENT definition.
     occurrences = recurring_ical_events.of(calendar).between(window_start, window_end)
@@ -92,7 +101,7 @@ def _list_events(start_iso: str, end_iso: str) -> list[dict]:
             "all_day": not isinstance(occ["DTSTART"].dt, datetime),
             "location": str(occ["LOCATION"]) if occ.get("LOCATION") else None,
             "id": uid.split("@")[0] if uid else None,
-            "recurring": bool(occ.get("RRULE") or occ.get("RECURRENCE-ID")),
+            "recurring": uid in recurring_uids,
         })
     events.sort(key=lambda e: e["start"])
     return events
