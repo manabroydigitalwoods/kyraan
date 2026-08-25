@@ -1,9 +1,11 @@
 """Single channel for Phase 1. Restricted to TELEGRAM_OWNER_ID so this stays
 a personal assistant, not an open bot, until Phase 3's multi-user work.
 """
+import asyncio
 import os
 
 from telegram import Update
+from telegram.constants import ChatAction
 from telegram.ext import Application, ContextTypes, JobQueue, MessageHandler, filters
 
 from kyraan.agents import orchestrator
@@ -18,6 +20,20 @@ def _owner_id() -> int:
     return int(os.environ["TELEGRAM_OWNER_ID"])
 
 
+async def _typing_loop(bot, chat_id: int) -> None:
+    """Keep the "Kyraan is typing…" indicator alive while a reply is being
+    produced — Telegram expires a chat action after ~5s, and model + tool
+    time regularly exceeds that. Cancelled the moment the reply is ready;
+    the indicator also tells the owner their message was received (bots
+    can't mark messages "read" — that's a Business-API-only feature)."""
+    try:
+        while True:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            await asyncio.sleep(4)
+    except asyncio.CancelledError:
+        pass
+
+
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.effective_user is None or update.effective_user.id != _owner_id():
         logger.warning("Ignored message from non-owner user %s", update.effective_user)
@@ -25,7 +41,11 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     chat_id = update.effective_chat.id
     text = update.message.text or ""
-    reply = await orchestrator.handle_message(chat_id, text)
+    typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
+    try:
+        reply = await orchestrator.handle_message(chat_id, text)
+    finally:
+        typing.cancel()
     await update.message.reply_text(reply)
 
 
