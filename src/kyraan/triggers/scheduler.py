@@ -62,12 +62,30 @@ def _parse_when(when_iso: str) -> datetime:
     return parsed
 
 
+# How far past its due time a reminder can be before it's treated as
+# overdue rather than merely "just now". Absorbs scheduling jitter and the
+# create->schedule gap without annotating a reminder that fired on time.
+_OVERDUE_SLACK = timedelta(seconds=60)
+
+
 def _schedule(reminder: store.Reminder) -> None:
     assert _schedule_fn is not None, "scheduler.init() must be called before creating reminders"
+    when = _parse_when(reminder.when_iso)
+    text = reminder.text
+    if when < local_now() - _OVERDUE_SLACK:
+        # A due time that already passed — the app was down when it should
+        # have fired (or a model extracted a past datetime). What happens
+        # to a past timestamp is the channel scheduler's undefined
+        # behavior, so decide explicitly: fire once, now, and say it's
+        # late rather than silently pretending it's on time or never
+        # firing at all.
+        log_event("reminder_overdue", reminder_id=reminder.id, when_iso=reminder.when_iso)
+        text = f"{reminder.text} (was due {reminder.when_iso})"
+        when = local_now()
     _schedule_fn(
         reminder.id,
-        _parse_when(reminder.when_iso),
-        {"chat_id": reminder.chat_id, "text": reminder.text, "reminder_id": reminder.id},
+        when,
+        {"chat_id": reminder.chat_id, "text": text, "reminder_id": reminder.id},
     )
 
 

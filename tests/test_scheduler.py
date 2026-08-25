@@ -61,3 +61,38 @@ def test_init_skips_a_corrupted_persisted_reminder_instead_of_crashing(isolated_
     )
 
     assert len(scheduled_ids) == 1  # only the good one was scheduled, no exception raised
+
+
+def test_overdue_reminder_fires_now_with_a_late_note(isolated_store):
+    """A reminder whose due time passed while the app was down used to be
+    handed to the channel scheduler with a past timestamp — whatever
+    happens then (JobQueue fires immediately, silently pretending to be on
+    time) was undefined behavior, not a choice. Now it's explicit: fire
+    once, now, annotated as late."""
+    from kyraan.control_plane.dnd import local_now
+
+    store.add(chat_id=0, text="water plants", when_iso="2020-01-01T10:00:00+00:00")
+
+    captured = {}
+    scheduler.init(
+        schedule_fn=lambda name, run_at, payload: captured.update(run_at=run_at, payload=payload),
+        cancel_fn=lambda *a, **k: None,
+        send_fn=None,
+    )
+
+    assert "(was due 2020-01-01T10:00:00+00:00)" in captured["payload"]["text"]
+    assert abs((captured["run_at"] - local_now()).total_seconds()) < 5
+
+
+def test_future_reminder_is_scheduled_unannotated(isolated_store):
+    store.add(chat_id=0, text="water plants", when_iso="2099-01-01T10:00:00+00:00")
+
+    captured = {}
+    scheduler.init(
+        schedule_fn=lambda name, run_at, payload: captured.update(run_at=run_at, payload=payload),
+        cancel_fn=lambda *a, **k: None,
+        send_fn=None,
+    )
+
+    assert captured["payload"]["text"] == "water plants"
+    assert captured["run_at"] == _parse_when("2099-01-01T10:00:00+00:00")
