@@ -3,9 +3,12 @@
 Personal multi-agent assistant. This is the Phase 1 skeleton: one Telegram
 channel, one orchestrator, two model tiers, MD-file memory with
 check-before-write, and a Control Plane that gates everything through a
-kill switch, permission config, and DND rules. See `docs/plan.md` (or your
-own copy of the master plan) for the full roadmap — this repo currently
-implements Phase 0 + Phase 1 only.
+kill switch, permission config, and DND rules.
+
+- [docs/plan.md](docs/plan.md) — the full vision, architecture, and phase
+  roadmap (Phase 0 through Phase 5)
+- [docs/progress.md](docs/progress.md) — what's actually been built so
+  far, key decisions made, and what's next
 
 ## Setup
 
@@ -115,8 +118,7 @@ for p in sorted(store.PENDING_DIR.glob("*")):
     # store.reject(p)   # discard
 ```
 
-## Not yet built (see master plan for phasing)
+## Status
 
-Vector RAG, relationship graph, multi-agent routing, Home/Work agents,
-Woodsportal/Home Assistant tools, reflection loop, curiosity queue, cost
-monitoring, eval harness, and everything in Phase 3+.
+See [docs/progress.md](docs/progress.md) for what's built, what's not, and
+what's next.
