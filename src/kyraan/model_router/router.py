@@ -68,6 +68,24 @@ class ModelProviderError(Exception):
     model responded but wasn't confident/parseable"."""
 
 
+def strip_code_fence(text: str) -> str:
+    """Local models sometimes wrap the JSON they were asked for in a
+    markdown code fence (```json ... ```) — seen live from llama3.1:8b,
+    where an otherwise-correct intent classification failed to parse.
+    Every call site that json.loads() model output should pass it through
+    here first. Anything that isn't fence-wrapped comes back unchanged."""
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    first_newline = stripped.find("\n")
+    if first_newline == -1:
+        return stripped
+    body = stripped[first_newline + 1 :]
+    if body.rstrip().endswith("```"):
+        body = body.rstrip()[:-3]
+    return body.strip()
+
+
 @dataclass
 class Usage:
     """Token counts, best-effort — SDKs disagree on field names/availability,

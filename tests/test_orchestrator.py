@@ -92,32 +92,46 @@ async def test_well_formed_reminder_still_works(monkeypatch):
     assert "couldn't work out a time" not in result.lower()
 
 
-async def test_qa_system_prompt_forbids_claiming_to_save_memories(monkeypatch):
+async def test_qa_system_prompt_forbids_claiming_a_fact_is_already_saved(monkeypatch):
     """Found live (2026-08-25): "remember that my wife's name is Mira" got
-    "Got it—I've noted that" back, while nothing was written anywhere —
-    extraction isn't wired up yet. Until it is, the qa.answer system prompt
-    must tell the model it has no memory, so it can't falsely claim a fact
-    was saved."""
+    "Got it—I've noted that" back while nothing was written. With the
+    memory loop wired, facts go live only after human review — so the
+    prompt must still forbid claiming a fact is already permanently
+    saved."""
     _mock_normalize(monkeypatch, "qa.answer")
     captured = {}
 
     def fake_call(prompt, system="", **kwargs):
         captured["system"] = system
-        return _FakeRouted(text="I can't store memories yet.")
+        return _FakeRouted(text="Noted — it'll be saved after review.")
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
 
     await orchestrator.handle_message(chat_id=0, raw_text="remember that my wife's name is Mira")
-    assert "cannot save facts" in captured["system"]
+    assert "permanently\nsaved" in captured["system"] or "permanently saved" in captured["system"]
 
 
 @pytest.fixture(autouse=True)
-def _clear_pending_confirmations():
-    """_pending_confirmations is module-level state — never let one test's
-    stashed confirmation leak into another."""
+def _clear_module_state():
+    """_pending_confirmations and _history are module-level state — never
+    let one test's leftovers leak into another."""
     orchestrator._pending_confirmations.clear()
+    orchestrator._history.clear()
     yield
     orchestrator._pending_confirmations.clear()
+    orchestrator._history.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_extraction(monkeypatch):
+    """handle_message now runs fact extraction after every dispatch — a
+    real model call. Neutralize it by default so every pre-existing test
+    stays hermetic; extraction-specific tests override this seam."""
+
+    async def fake_propose(raw_text):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
 
 
 @pytest.fixture
@@ -226,3 +240,84 @@ async def test_confirm_flow_unrelated_message_drops_the_pending_action(monkeypat
     assert result == "It's 2pm."
     assert orchestrator._pending_confirmations == {}
     assert orchestrator.scheduler.store.list_pending(0) == []  # the reminder never ran
+
+
+# --- Memory loop: extraction note, conversation history, facts in prompt ---
+
+
+async def test_reply_gets_a_noted_for_review_line_when_a_fact_is_queued(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Nice!"))
+
+    async def fake_propose(raw_text):
+        return ["- Wife's name is Mira"]
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="my wife's name is Mira")
+    assert result.startswith("Nice!")
+    assert "Noted for review: Wife's name is Mira" in result
+
+
+async def test_extraction_failure_never_breaks_the_reply(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Nice!"))
+
+    async def broken_propose(raw_text):
+        raise RuntimeError("extraction blew up")
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", broken_propose)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="my wife's name is Mira")
+    assert result == "Nice!"
+
+
+async def test_short_messages_skip_extraction_entirely(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Hey!"))
+    calls = []
+
+    async def counting_propose(raw_text):
+        calls.append(raw_text)
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", counting_propose)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="hi")
+    assert calls == []
+
+
+async def test_qa_prompt_carries_conversation_history_and_facts(monkeypatch):
+    """The second message's system prompt must contain the first exchange
+    (rolling history) and the live memory facts."""
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.memory_store, "load_all_facts", lambda **kwargs: "FACTS_SENTINEL")
+    systems = []
+
+    def fake_call(prompt, system="", **kwargs):
+        systems.append(system)
+        return _FakeRouted(text="Blue, you told me.")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="my favourite colour is blue")
+    await orchestrator.handle_message(chat_id=0, raw_text="what's my favourite colour?")
+
+    assert "FACTS_SENTINEL" in systems[-1]
+    assert "user: my favourite colour is blue" in systems[-1]
+    assert "assistant: Blue, you told me." in systems[-1]
+    # And the first call must NOT have seen history that didn't exist yet
+    assert "user: my favourite colour is blue" not in systems[0]
+
+
+async def test_history_is_per_chat_and_rolls_over(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="ok then"))
+
+    for i in range(15):  # 15 exchanges = 30 entries > the 20-entry window
+        await orchestrator.handle_message(chat_id=1, raw_text=f"message number {i}")
+
+    block = orchestrator._history_block(1)
+    assert "message number 0" not in block  # rolled out
+    assert "message number 14" in block
+    assert orchestrator._history_block(2) == "(no conversation yet)"  # other chats unaffected

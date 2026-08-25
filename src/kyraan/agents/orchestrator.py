@@ -4,12 +4,15 @@ Flow: normalize intent -> gate + dispatch through the kernel -> return text
 for the Response Engine (here, just the Telegram send call) to deliver.
 """
 import json
+from collections import defaultdict, deque
 
 from kyraan.control_plane import kernel
 from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.intent.normalize import normalize
+from kyraan.memory import extraction
+from kyraan.memory import store as memory_store
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
 
@@ -30,11 +33,21 @@ specifics like time remaining. Kyraan genuinely can set reminders,
 including short-delay ones — never claim that capability doesn't exist; if
 a message looks like a reminder request that landed here by mistake, ask
 the user to rephrase it as a clear reminder instead of denying you can do it.
-You cannot save facts or remember anything across messages yet — each
-message reaches you with no memory of earlier ones. If asked to remember,
-note, or save something, say plainly that you can't store memories yet —
-never reply "noted" or "got it, I'll remember" or otherwise imply the
-information was saved, because it wasn't."""
+
+Known facts, from human-reviewed memory — treat these as true, and never
+invent personal facts that aren't listed here or in the conversation below.
+If asked about something in neither, say you don't know it yet:
+{facts}
+
+Recent conversation, oldest first — use it to resolve follow-ups and
+pronouns; it is your only memory of this session:
+{history}
+
+When the user states a new fact, respond naturally — a separate extraction
+step queues stated facts for human review automatically, and the reply is
+annotated when that happens. Never claim a fact is already permanently
+saved (facts go live only after review), and never deny being able to
+remember — if asked, say new facts are saved after a quick review step."""
 
 # Confirm-first flow state: chat_id -> (SkillCall, handler) awaiting a
 # yes/no. In-memory only — a restart drops any pending confirmation, which
@@ -47,8 +60,48 @@ _pending_confirmations: dict = {}
 _CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead"}
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 
+# Rolling per-chat conversation window: the qa.answer prompt's only session
+# memory. In-memory on purpose (like _pending_confirmations) — a restart
+# forgets the conversation, which is honest, and durable facts are the
+# memory tree's job, not this window's.
+_HISTORY_MAX_ENTRIES = 20  # 10 user/assistant exchanges
+_history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
+
+# Below this length a message can't state a durable fact ("yes", "hi",
+# "thanks") — skip the extraction model call entirely.
+_EXTRACTION_MIN_CHARS = 8
+
+
+def _history_block(chat_id: int) -> str:
+    return "\n".join(f"{role}: {text}" for role, text in _history[chat_id]) or "(no conversation yet)"
+
+
+async def _extraction_note(raw_text: str) -> str:
+    """Run fact extraction and return a reply suffix naming what was queued
+    ("" when nothing was). Extraction is best-effort: it must never break
+    or replace the actual reply, so every failure is logged and swallowed."""
+    if len(raw_text.strip()) < _EXTRACTION_MIN_CHARS:
+        return ""
+    try:
+        queued = await extraction.propose_from_message(raw_text)
+    except Exception as exc:
+        log_event("extraction_error", error=str(exc), error_type=type(exc).__name__)
+        return ""
+    if not queued:
+        return ""
+    facts = "; ".join(f.lstrip("- ").strip() for f in queued)
+    return f"\n\n📝 Noted for review: {facts}"
+
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
+    reply = await _dispatch(chat_id, raw_text)
+    reply += await _extraction_note(raw_text)
+    _history[chat_id].append(("user", raw_text))
+    _history[chat_id].append(("assistant", reply))
+    return reply
+
+
+async def _dispatch(chat_id: int, raw_text: str) -> str:
     try:
         pending = _pending_confirmations.pop(chat_id, None)
         if pending:
@@ -138,18 +191,18 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         # tier (frontier, or if this ever points at one again) spends
         # hidden tokens before the visible JSON, and a 200-token cap
         # truncated the output mid-string live (2026-08-25).
-        extraction = router.call(
+        extracted = router.call(
             prompt=text,
             system=_EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()),
             tier="cheap",
         )
         try:
-            data = json.loads(extraction.text)
+            data = json.loads(router.strip_code_fence(extracted.text))
             reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             # Kept as a safety net even though frontier is far more
             # reliable — no model is perfect, and this must never crash.
-            log_event("reminder_extraction_failed", text=text, raw=extraction.text, error=str(exc))
+            log_event("reminder_extraction_failed", text=text, raw=extracted.text, error=str(exc))
             return "I couldn't work out a time for that reminder — try rephrasing with a clearer date/time."
         return f"Reminder set: \"{data['text']}\" at {data['when_iso']} (id {reminder.id[:8]})"
 
@@ -207,7 +260,13 @@ async def _answer(chat_id: int, text: str) -> str:
         # was exactly right in 3/3, matching frontier. See
         # config/permissions.yaml's model_tiers comment.
         response = router.call(
-            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat()), tier="cheap"
+            prompt=args["text"],
+            system=_ANSWER_SYSTEM.format(
+                now=local_now().isoformat(),
+                facts=memory_store.load_all_facts() or "(no facts stored yet)",
+                history=_history_block(chat_id),
+            ),
+            tier="cheap",
         )
         return response.text
 

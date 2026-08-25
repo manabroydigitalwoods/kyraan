@@ -47,7 +47,7 @@ def normalize(raw_text: str, tier: str = "cheap") -> NormalizedIntent:
     # truncates the output mid-string (seen live in reminder extraction).
     response = router.call(prompt=raw_text, system=_SYSTEM_PROMPT, tier=tier)
     try:
-        data = json.loads(response.text)
+        data = json.loads(router.strip_code_fence(response.text))
 
         # A small local model won't always follow the schema exactly — a
         # field can come back JSON null (dict.get's default only applies to

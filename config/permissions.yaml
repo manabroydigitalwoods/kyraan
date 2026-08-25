@@ -97,8 +97,15 @@ skills:
   qa.answer:
     permission: auto
     model_tier: cheap
+  memory.propose:
+    permission: auto      # only writes to memory/pending_review/ — the human
+                          # review step IS the gate, so proposing is safe to
+                          # run on every message (still kill-switch-gated)
+    model_tier: cheap
   memory.write:
-    permission: confirm   # extraction proposes; human approves during the manual-review weeks
+    permission: confirm   # reserved for anything that would touch the live
+                          # memory tree directly; promotion is human-only via
+                          # scripts/review_memory.py for now
     model_tier: cheap
 
 dnd:
