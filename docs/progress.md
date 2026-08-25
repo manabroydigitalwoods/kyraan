@@ -115,7 +115,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 64 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 69 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
 math, orchestrator error handling (including a pin on the qa.answer
@@ -238,18 +238,16 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - The confirm flow's pending state is in-memory only — a restart drops an
   unanswered confirmation (fails safe: the action just doesn't run)
 - No CI (tests only run when run by hand)
-- No budget *alert* yet at `alert_threshold_pct` (the hard stop exists;
-  a proactive "you're at 80%" Telegram message does not)
+- Budget alert at `alert_threshold_pct` warns in-reply once per day
+  (marker persisted in the cost ledger); the hard stop caps spend at 100%
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
 - No RAG, relationship graph, agent router, tool registry, reflection loop,
   or curiosity queue — all Phase 2+, not started
-- Intent classification depends on Groq specifically, with no automatic
-  local fallback wired in — if it degrades or rate-limits under real
-  (non-dev-loop) usage, classification breaks even though qa.answer and
-  reminders.create would keep working locally. Would need to be added
-  deliberately, informed by what actually breaks first
+- Intent classification prefers Groq but degrades automatically to the
+  local cheap tier on a provider failure (measured 12-13/14 there) —
+  the single-point dependency is closed
 ## Next steps
 
 1. Revoke + reissue the bot token via BotFather (it passed through a chat
