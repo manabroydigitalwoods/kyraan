@@ -609,7 +609,7 @@ async def test_home_query_reports_state_and_power(monkeypatch):
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
     result = await orchestrator.handle_message(chat_id=0, raw_text="is the AC on?")
     assert "The AC is ON for 2h 05m" in result and "359.5 W" in result and "2.098 kWh" in result
-    assert "Bedroom: 27.4\u00b0C / 83% humidity." in result
+    assert "Bedroom" not in result  # AC question gets the AC answer only
 
 
 async def test_home_control_asks_then_switches_with_readback(monkeypatch):
@@ -640,3 +640,42 @@ async def test_home_control_without_direction_asks(monkeypatch):
     _mock_normalize(monkeypatch, "home.control", "do something with the AC")
     result = await orchestrator.handle_message(chat_id=0, raw_text="do something with the AC")
     assert "on or off" in result
+
+
+def _home_readings():
+    return {
+        "switch.ac": {"entity": "switch.ac", "state": "on", "unit": None, "name": "AC", "last_changed": None},
+        "sensor.ac_current_consumption": {"entity": "sensor.ac_current_consumption", "state": "350", "unit": "W", "name": "p"},
+        "sensor.ac_today_s_consumption": {"entity": "sensor.ac_today_s_consumption", "state": "2.1", "unit": "kWh", "name": "t"},
+        "sensor.bed_room_temp_temperature": {"entity": "sensor.bed_room_temp_temperature", "state": "27.4", "unit": "°C", "name": "T"},
+        "sensor.bed_room_temp_humidity": {"entity": "sensor.bed_room_temp_humidity", "state": "83", "unit": "%", "name": "H"},
+    }
+
+
+async def test_temperature_question_gets_climate_only(monkeypatch):
+    _mock_normalize(monkeypatch, "home.query", "what is the bedroom temperature?")
+    readings = _home_readings()
+
+    async def fake_run_tool(call, **kwargs):
+        return readings[call.args["entity"]]
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="what is the bedroom temperature?")
+    assert "Bedroom: 27.4°C / 83% humidity." in result
+    assert "The AC" not in result
+
+
+async def test_unsensored_room_gets_an_honest_no_sensor_answer(monkeypatch):
+    """Seen live: "kitchen room temp?" answered with the bedroom card as if
+    it were the kitchen. It must say there's no sensor there."""
+    _mock_normalize(monkeypatch, "home.query", "kitchen room temp?")
+    readings = _home_readings()
+
+    async def fake_run_tool(call, **kwargs):
+        return readings[call.args["entity"]]
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="kitchen room temp?")
+    assert "no sensor in the kitchen room" in result
+    assert "Bedroom: 27.4°C" in result  # still offers the reading it has
+    assert "The AC" not in result

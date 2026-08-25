@@ -208,7 +208,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
         if parsed.intent == "home.query":
-            return await _home_query(chat_id)
+            return await _home_query(chat_id, parsed.normalized_text)
         if parsed.intent == "home.control":
             return await _home_control(chat_id, parsed.normalized_text)
         # qa.answer, and anything the classifier couldn't place ("unknown"
@@ -451,30 +451,54 @@ def _since(last_changed: str | None) -> str:
     return f" for {minutes // 60}h {minutes % 60:02d}m"
 
 
-async def _home_query(chat_id: int) -> str:
+# Rooms Kyraan knows it has NO sensor in — an honest "no sensor there"
+# beats answering a kitchen question with bedroom data (seen live).
+_UNSENSORED_ROOMS = ("living", "kitchen", "hall", "bathroom", "balcony", "dining", "office")
+
+
+async def _home_query(chat_id: int, text: str) -> str:
+    # Deterministic sub-routing on the classifier's cleaned text — device
+    # answers stay template-composed, no model between the sensor and the
+    # user. The question decides which card(s) to show.
+    t = text.lower()
+    wants_climate = any(w in t for w in ("temp", "humid", "hot", "warm", "cold", "climate"))
+    wants_ac = "ac" in t.split() or any(w in t for w in ("power", "consum", "electric", "running", "watt", "plug"))
+    other_room = next((r for r in _UNSENSORED_ROOMS if r in t), None)
+    if not wants_climate and not wants_ac:
+        wants_climate = wants_ac = True  # generic "home status" — show both
+
     async def handler(_args: dict) -> str:
-        try:
-            state = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_SWITCH}))
-        except kernel.ToolFailed as exc:
-            return f"Couldn't check the AC: {exc}"
-        since = _since(state.get("last_changed"))
-        if state["state"] != "on":
-            lines = [f"The AC is OFF{since}."]
-        else:
-            detail = ""
+        lines = []
+        if wants_ac:
             try:
-                power = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_POWER}))
-                today = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_TODAY}))
-                detail = f" — drawing {power['state']} {power['unit'] or 'W'}, {today['state']} {today['unit'] or 'kWh'} today"
-            except kernel.ToolFailed:
-                pass  # the on/off answer stands even if the sensors hiccup
-            lines = [f"The AC is ON{since}{detail}."]
-        try:
-            temp = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _TEMP}))
-            humidity = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _HUMIDITY}))
-            lines.append(f"Bedroom: {temp['state']}{temp['unit'] or '°C'} / {humidity['state']}{humidity['unit'] or '%'} humidity.")
-        except kernel.ToolFailed:
-            pass  # sensor offline — the AC answer stands alone
+                state = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_SWITCH}))
+                since = _since(state.get("last_changed"))
+                if state["state"] != "on":
+                    lines.append(f"The AC is OFF{since}.")
+                else:
+                    detail = ""
+                    try:
+                        power = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_POWER}))
+                        today = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_TODAY}))
+                        detail = f" — drawing {power['state']} {power['unit'] or 'W'}, {today['state']} {today['unit'] or 'kWh'} today"
+                    except kernel.ToolFailed:
+                        pass  # the on/off answer stands even if the sensors hiccup
+                    lines.append(f"The AC is ON{since}{detail}.")
+            except kernel.ToolFailed as exc:
+                lines.append(f"Couldn't check the AC: {exc}")
+        if wants_climate:
+            prefix = ""
+            if other_room:
+                prefix = f"There's no sensor in the {other_room} room yet — the only climate sensor is in the bedroom. "
+            try:
+                temp = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _TEMP}))
+                humidity = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _HUMIDITY}))
+                lines.append(
+                    f"{prefix}Bedroom: {temp['state']}{temp['unit'] or '°C'} / "
+                    f"{humidity['state']}{humidity['unit'] or '%'} humidity."
+                )
+            except kernel.ToolFailed as exc:
+                lines.append(f"{prefix}Couldn't read the bedroom sensor: {exc}")
         return "\n".join(lines)
 
     return await _gated(chat_id, SkillCall("home.query", {}), handler)
