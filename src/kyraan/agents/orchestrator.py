@@ -20,6 +20,13 @@ The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
 async def handle_message(chat_id: int, raw_text: str) -> str:
     try:
         parsed = normalize(raw_text)
+        if parsed.confidence < 0.4:
+            # The cheap tier is a small local model — low confidence is
+            # sometimes genuine ambiguity, but often just that model's
+            # sampling variance on an easy input. Retry once on the
+            # frontier tier before giving up and asking the user to
+            # rephrase something a bigger model would have understood fine.
+            parsed = normalize(raw_text, tier="frontier")
 
         if parsed.confidence < 0.4:
             return "I'm not confident I understood that — could you rephrase?"

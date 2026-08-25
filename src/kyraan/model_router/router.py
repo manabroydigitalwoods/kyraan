@@ -69,23 +69,40 @@ class ModelProviderError(Exception):
 
 
 @dataclass
+class Usage:
+    """Token counts, best-effort — SDKs disagree on field names/availability,
+    so any field can come back None rather than raising."""
+
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+@dataclass
 class RoutedResponse:
     text: str
     tier_used: str
+    provider: str
     model: str
+    latency_ms: float
+    usage: Usage
 
 
-def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _call_anthropic(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
     response = _get_anthropic_client(provider_cfg).messages.create(
         model=model,
         max_tokens=max_tokens,
         system=system or None,
         messages=[{"role": "user", "content": prompt}],
     )
-    return "".join(block.text for block in response.content if block.type == "text")
+    text = "".join(block.text for block in response.content if block.type == "text")
+    usage = Usage(
+        input_tokens=getattr(response.usage, "input_tokens", None),
+        output_tokens=getattr(response.usage, "output_tokens", None),
+    )
+    return text, usage
 
 
-def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
     from google.genai import types
 
     response = _get_gemini_client(provider_cfg).models.generate_content(
@@ -96,10 +113,17 @@ def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_t
             max_output_tokens=max_tokens,
         ),
     )
-    return response.text or ""
+    meta = getattr(response, "usage_metadata", None)
+    usage = Usage(
+        input_tokens=getattr(meta, "prompt_token_count", None) if meta else None,
+        output_tokens=getattr(meta, "candidates_token_count", None) if meta else None,
+    )
+    return response.text or "", usage
 
 
-def _call_openai_compatible(provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _call_openai_compatible(
+    provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int
+) -> tuple[str, Usage]:
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -110,10 +134,15 @@ def _call_openai_compatible(provider: str, provider_cfg: dict, model: str, promp
         max_tokens=max_tokens,
         messages=messages,
     )
-    return response.choices[0].message.content or ""
+    usage_obj = getattr(response, "usage", None)
+    usage = Usage(
+        input_tokens=getattr(usage_obj, "prompt_tokens", None) if usage_obj else None,
+        output_tokens=getattr(usage_obj, "completion_tokens", None) if usage_obj else None,
+    )
+    return response.choices[0].message.content or "", usage
 
 
-def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> str:
+def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int) -> tuple[str, Usage]:
     provider_cfg = _provider_cfg(provider)
     kind = provider_cfg["kind"]
     if kind == "anthropic":
@@ -127,6 +156,13 @@ def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: i
 
 _RETRY_BACKOFF_SECONDS = (0.5, 1.5)  # transient errors (rate limits, 503s) are common; retry before giving up
 
+# The most recent successful call's full RoutedResponse — a single-user,
+# single-threaded CLI/TUI convenience for displaying "what just answered
+# that, how long did it take, how many tokens" without threading metadata
+# through every intermediate function's return type. Not meant as a public
+# API for concurrent use.
+last_call: RoutedResponse | None = None
+
 
 def call(
     prompt: str,
@@ -134,6 +170,7 @@ def call(
     tier: str = "cheap",
     max_tokens: int = 1024,
 ) -> RoutedResponse:
+    global last_call
     tier_cfg = config.load()["model_tiers"][tier]
     model = tier_cfg["model"]
     provider = tier_cfg["provider"]
@@ -141,10 +178,26 @@ def call(
     last_exc: Exception | None = None
     attempts = len(_RETRY_BACKOFF_SECONDS) + 1
     for attempt in range(attempts):
+        start = time.monotonic()
         try:
-            text = _dispatch(provider, model, prompt, system, max_tokens)
-            log_event("model_call", tier=tier, provider=provider, model=model, prompt_chars=len(prompt), attempt=attempt)
-            return RoutedResponse(text=text, tier_used=tier, model=model)
+            text, usage = _dispatch(provider, model, prompt, system, max_tokens)
+            latency_ms = (time.monotonic() - start) * 1000
+            log_event(
+                "model_call",
+                tier=tier,
+                provider=provider,
+                model=model,
+                prompt_chars=len(prompt),
+                attempt=attempt,
+                latency_ms=round(latency_ms),
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+            )
+            response = RoutedResponse(
+                text=text, tier_used=tier, provider=provider, model=model, latency_ms=latency_ms, usage=usage
+            )
+            last_call = response
+            return response
         except Exception as exc:
             last_exc = exc
             log_event("model_call_error", tier=tier, provider=provider, model=model, attempt=attempt, error=str(exc))

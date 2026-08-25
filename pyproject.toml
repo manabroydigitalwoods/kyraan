@@ -12,6 +12,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pydantic>=2.7",
     "rich>=13.0",
+    "textual>=0.80.0",
 ]
 
 [project.optional-dependencies]
