@@ -107,6 +107,34 @@ skills:
                           # memory tree directly; promotion is human-only via
                           # scripts/review_memory.py for now
     model_tier: cheap
+  calendar.list:
+    permission: auto      # read-only skill: extracts a time window, calls
+                          # the calendar.list_events tool, formats the reply
+    model_tier: cheap
+
+# Phase 2 tool registry (design: docs/design/tool_registry.md). Every tool
+# Kyraan can call is declared here — schema, permission, side effects, and
+# failure policy. registry.load() validates the section at startup and
+# refuses any write/notify tool that isn't confirm-gated.
+tool_servers:
+  calendar:
+    transport: builtin
+    module: kyraan.tools.google_calendar
+
+tools:
+  calendar.list_events:
+    description: List events between two times on the owner's Google Calendar (secret ICS address, read-only).
+    server: calendar
+    permission: auto
+    side_effects: read
+    params:
+      start: {type: datetime, required: true}
+      end: {type: datetime, required: true}
+    returns: list of {title, start, end, all_day, location}
+    failure:
+      retries: 2
+      timeout_s: 12
+      on_failure: surface
 
 dnd:
   timezone_env: KYRAAN_TIMEZONE

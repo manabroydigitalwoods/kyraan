@@ -129,22 +129,28 @@ Full agentic tool-choice comes later; Phase 2 skills use
   `FakeAdapter` ships in the test helpers so tool chains are testable
   without any real calendar/network.
 
-## First tool: calendar — one open input needed
+## First tool: Google Calendar (decided 2026-08-25)
 
-Recommendation: a **CalDAV** adapter as the built-in first server. One
-protocol covers iCloud, Google, and Fastmail calendars (all speak CalDAV
-with an app password / app-specific credentials), fits the self-hosted
-principle (no vendor SDK, no OAuth dance for v1), and the `python-caldav`
-library is mature.
+Manab's answer: **Google**. That changed the transport choice: Google
+retired app-password CalDAV long ago (CalDAV against Google requires
+OAuth), so the original "CalDAV with an app password" recommendation
+doesn't hold there. Instead:
 
-**Needed from Manab before implementation:** which calendar the family
-actually lives on — iCloud, Google, or other. That decides the setup
-instructions and which quirks to test against; the adapter code is the
-same either way.
+- **Reads, now**: the calendar's **secret ICS address** (Google Calendar →
+  Settings → the calendar → "Integrate calendar" → "Secret address in iCal
+  format"), pasted into `.env` as `GOOGLE_CALENDAR_ICS_URL`. Zero OAuth,
+  read-only by construction, fits the soak gate exactly. The URL *is* the
+  credential — treat it like a password; Google can regenerate it if it
+  leaks. Implemented in `kyraan.tools.google_calendar` (`icalendar` +
+  `recurring-ical-events` for correct RRULE expansion).
+- **Writes, later**: `calendar.create_event` needs real OAuth (GCP project,
+  consent screen, refresh token). Deliberately not built — writes are
+  confirm-gated and wait for the Phase 1 soak anyway, and the OAuth
+  ceremony deserves its own session when that gate opens.
 
-Rollout honors the soak gate: `calendar.list_events` (read) can go live
-early; `calendar.create_event` (write, confirm-gated) waits until Phase 1
-has its weeks of quiet running and the token hygiene is done.
+Implemented against this design (2026-08-25): registry + validator,
+`kernel.run_tool`, the Google adapter, and the `calendar.list` skill/intent
+— 23 new tests, including the shipped config passing its own validator.
 
 ## Explicitly out of scope for this design
 

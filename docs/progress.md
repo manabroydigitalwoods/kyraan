@@ -7,10 +7,12 @@ day-to-day commits speak for themselves in `git log`.
 
 ## Where we are
 
-**Phase 0 (Foundations) and Phase 1 (Core Brain) are complete** — built,
+**Phase 0 and Phase 1 are complete; Phase 2 (Tool Integrations) has begun** — built,
 iterated, and live-verified on 2026-08-25, including the first real
 end-to-end Telegram session and the full memory loop (extraction →
-human review → recall) the same day. Phases 2–5 are not started.
+human review → recall) the same day. Phase 2's tool
+registry is designed (docs/design/tool_registry.md), built, and carrying
+its first tool — read-only Google Calendar. Phases 3–5 are not started.
 
 ## Goal, restated
 
@@ -115,7 +117,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 69 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 92 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
 math, orchestrator error handling (including a pin on the qa.answer
@@ -243,8 +245,12 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
-- No RAG, relationship graph, agent router, tool registry, reflection loop,
-  or curiosity queue — all Phase 2+, not started
+- Calendar is read-only until the Phase 1 soak passes: writes need Google
+  OAuth and confirm-gating, deliberately deferred (design doc has the plan)
+- `calendar.list` is untested against a real Google ICS feed until
+  `GOOGLE_CALENDAR_ICS_URL` is set in `.env` (owner setup, see design doc)
+- No RAG, relationship graph, agent router, reflection loop, or curiosity
+  queue — Phase 3+, not started
 - Intent classification prefers Groq but degrades automatically to the
   local cheap tier on a provider failure (measured 12-13/14 there) —
   the single-point dependency is closed

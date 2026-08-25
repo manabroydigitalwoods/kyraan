@@ -352,3 +352,49 @@ async def test_budget_alert_note_appended_once(monkeypatch):
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="hello there")
     assert "⚠️" in result and "$4.20" in result and "$5.00" in result
+
+
+async def test_calendar_intent_formats_events_from_the_tool(monkeypatch):
+    _mock_normalize(monkeypatch, "calendar.list", "what's on my calendar today")
+    monkeypatch.setattr(
+        orchestrator.router,
+        "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"start_iso": "2026-08-25T00:00:00+05:30", "end_iso": "2026-08-25T23:59:59+05:30", "label": "today"}'
+        ),
+    )
+
+    async def fake_run_tool(call, **kwargs):
+        assert call.tool_name == "calendar.list_events"
+        assert call.args == {"start": "2026-08-25T00:00:00+05:30", "end": "2026-08-25T23:59:59+05:30"}
+        return [
+            {"title": "Standup", "start": "2026-08-25T09:30:00+05:30", "end": "2026-08-25T09:45:00+05:30", "all_day": False, "location": None},
+            {"title": "Holiday", "start": "2026-08-25T00:00:00+05:30", "end": "2026-08-26T00:00:00+05:30", "all_day": True, "location": None},
+        ]
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="what's on my calendar today")
+    assert "Calendar today:" in result
+    assert "09:30 — Standup" in result
+    assert "all day — Holiday" in result
+
+
+async def test_calendar_tool_failure_surfaces_honestly(monkeypatch):
+    _mock_normalize(monkeypatch, "calendar.list", "what's on my calendar today")
+    monkeypatch.setattr(
+        orchestrator.router,
+        "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"start_iso": "2026-08-25T00:00:00+05:30", "end_iso": "2026-08-25T23:59:59+05:30", "label": "today"}'
+        ),
+    )
+
+    async def failing_run_tool(call, **kwargs):
+        raise orchestrator.kernel.ToolFailed("calendar.list_events failed: GOOGLE_CALENDAR_ICS_URL is not set")
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", failing_run_tool)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="what's on my calendar today")
+    assert "Couldn't check the calendar" in result
+    assert "GOOGLE_CALENDAR_ICS_URL" in result

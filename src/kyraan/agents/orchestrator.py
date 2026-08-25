@@ -16,6 +16,12 @@ from kyraan.memory import store as memory_store
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
 
+_EXTRACT_WINDOW_SYSTEM = """The user is asking what's on their calendar.
+The current date/time is {now} (includes a UTC offset). Work out the time
+window they mean — default to the rest of today if unclear; "tomorrow" is
+that full day; "this week" runs to Sunday night. Respond with ONLY JSON:
+{{"start_iso": "<ISO 8601 datetime with the same UTC offset>", "end_iso": "<ISO 8601 datetime with the same UTC offset>", "label": "<short human name for the window, e.g. 'today', 'tomorrow'>"}}"""
+
 _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
 The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
 {{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
@@ -33,6 +39,9 @@ specifics like time remaining. Kyraan genuinely can set reminders,
 including short-delay ones — never claim that capability doesn't exist; if
 a message looks like a reminder request that landed here by mistake, ask
 the user to rephrase it as a clear reminder instead of denying you can do it.
+Kyraan can also read the owner's Google Calendar — never deny that either;
+if a calendar question lands here by mistake, suggest phrasing it like
+"what's on my calendar today".
 
 Known facts, from human-reviewed memory — treat these as true, and never
 invent personal facts that aren't listed here or in the conversation below.
@@ -158,6 +167,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _list_reminders(chat_id)
         if parsed.intent == "reminders.cancel":
             return await _cancel_reminder(chat_id, parsed.normalized_text)
+        if parsed.intent == "calendar.list":
+            return await _list_calendar(chat_id, parsed.normalized_text)
         # qa.answer, and anything the classifier couldn't place ("unknown"
         # with reasonable confidence) both fall through here — Phase 1's
         # taxonomy only has one truly distinct path (reminders), so
@@ -266,6 +277,39 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
         return f"Cancelled reminder: \"{match.text}\""
 
     return await _gated(chat_id, SkillCall("reminders.cancel", {"text": text}), handler)
+
+
+async def _list_calendar(chat_id: int, text: str) -> str:
+    async def handler(args: dict) -> str:
+        window = router.call(
+            prompt=args["text"],
+            system=_EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()),
+            tier="cheap",
+        )
+        try:
+            data = json.loads(router.strip_code_fence(window.text))
+            start, end = data["start_iso"], data["end_iso"]
+            label = data.get("label") or "that period"
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            log_event("calendar_window_extraction_failed", text=args["text"], raw=window.text, error=str(exc))
+            return "I couldn't work out which period you mean — try e.g. \"what's on my calendar tomorrow?\""
+
+        try:
+            events = await kernel.run_tool(kernel.ToolCall("calendar.list_events", {"start": start, "end": end}))
+        except kernel.ToolFailed as exc:
+            # on_failure: surface — the message is written to be shown.
+            return f"Couldn't check the calendar: {exc}"
+
+        if not events:
+            return f"Nothing on the calendar {label}."
+        lines = []
+        for e in events:
+            when = "all day" if e["all_day"] else e["start"][11:16]
+            where = f" ({e['location']})" if e.get("location") else ""
+            lines.append(f"- {when} — {e['title']}{where}")
+        return f"Calendar {label}:\n" + "\n".join(lines)
+
+    return await _gated(chat_id, SkillCall("calendar.list", {"text": text}), handler)
 
 
 async def _answer(chat_id: int, text: str) -> str:

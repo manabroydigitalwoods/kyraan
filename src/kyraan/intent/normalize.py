@@ -11,6 +11,7 @@ KNOWN_INTENTS = [
     "reminders.create",
     "reminders.list",
     "reminders.cancel",
+    "calendar.list",
     "qa.answer",
     "unknown",
 ]
@@ -29,6 +30,11 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   set?", "do i have reminder?".
 - reminders.cancel: removing an existing reminder. E.g. "cancel my reminder",
   "delete that reminder".
+- calendar.list: asking what's on the user's calendar/schedule for some period.
+  E.g. "what's on my calendar today", "any meetings tomorrow?", "am I free
+  Friday afternoon?", "what does my week look like". Reminders are Kyraan's
+  own; the calendar is external — "do I have reminders" is reminders.list,
+  "do I have meetings" is calendar.list.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. This should be the common case for
   ordinary chat, not a rare fallback.
