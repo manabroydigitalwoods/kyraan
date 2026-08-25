@@ -62,8 +62,11 @@ def test_rate_limited_provider_enters_cooldown(monkeypatch):
         router.call(prompt="x", tier="frontier")
     assert len(attempts) == 1  # zero new HTTP attempts during cooldown
 
-    # cooldown expiry re-enables the provider
-    router._cooldown_until["groq"] = 0.0
+    # cooldown expiry re-enables the provider — whichever one the frontier
+    # tier currently names (was hardcoded "groq"; broke when the tier moved
+    # to openai).
+    frontier_provider = config.load()["model_tiers"]["frontier"]["provider"]
+    router._cooldown_until[frontier_provider] = 0.0
     with pytest.raises(router.ModelProviderError, match="failed after"):
         router.call(prompt="x", tier="frontier")
     assert len(attempts) == 2

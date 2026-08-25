@@ -290,6 +290,11 @@ def _call_openai_compatible(
         # fence-stripping / truncated-JSON / prose-wrapped-JSON bug family
         # at its source (the parse guards remain as belt-and-braces).
         kwargs["response_format"] = {"type": "json_object"}
+    # Provider-declared extras (config: providers.<name>.extra_params) —
+    # e.g. OpenAI's gpt-5 family needs reasoning_effort dialed down or its
+    # hidden reasoning eats the max_completion_tokens budget and truncates
+    # the visible JSON (the same failure family as Groq's reasoning models).
+    kwargs.update(provider_cfg.get("extra_params") or {})
     response = _get_openai_compatible_client(provider, provider_cfg).chat.completions.create(
         model=model,
         messages=messages,
