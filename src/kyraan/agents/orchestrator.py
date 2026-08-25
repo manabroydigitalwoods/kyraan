@@ -16,10 +16,13 @@ _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
 The current date/time is {now} (includes a UTC offset). Respond with ONLY JSON:
 {{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
 
-_ANSWER_SYSTEM = """You are Kyraan, a personal assistant. Be direct and concise —
-match reply length to the question. A greeting gets a short, friendly reply,
-not a lecture about your own capabilities or limitations. Skip disclaimers,
-meta-commentary about being an AI, and unsolicited lists of what you can do."""
+_ANSWER_SYSTEM = """You are Kyraan, a personal assistant. The current date/time
+is {now}. Be direct and concise — match reply length to the question. A
+greeting gets a short, friendly reply, not a lecture about your own
+capabilities or limitations. If asked who or what you are, say so plainly
+("I'm Kyraan, a personal assistant") rather than deflecting with a generic
+"how can I help". Skip disclaimers, meta-commentary about being an AI, and
+unsolicited lists of what you can do."""
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
@@ -42,9 +45,17 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             return await _list_reminders(chat_id)
         if parsed.intent == "reminders.cancel":
             return await _cancel_reminder(chat_id, parsed.normalized_text)
-        if parsed.intent == "qa.answer":
-            return await _answer(parsed.normalized_text)
-        return "I didn't recognize a supported command yet — Phase 1 only handles reminders and Q&A."
+        # qa.answer, and anything the classifier couldn't place ("unknown"
+        # with reasonable confidence) both fall through here — Phase 1's
+        # taxonomy only has one truly distinct path (reminders), so
+        # "everything else" should get a best-effort answer rather than a
+        # dead-end "I didn't recognize a command" that reads like a broken
+        # command parser for what's usually just an ordinary question. Use
+        # the model's typo-corrected text for a real qa.answer, but the
+        # raw text for "unknown" — normalized_text isn't trustworthy there
+        # since the model itself gave up on classifying it.
+        text_for_answer = raw_text if parsed.intent == "unknown" else parsed.normalized_text
+        return await _answer(text_for_answer)
     except ConfirmationRequired as exc:
         return f"'{exc.skill_name}' needs your confirmation first — this shouldn't happen for auto-permission skills, check config/permissions.yaml."
     except KillSwitchEngaged:
@@ -95,7 +106,9 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _answer(text: str) -> str:
     async def handler(args: dict) -> str:
-        response = router.call_with_escalation(prompt=args["text"], system=_ANSWER_SYSTEM)
+        response = router.call_with_escalation(
+            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat())
+        )
         return response.text
 
     return await kernel.run_skill(SkillCall("qa.answer", {"text": text}), handler)
