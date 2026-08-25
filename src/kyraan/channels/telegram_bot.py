@@ -80,8 +80,10 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # burst. Requires concurrent_updates so later fragments can join the
 # buffer while the window is open; a per-chat lock keeps actual
 # processing strictly serialized.
-_BURST_WINDOW_S = 1.5
-_BURST_MAX_WAIT_S = 6.0
+_BURST_WINDOW_S = 2.5           # typing a follow-up message takes 2-5s
+_BURST_MAX_WAIT_S = 8.0
+_FRAGMENT_EXTRA_WAIT_S = 10.0   # a bare time-phrase almost certainly has
+                                # more coming — wait patiently for it
 _burst_buffers: dict = {}
 _burst_flushing: set = set()
 _chat_locks: dict = {}
@@ -111,6 +113,23 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             waited += _BURST_WINDOW_S
             if len(_burst_buffers[chat_id]) == seen:
                 break  # window went quiet — the thought is complete
+        # A time-fragment ("tomorrow morning") is a thought's opening —
+        # extend the window so the rest of the thought can merge instead
+        # of the fragment being answered alone.
+        combined_so_far = "\n".join(t for _, t in _burst_buffers.get(chat_id, []) if t)
+        if orchestrator.is_time_fragment(combined_so_far):
+            extra = 0.0
+            while extra < _FRAGMENT_EXTRA_WAIT_S:
+                seen = len(_burst_buffers[chat_id])
+                await asyncio.sleep(_BURST_WINDOW_S)
+                extra += _BURST_WINDOW_S
+                if len(_burst_buffers[chat_id]) != seen:
+                    # more arrived — restart quiet-window detection
+                    extra = 0.0
+                    continue
+                combined_now = "\n".join(t for _, t in _burst_buffers[chat_id] if t)
+                if not orchestrator.is_time_fragment(combined_now):
+                    break
         fragments = _burst_buffers.pop(chat_id, [])
     finally:
         _burst_flushing.discard(chat_id)

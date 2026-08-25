@@ -122,6 +122,30 @@ _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_red
 _skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extraction", default=False)
 
 
+# Words that make up bare time-phrases ("tomorrow morning", "at 9",
+# "tonight after dinner"). A message consisting ONLY of these is a
+# fragment starting a thought — detected deterministically, because the
+# classifier was seen turning "tomorrow morning" into a literal reminder
+# named "tomorrow morning" at 6 AM.
+_TIME_WORDS = {
+    "tomorrow", "today", "tonight", "yesterday", "morning", "evening",
+    "afternoon", "noon", "night", "midnight", "next", "this", "week",
+    "month", "at", "on", "in", "am", "pm", "o'clock", "oclock", "after",
+    "before", "around", "lunch", "dinner", "breakfast", "early", "late",
+    "the", "monday", "tuesday", "wednesday", "thursday", "friday",
+    "saturday", "sunday",
+}
+
+
+def is_time_fragment(text: str) -> bool:
+    words = [w.strip(".,!?…") for w in text.lower().split()]
+    words = [w for w in words if w]
+    if not words:
+        return False
+    return all(w in _TIME_WORDS or w.replace(":", "").replace("am", "").replace("pm", "").isdigit()
+               for w in words)
+
+
 _CLOCK_RE = None
 
 
@@ -235,6 +259,12 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
 
 async def _dispatch(chat_id: int, raw_text: str) -> str:
     try:
+        # Deterministic fragment patience — no model consulted: a bare
+        # time-phrase can't be a complete request, and the classifier was
+        # seen inventing a reminder out of one.
+        if is_time_fragment(raw_text) and chat_id not in _pending_confirmations:
+            _skip_extraction.set(True)
+            return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)
         if pending:
             call, handler, stashed_at = pending
@@ -396,6 +426,10 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         extracted = _structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
+            if is_time_fragment(str(data.get("text", ""))):
+                # A reminder whose TEXT is itself just a time phrase is a
+                # broken extraction ("tomorrow morning" at 6 AM, seen live).
+                return "Remind you about what? Tell me the task and I'll set it."
             data["when_iso"] = _anchor_clock_time(text, data["when_iso"])
             existing = scheduler.find_duplicate(chat_id, data["text"], data["when_iso"])
             if existing:

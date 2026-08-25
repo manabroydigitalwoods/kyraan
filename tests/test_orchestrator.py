@@ -1038,3 +1038,37 @@ async def test_incomplete_fragment_waits_instead_of_answering(monkeypatch):
     assert "listening" in result.lower()
     assert calls == []  # extraction skipped too
     assert "user: tomorrow morning" in orchestrator._history_block(0)  # kept for the follow-up
+
+
+async def test_bare_time_phrase_is_deterministically_patient(monkeypatch):
+    """'tomorrow morning' became a literal reminder named 'tomorrow
+    morning' at 6 AM — the classifier can't be trusted with fragments, so
+    detection is deterministic and no model is consulted at all."""
+    def explode(**kwargs):
+        raise AssertionError("no model call for a time fragment")
+
+    monkeypatch.setattr(orchestrator.router, "call", explode)
+    monkeypatch.setattr(orchestrator, "normalize", explode)
+    for fragment in ("tomorrow morning", "at 9", "tonight after dinner", "next week"):
+        result = await orchestrator.handle_message(chat_id=0, raw_text=fragment)
+        assert "listening" in result.lower()
+
+
+def test_time_fragment_detector_boundaries():
+    assert orchestrator.is_time_fragment("tomorrow morning")
+    assert orchestrator.is_time_fragment("at 9 pm")
+    assert not orchestrator.is_time_fragment("remind me at 9")
+    assert not orchestrator.is_time_fragment("call the plumber tomorrow")
+    assert not orchestrator.is_time_fragment("what time is it")
+
+
+async def test_reminder_with_time_phrase_text_asks_for_the_task(monkeypatch, isolated_store):
+    _mock_normalize(monkeypatch, "reminders.create", "remind me tomorrow morning at 6am please do it")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(text='{"text": "tomorrow morning", "when_iso": "2099-01-01T06:00:00+00:00"}'),
+    )
+    orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="remind me tomorrow morning at 6am please do it")
+    assert "Remind you about what" in result
+    assert orchestrator.scheduler.store.list_pending(0) == []
