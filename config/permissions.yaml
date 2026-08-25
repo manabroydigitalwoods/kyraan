@@ -85,18 +85,16 @@ model_tiers:
     provider: ollama
     model: llama3.1:8b
   frontier:
-    provider: openai          # switched 2026-08-26: Groq's free 200k TPD ran
-    model: gpt-5.4-mini       # dry nightly and the local 8B fallback did the
-                              # thinking — every hallucination traced there.
-                              # gpt-5.4-mini is a real frontier-class model
-                              # at cents/day for Kyraan's volume; the $5/day
-                              # budget guard + cost ledger meter it. Groq
-                              # stays configured above as a free fallback.
-                              # (gpt-5-mini exists but is gated behind org
-                              # verification — 5.4-mini is newer and open.)
-    pricing:                  # per developers.openai.com/api/docs/pricing
-      input_per_million: 0.75
-      output_per_million: 4.50
+    provider: groq            # back to free 2026-08-26 (owner's call: the
+    model: openai/gpt-oss-120b  # paid OpenAI seat worked beautifully but
+                              # isn't in budget). The proven-working paid
+                              # alternative, one edit away whenever wanted:
+                              #   provider: openai
+                              #   model: gpt-5.4-mini   # ~$0.50/day here
+                              #   pricing: {input_per_million: 0.75, output_per_million: 4.50}
+                              # (gpt-5-mini is org-verification-gated; the
+                              # openai provider above keeps reasoning_effort
+                              # low so JSON never truncates.)
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.

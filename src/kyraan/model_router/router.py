@@ -308,7 +308,17 @@ def _call_openai_compatible(
     # "Reasoning" models (Groq's, OpenRouter's free tier, OpenAI's gpt-5
     # family) put hidden chain-of-thought here, separate from .content.
     reasoning = getattr(response.choices[0].message, "reasoning", None)
-    return _RawResult(text=response.choices[0].message.content or "", usage=usage, reasoning=reasoning)
+    text = response.choices[0].message.content or ""
+    if "<think>" in text:
+        # Thinking models served over a plain OpenAI-compatible endpoint
+        # (Qwen3 via Ollama) inline their reasoning as <think>...</think>
+        # BEFORE the answer instead of using a separate field — split it
+        # out so force_json parsing sees only the actual answer.
+        import re
+        thought = "\n".join(re.findall(r"<think>(.*?)</think>", text, re.S)).strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        reasoning = reasoning or (thought or None)
+    return _RawResult(text=text, usage=usage, reasoning=reasoning)
 
 
 def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int,
