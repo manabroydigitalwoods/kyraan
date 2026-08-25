@@ -41,7 +41,7 @@ work/woodsportal.md). Empty: {{"facts": []}}"""
 _MAX_FACTS_PER_MESSAGE = 3
 
 
-async def propose_from_message(raw_text: str) -> list[str]:
+async def propose_from_message(raw_text: str, context: str = "") -> list[str]:
     """Extract stated facts from one message and queue them for human
     review. Returns the queued facts' content lines ([] when none), so the
     caller can tell the user what was noted."""
@@ -60,6 +60,18 @@ async def propose_from_message(raw_text: str) -> list[str]:
 
     async def handler(args: dict) -> list[str]:
         system = _EXTRACT_FACTS_SYSTEM.format(now=local_now().isoformat())
+        if context:
+            # Referent resolution: "His name is Deven" right after a
+            # question about the user's father must become a SELF-CONTAINED
+            # "- Father's name is Deven Roy" — the conversation supplies
+            # the referent; facts are still extracted ONLY from the
+            # current message. (Live: a terse "His name is biren roy"
+            # reached the queue unable to say who Deven even was.)
+            system += (
+                "\n\nRecent conversation — use it ONLY to resolve referents"
+                " ('his', 'her', 'that') so each fact is self-contained;"
+                " extract facts solely from the CURRENT message:\n" + context
+            )
         # Frontier-first for extraction quality (terse/fabricated facts
         # were the local 8B's signature); local fallback keeps memory
         # working when the cloud tier is exhausted — same pattern as the
@@ -79,6 +91,9 @@ async def propose_from_message(raw_text: str) -> list[str]:
             return []
 
         message_words = {w.strip(".,!?'\"").lower() for w in args["text"].split() if len(w) > 3}
+        # Context words are legitimate fact material too (the referent —
+        # "father" — comes from the previous turn, not the message).
+        message_words |= {w.strip(".,!?'\"").lower() for w in context.split() if len(w) > 3}
         known = store.known_fact_lines()
         queued = []
         for fact in facts[:_MAX_FACTS_PER_MESSAGE]:

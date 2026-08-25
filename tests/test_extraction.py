@@ -172,3 +172,27 @@ async def test_pending_proposals_also_count_as_known(monkeypatch, isolated_memor
     second = await extraction.propose_from_message("my favourite tea is masala chai")
     assert first and second == []
     assert len(list(isolated_memory.glob("*.md"))) == 1
+
+
+async def test_context_resolves_referents_into_self_contained_facts(monkeypatch, isolated_memory):
+    """'His name is biren roy' after a father question reached the queue
+    unable to say who Deven was. With conversation context, the extractor
+    produces a self-contained fact — and the fabrication guard accepts
+    'Father' because the referent word comes from the context."""
+    _mock_model(monkeypatch, '{"facts": [{"path": "people/father.md", "content": "- Father\'s name is Deven Roy"}]}')
+
+    queued = await extraction.propose_from_message(
+        "His name is biren roy",
+        context="user: Do you know my father?\nassistant: I don't know it yet.",
+    )
+    assert queued == ["- Father's name is Deven Roy"]
+
+
+async def test_fabrication_guard_holds_even_with_context(monkeypatch, isolated_memory):
+    _mock_model(monkeypatch, '{"facts": [{"path": "people/anupam.md", "content": "- Name is Anupam"}]}')
+
+    queued = await extraction.propose_from_message(
+        "make it 4 lines",
+        context="user: write 2 lines about tea\nassistant: Tea is lovely...",
+    )
+    assert queued == []  # Anupam appears in neither message nor context

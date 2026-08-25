@@ -192,14 +192,14 @@ def _structured_call(prompt: str, system: str):
         return router.call(prompt=prompt, system=system, tier="cheap")
 
 
-async def _extraction_note(raw_text: str) -> str:
+async def _extraction_note(chat_id: int, raw_text: str) -> str:
     """Run fact extraction and return a reply suffix naming what was queued
     ("" when nothing was). Extraction is best-effort: it must never break
     or replace the actual reply, so every failure is logged and swallowed."""
     if len(raw_text.strip()) < _EXTRACTION_MIN_CHARS:
         return ""
     try:
-        queued = await extraction.propose_from_message(raw_text)
+        queued = await extraction.propose_from_message(raw_text, context=_classifier_context(chat_id))
     except Exception as exc:
         log_event("extraction_error", error=str(exc), error_type=type(exc).__name__)
         return ""
@@ -214,7 +214,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
     if not _skip_extraction.get():
-        reply += await _extraction_note(raw_text)
+        reply += await _extraction_note(chat_id, raw_text)
     _skip_extraction.reset(skip_token)
     quota_warning = router.quota_alert_due()
     if quota_warning:

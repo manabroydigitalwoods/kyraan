@@ -128,7 +128,7 @@ def _no_real_extraction(monkeypatch):
     real model call. Neutralize it by default so every pre-existing test
     stays hermetic; extraction-specific tests override this seam."""
 
-    async def fake_propose(raw_text):
+    async def fake_propose(raw_text, context=""):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
@@ -249,7 +249,7 @@ async def test_reply_gets_a_noted_for_review_line_when_a_fact_is_queued(monkeypa
     _mock_normalize(monkeypatch, "qa.answer")
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Nice!"))
 
-    async def fake_propose(raw_text):
+    async def fake_propose(raw_text, context=""):
         return ["- Wife's name is Mira"]
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
@@ -263,7 +263,7 @@ async def test_extraction_failure_never_breaks_the_reply(monkeypatch):
     _mock_normalize(monkeypatch, "qa.answer")
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Nice!"))
 
-    async def broken_propose(raw_text):
+    async def broken_propose(raw_text, context=""):
         raise RuntimeError("extraction blew up")
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", broken_propose)
@@ -277,7 +277,7 @@ async def test_short_messages_skip_extraction_entirely(monkeypatch):
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Hey!"))
     calls = []
 
-    async def counting_propose(raw_text):
+    async def counting_propose(raw_text, context=""):
         calls.append(raw_text)
         return []
 
@@ -881,7 +881,7 @@ async def test_low_confidence_messages_skip_extraction(monkeypatch):
     monkeypatch.setattr(orchestrator, "normalize", unsure)
     calls = []
 
-    async def counting(raw_text):
+    async def counting(raw_text, context=""):
         calls.append(1)
         return []
 
