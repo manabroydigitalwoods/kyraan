@@ -1005,3 +1005,12 @@ async def test_pending_facts_reach_the_qa_prompt(monkeypatch):
     await orchestrator.handle_message(chat_id=0, raw_text="who is biren?")
     assert "- His name is biren roy" in captured["system"]
     assert "awaiting the" in captured["system"]  # honest framing instruction
+
+
+async def test_control_intent_without_a_device_answers_conversationally(monkeypatch):
+    """Seen live twice: 'let me fix you' misrouted to home.control and got
+    'Should the AC go on or off?'. No device mention = no switch talk."""
+    _mock_normalize(monkeypatch, "home.control", "let me fix you")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Tell me what's wrong and I'll improve."))
+    result = await orchestrator.handle_message(chat_id=0, raw_text="let me fix you")
+    assert "AC" not in result and "improve" in result

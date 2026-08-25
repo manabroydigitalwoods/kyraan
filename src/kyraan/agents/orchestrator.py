@@ -666,6 +666,12 @@ async def _home_query(chat_id: int, text: str) -> str:
 
 
 async def _home_control(chat_id: int, text: str) -> str:
+    # A control intent without any device mention is a misroute — seen
+    # live: "let me fix you" became "Should the AC go on or off?". No
+    # device word, no switch talk: answer conversationally instead.
+    device_words = {"ac", "plug", "switch", "socket", "appliance"}
+    if not (device_words & {w.strip(".,!?") for w in text.lower().split()}):
+        return await _answer(chat_id, text)
     # Direction is decided deterministically from the normalized text —
     # a physical switch must never flip on a model's guess. "off" checked
     # first: "turn off" contains no "on", but "on" appears inside many
@@ -730,6 +736,17 @@ async def _answer(chat_id: int, text: str) -> str:
             if tier == "cheap":
                 raise
             log_event("qa_fallback_cheap", error=str(exc))
+            # Degraded-mode self-awareness — live transcript: the user said
+            # "you are confused / randomly answering" while the fallback
+            # model spiraled, and Kyraan never admitted its state.
+            system += (
+                "\n\nIMPORTANT: you are currently running on the smaller "
+                "LOCAL backup model because the main model is rate-limited. "
+                "Keep replies short and factual. If the user says you seem "
+                "confused, wrong, or repetitive, tell them honestly: the main "
+                "model is temporarily rate-limited and reply quality is "
+                "reduced for a few minutes — don't argue or deflect."
+            )
             response = router.call(prompt=args["text"], system=system, tier="cheap")
         return response.text
 

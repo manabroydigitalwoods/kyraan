@@ -56,7 +56,9 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   using?", "what's the bedroom temperature?", "how humid is it inside?".
 - home.control: switching a smart device. E.g. "turn off the AC", "switch
   the AC on", "AC off please". Only for device switching — "remind me to
-  turn off the AC" is reminders.create.
+  turn off the AC" is reminders.create, and complaints or meta-talk about
+  Kyraan itself ("you are confused", "let me fix you", "your answers are
+  wrong") are qa.answer, never device control.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. Asking the current TIME ("what time
   is it", "wat tym is it") is qa.answer — the clock, never calendar.list. This should be the common case for
