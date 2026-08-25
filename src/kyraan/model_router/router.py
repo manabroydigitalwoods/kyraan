@@ -51,6 +51,12 @@ def _get_openai_compatible_client(provider: str):
     return _openai_compatible_clients[provider]
 
 
+class ModelProviderError(Exception):
+    """Wraps any provider SDK error (rate limit, outage, bad key, ...) into
+    one type so callers can distinguish "the provider failed" from "the
+    model responded but wasn't confident/parseable"."""
+
+
 @dataclass
 class RoutedResponse:
     text: str
@@ -100,7 +106,11 @@ def call(
     model = tier_cfg["model"]
     provider = tier_cfg.get("provider", "anthropic")
 
-    text = _dispatch(provider, model, prompt, system, max_tokens)
+    try:
+        text = _dispatch(provider, model, prompt, system, max_tokens)
+    except Exception as exc:
+        log_event("model_call_error", tier=tier, provider=provider, model=model, error=str(exc))
+        raise ModelProviderError(f"{provider}/{model} failed: {exc}") from exc
 
     log_event("model_call", tier=tier, provider=provider, model=model, prompt_chars=len(prompt))
     return RoutedResponse(text=text, tier_used=tier, model=model)

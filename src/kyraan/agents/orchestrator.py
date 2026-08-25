@@ -19,12 +19,12 @@ The current date/time is {now}. Respond with ONLY JSON:
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
-    parsed = normalize(raw_text)
-
-    if parsed.confidence < 0.4:
-        return "I'm not confident I understood that — could you rephrase?"
-
     try:
+        parsed = normalize(raw_text)
+
+        if parsed.confidence < 0.4:
+            return "I'm not confident I understood that — could you rephrase?"
+
         if parsed.intent == "reminders.create":
             return await _create_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "reminders.list":
@@ -38,6 +38,8 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         return f"'{exc.skill_name}' needs your confirmation first — this shouldn't happen for auto-permission skills, check config/permissions.yaml."
     except KillSwitchEngaged:
         return "The kill switch is engaged — no autonomous action will run until it's disengaged."
+    except router.ModelProviderError as exc:
+        return f"The model provider failed, not a misunderstanding on my part: {exc}"
 
 
 async def _create_reminder(chat_id: int, text: str) -> str:
