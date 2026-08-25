@@ -19,7 +19,9 @@ _EXTRACT_FACTS_SYSTEM = """You extract durable personal facts from one user mess
 The current date/time is {now}.
 Extract ONLY what the user explicitly states about themselves, their family,
 their work, their routines, or their preferences. Never infer. Never extract
-from questions, requests, or commands (a reminder request is not a fact).
+from questions, requests, or commands — "who is Mira?" or "what time does
+school start?" state nothing and must return an empty list (a reminder
+request is not a fact either).
 Never extract temporary states ("I'm tired"), one-off plans, or anything not
 worth knowing months from now. State any dates absolutely, never as
 "tomorrow"/"next week". Each fact must be self-contained and understandable
@@ -40,6 +42,12 @@ async def propose_from_message(raw_text: str) -> list[str]:
     """Extract stated facts from one message and queue them for human
     review. Returns the queued facts' content lines ([] when none), so the
     caller can tell the user what was noted."""
+    # A question states nothing — enforced in code, not just in the prompt,
+    # because the model was seen proposing a "fact" from "who is ruma?"
+    # live despite the instruction. Conservative by design: skipping a rare
+    # fact-inside-a-question costs little; polluting review costs trust.
+    if raw_text.rstrip().endswith("?"):
+        return []
 
     async def handler(args: dict) -> list[str]:
         response = router.call(

@@ -45,6 +45,29 @@ def _record_cost(cost_usd: float) -> None:
     COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
     COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
+
+def budget_alert_due() -> bool:
+    """True exactly once per day, the first time today's spend crosses
+    cost_monitor.alert_threshold_pct of the daily budget — the caller
+    surfaces the warning to the user. Alerted-dates live in the ledger
+    file so a restart doesn't re-alert."""
+    budget = daily_budget_usd()
+    if budget <= 0:
+        return False
+    spent = today_cost_usd()
+    if (spent / budget) * 100 < budget_alert_threshold_pct():
+        return False
+    ledger = _read_ledger()
+    key = local_now().date().isoformat()
+    alerted = ledger.get("alerted_dates", [])
+    if key in alerted:
+        return False
+    ledger["alerted_dates"] = alerted + [key]
+    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+    log_event("budget_alert", spent_today=spent, budget=budget)
+    return True
+
 _anthropic_client = None
 _gemini_client = None
 _openai_compatible_clients: dict[str, object] = {}

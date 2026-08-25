@@ -99,6 +99,12 @@ async def _extraction_note(raw_text: str) -> str:
 async def handle_message(chat_id: int, raw_text: str) -> str:
     reply = await _dispatch(chat_id, raw_text)
     reply += await _extraction_note(raw_text)
+    if router.budget_alert_due():
+        reply += (
+            f"\n\n⚠️ Model spend today is ${router.today_cost_usd():.2f} — past "
+            f"{router.budget_alert_threshold_pct():.0f}% of the ${router.daily_budget_usd():.2f} "
+            "daily budget. Calls stop at the cap."
+        )
     _history[chat_id].append(("user", raw_text))
     _history[chat_id].append(("assistant", reply))
     return reply
@@ -133,7 +139,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # fast call even on the bigger model — there's no real cost to
         # always using it here, so this isn't a cheap-first-then-escalate
         # dance anymore, just the reliable tier directly.
-        parsed = normalize(raw_text, tier="frontier")
+        try:
+            parsed = normalize(raw_text, tier="frontier")
+        except router.ModelProviderError as exc:
+            # Frontier (Groq) is classification's single cloud dependency —
+            # if it's down or rate-limited, degrade to the local cheap tier
+            # (measured at 12-13/14 on the same test set) instead of
+            # refusing to understand anything at all.
+            log_event("intent_fallback_cheap", error=str(exc))
+            parsed = normalize(raw_text, tier="cheap")
 
         if parsed.confidence < 0.4:
             return "I'm not confident I understood that — could you rephrase?"

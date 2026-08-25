@@ -321,3 +321,34 @@ async def test_history_is_per_chat_and_rolls_over(monkeypatch):
     assert "message number 0" not in block  # rolled out
     assert "message number 14" in block
     assert orchestrator._history_block(2) == "(no conversation yet)"  # other chats unaffected
+
+
+async def test_intent_classification_falls_back_to_cheap_when_frontier_is_down(monkeypatch):
+    """Classification single-points on Groq; a provider outage must degrade
+    to the local cheap tier, not refuse to understand anything."""
+    tiers_called = []
+
+    def fake_normalize(raw_text, tier="cheap"):
+        tiers_called.append(tier)
+        if tier == "frontier":
+            raise orchestrator.router.ModelProviderError("groq is down")
+        return NormalizedIntent(intent="qa.answer", confidence=1.0, normalized_text=raw_text)
+
+    monkeypatch.setattr(orchestrator, "normalize", fake_normalize)
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="hi!"))
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="hello there")
+    assert result == "hi!"
+    assert tiers_called == ["frontier", "cheap"]
+
+
+async def test_budget_alert_note_appended_once(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="ok"))
+    monkeypatch.setattr(orchestrator.router, "budget_alert_due", lambda: True)
+    monkeypatch.setattr(orchestrator.router, "today_cost_usd", lambda: 4.20)
+    monkeypatch.setattr(orchestrator.router, "budget_alert_threshold_pct", lambda: 80.0)
+    monkeypatch.setattr(orchestrator.router, "daily_budget_usd", lambda: 5.00)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="hello there")
+    assert "⚠️" in result and "$4.20" in result and "$5.00" in result

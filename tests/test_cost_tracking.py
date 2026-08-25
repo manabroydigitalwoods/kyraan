@@ -49,3 +49,18 @@ def test_free_calls_never_touch_the_ledger(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")
     router._record_cost(0.0)
     assert not (tmp_path / "cost_ledger.json").exists()
+
+
+def test_budget_alert_fires_once_per_day_at_threshold(monkeypatch, tmp_path):
+    monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")
+    monkeypatch.setattr(router, "daily_budget_usd", lambda: 1.00)
+    monkeypatch.setattr(router, "budget_alert_threshold_pct", lambda: 80.0)
+
+    router._record_cost(0.50)
+    assert router.budget_alert_due() is False  # 50% — below threshold
+
+    router._record_cost(0.35)
+    assert router.budget_alert_due() is True   # 85% — first crossing alerts
+    assert router.budget_alert_due() is False  # same day: never twice
+    # "restart" (fresh reads) must not re-alert either — the marker is in the file
+    assert router.budget_alert_due() is False

@@ -102,3 +102,15 @@ def test_load_all_facts_reads_live_tree_only(isolated_memory):
     assert "Name: Arun Verma" in facts
     assert "unreviewed" not in facts  # pending proposals are not live facts
     proposal.unlink()
+
+
+async def test_questions_never_reach_the_extraction_model(monkeypatch, isolated_memory):
+    """Seen live: "who is ruma?" produced a proposal despite the prompt's
+    never-extract-from-questions rule. Enforced in code now — a trailing
+    question mark skips extraction entirely (no model call at all)."""
+    def explode(**kwargs):
+        raise AssertionError("model should not be called for a question")
+
+    monkeypatch.setattr(router, "call", explode)
+    assert await extraction.propose_from_message("who is ruma?") == []
+    assert list(isolated_memory.glob("*")) == []
