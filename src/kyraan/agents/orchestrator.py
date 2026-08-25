@@ -248,7 +248,12 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
     except KillSwitchEngaged:
         return "The kill switch is engaged — no autonomous action will run until it's disengaged."
     except router.ModelProviderError as exc:
-        return f"The model provider failed, not a misunderstanding on my part: {exc}"
+        # Full detail (org ids, billing links) belongs in the log, not the
+        # chat — seen live: a Groq 429 dumped its entire raw error into
+        # Telegram.
+        log_event("model_provider_error", error=str(exc))
+        hint = " (rate limit — it resets on a rolling window)" if "429" in str(exc) or "rate" in str(exc).lower() else ""
+        return f"The AI provider is having trouble right now{hint} — try again in a few minutes."
     except Exception as exc:
         # Last-resort safety net: a skill handler can fail in ways we can't
         # enumerate up front (a model producing malformed JSON, a garbled
@@ -615,16 +620,22 @@ async def _answer(chat_id: int, text: str) -> str:
         # is exactly where it's weakest (Ollama's default context also
         # truncates big prompts silently).
         tier = kernel.config.skill_config("qa.answer")["model_tier"]
-        response = router.call(
-            prompt=args["text"],
-            system=_ANSWER_SYSTEM.format(
-                now=local_now().isoformat(),
-                capabilities=capability_brief(),
-                facts=memory_store.load_all_facts() or "(no facts stored yet)",
-                history=_history_block(chat_id),
-            ),
-            tier=tier,
+        system = _ANSWER_SYSTEM.format(
+            now=local_now().isoformat(),
+            capabilities=capability_brief(),
+            facts=memory_store.load_all_facts() or "(no facts stored yet)",
+            history=_history_block(chat_id),
         )
+        try:
+            response = router.call(prompt=args["text"], system=system, tier=tier)
+        except router.ModelProviderError as exc:
+            # Same degradation as intent classification: a frontier outage
+            # (seen live: Groq's free 200k-token/day cap exhausted) drops
+            # to the local model instead of failing the conversation.
+            if tier == "cheap":
+                raise
+            log_event("qa_fallback_cheap", error=str(exc))
+            response = router.call(prompt=args["text"], system=system, tier="cheap")
         return response.text
 
     return await _gated(chat_id, SkillCall("qa.answer", {"text": text}), handler)

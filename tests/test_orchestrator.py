@@ -795,3 +795,40 @@ async def test_history_render_clips_long_entries(monkeypatch):
     orchestrator._history[9].append(("user", "paste " * 500))
     block = orchestrator._history_block(9)
     assert len(block) < 700 and block.endswith("…")
+
+
+async def test_qa_falls_back_to_cheap_when_frontier_is_exhausted(monkeypatch):
+    """Seen live: Groq's 200k-token/day free cap ran out and qa.answer
+    failed raw instead of degrading to the local model like
+    classification does."""
+    _mock_normalize(monkeypatch, "qa.answer")
+    tiers = []
+
+    def fake_call(prompt, system="", tier="cheap", **kwargs):
+        tiers.append(tier)
+        if tier == "frontier":
+            raise orchestrator.router.ModelProviderError("429 rate_limit_exceeded")
+        return _FakeRouted(text="local answer")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="hello there friend")
+    assert result == "local answer"
+    assert tiers == ["frontier", "cheap"]
+
+
+async def test_provider_error_surfaces_clean_not_raw(monkeypatch):
+    """Seen live: a Groq 429 dumped org ids and billing links into the
+    chat. The user sees one clean line; the log gets the detail."""
+    def always_fail(raw_text, tier="cheap", history=""):
+        raise orchestrator.router.ModelProviderError(
+            "groq failed: 429 {'org_id': 'org_SECRET', 'billing': 'https://console.groq.com'}"
+        )
+
+    monkeypatch.setattr(orchestrator, "normalize", always_fail)
+
+    def cheap_also_fails(raw_text, tier="cheap", history=""):
+        raise orchestrator.router.ModelProviderError("ollama down too")
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="hello")
+    assert "org_SECRET" not in result and "console.groq.com" not in result
+    assert "having trouble" in result
