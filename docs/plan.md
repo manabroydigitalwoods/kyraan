@@ -100,7 +100,8 @@ Parallel/ongoing:
 | Curiosity Queue | Surfaces memory gaps as batched, rate-limited questions |
 | Clarifying Questions | Blocking, task-specific questions (different from curiosity) |
 | Response Engine | Merges all outputs into one coherent, channel-appropriate reply; enforces DND/gating |
-| Retrieval Infra | Postgres + pgvector + full-text search + triples table (single DB, pragmatic scale) |
+| Retrieval Infra | Postgres + pgvector + full-text search + triples table (single DB for durable data, pragmatic scale) |
+| Session/State Store | Redis: short-term conversation memory, session state, cost counters, ephemeral queues — volatile-by-design state that shouldn't live in Postgres. Until it enters (Phase 3), these live in process memory + small JSON files |
 | Web Search | Used only to enrich an *already-identified* entity — never to disambiguate |
 | Per-Person Visibility Rules | Governs whose data is visible to whom within the family |
 | Conflict Resolution | Rule for handling contradicting info from different family members |
@@ -193,6 +194,12 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 - Split into Home / Work / Family agents with defined ownership boundaries
 - Build Agent Router (classifier + multi-agent coordination for cross-domain requests)
 - Introduce Skills as reusable, permissioned capability packages
+- Stand up the datastore layer: **Postgres + pgvector** (durable memory —
+  facts, RAG embeddings, full-text, triples) and **Redis** (short-term
+  conversation memory, session state, cost counters, ephemeral queues).
+  Postgres owns everything durable; Redis owns only state that is allowed
+  to vanish. MD files remain the human-reviewable source of truth for
+  facts, synced into Postgres for retrieval
 - Add Vector RAG (episodic memory) and Relationship Graph (entity connections)
 - Multi-user identity: per-person visibility rules, conflict resolution logic
 - Add direct correction/undo command path

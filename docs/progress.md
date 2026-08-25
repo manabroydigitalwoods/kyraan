@@ -198,6 +198,12 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 ## Key decisions made
 
 - **Stack**: Python, self-hosted (not cloud VM) — see `pyproject.toml`
+- **Datastore layer (decided 2026-08-25, enters Phase 3)**: Postgres +
+  pgvector for everything durable (facts, RAG, full-text, triples) and
+  Redis for volatile session state (short-term conversation memory, cost
+  counters, ephemeral queues) — now explicit in plan.md §3/§5. Until
+  Phase 3, both roles are served by process memory + JSON/MD files, which
+  is deliberate: no daemons to maintain during the manual-review weeks
 - **Model providers**: hybrid as of 2026-08-25 — local Ollama (`llama3.1:8b`)
   for qa.answer/reminders.create, Groq for intent classification — after
   live-testing ruled out OpenCode Zen (account-wide rate limit trips fast),
