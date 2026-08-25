@@ -53,11 +53,11 @@ async def test_burst_messages_combine_into_one_answer(monkeypatch):
 
     handled = []
 
-    async def fake_handle(chat_id, text):
-        handled.append(text)
-        return "combined answer"
+    async def fake_burst(chat_id, texts):
+        handled.append(texts)
+        return [(len(texts) - 1, "combined answer")]
 
-    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
     monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
     monkeypatch.setattr(telegram_bot, "_BURST_WINDOW_S", 0.05)
 
@@ -84,5 +84,5 @@ async def test_burst_messages_combine_into_one_answer(monkeypatch):
     ]
     await asyncio.gather(*tasks)
 
-    assert handled == ["but this is normal\nI can send message\nlike this"]
+    assert handled == [["but this is normal", "I can send message", "like this"]]
     assert replies == ["combined answer"]  # one reply for the whole burst

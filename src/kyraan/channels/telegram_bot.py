@@ -107,46 +107,42 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     _burst_flushing.add(chat_id)
     try:
         waited = 0.0
-        while waited < _BURST_MAX_WAIT_S:
-            seen = len(_burst_buffers[chat_id])
-            await asyncio.sleep(_BURST_WINDOW_S)
-            waited += _BURST_WINDOW_S
+        while waited < _BURST_MAX_WAIT_S * 3:  # hard cap ~20s+
+            buffered = _burst_buffers[chat_id]
+            seen = len(buffered)
+            # An active burst (>1 message) or an open fragment gets a
+            # longer quiet requirement — the user is mid-thought.
+            combined_now = "\n".join(t for _, t in buffered if t)
+            quiet = _BURST_WINDOW_S
+            if seen > 1 or orchestrator.is_time_fragment(combined_now):
+                quiet = _BURST_WINDOW_S * 2
+            await asyncio.sleep(quiet)
+            waited += quiet
             if len(_burst_buffers[chat_id]) == seen:
-                break  # window went quiet — the thought is complete
-        # A time-fragment ("tomorrow morning") is a thought's opening —
-        # extend the window so the rest of the thought can merge instead
-        # of the fragment being answered alone.
-        combined_so_far = "\n".join(t for _, t in _burst_buffers.get(chat_id, []) if t)
-        if orchestrator.is_time_fragment(combined_so_far):
-            extra = 0.0
-            while extra < _FRAGMENT_EXTRA_WAIT_S:
-                seen = len(_burst_buffers[chat_id])
-                await asyncio.sleep(_BURST_WINDOW_S)
-                extra += _BURST_WINDOW_S
-                if len(_burst_buffers[chat_id]) != seen:
-                    # more arrived — restart quiet-window detection
-                    extra = 0.0
-                    continue
-                combined_now = "\n".join(t for _, t in _burst_buffers[chat_id] if t)
-                if not orchestrator.is_time_fragment(combined_now):
-                    break
+                if orchestrator.is_time_fragment(combined_now) and waited < _FRAGMENT_EXTRA_WAIT_S:
+                    continue  # fragment stays open a while longer
+                break  # quiet — the thought is complete
         fragments = _burst_buffers.pop(chat_id, [])
     finally:
         _burst_flushing.discard(chat_id)
     if not fragments:
         return
-    last_message = fragments[-1][0]
-    combined = "\n".join(text for _, text in fragments if text)
 
     typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
     try:
         async with _lock_for(chat_id):
-            reply = await orchestrator.handle_message(chat_id, combined)
+            # The burst is evaluated TOGETHER; the resolver decides one
+            # combined answer vs per-message answers, and each reply is
+            # quoted onto the message it covers.
+            results = await orchestrator.handle_burst(
+                chat_id, [text for _, text in fragments]
+            )
     finally:
         typing.cancel()
-    # Quote the last message of the burst so the answer is visually
-    # anchored to what it answers.
-    await last_message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id), do_quote=True)
+    for position, (idx, reply) in enumerate(results):
+        source = fragments[min(idx, len(fragments) - 1)][0]
+        markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
+        await source.reply_text(reply, reply_markup=markup, do_quote=True)
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:

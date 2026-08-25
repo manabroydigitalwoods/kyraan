@@ -233,6 +233,72 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
     return f"\n\n📝 Noted for review: {facts}"
 
 
+_BURST_PLAN_SYSTEM = """The user sent {n} quick messages in one burst. Decide how
+to answer them, like an attentive human assistant reading all of them
+before replying:
+- If they form ONE request or thought spread across messages, merge them
+  into a single complete, self-contained message.
+- If they are genuinely INDEPENDENT requests, keep them separate (in
+  order), each rewritten self-contained.
+Examples:
+- ["tomorrow morning", "i need to call the plumber", "remind me at 9am"]
+  -> combined: "remind me to call the plumber tomorrow at 9am"
+- ["is the AC on?", "any new emails?"] -> separate: two items, different
+  domains, each needs its own answer — merging would lose one.
+- ["cancel my reminder", "the call mom one"] -> combined:
+  "cancel the call mom reminder"
+Respond with ONLY JSON:
+{{"mode": "combined", "message": "<the one merged request>"}}
+or
+{{"mode": "separate", "items": [{{"index": <0-based index of the LAST
+original message this item covers>, "message": "<self-contained request>"}}]}}
+The messages, numbered:
+{numbered}"""
+
+
+async def handle_burst(chat_id: int, texts: list) -> list:
+    """Evaluate a burst of quick messages TOGETHER, then answer either as
+    one combined request or per independent message — the owner's spec:
+    'evaluate all messages together and check: reply on a particular
+    message, or combine and reply all together.' Returns
+    [(index_of_message_to_quote, reply), ...]."""
+    texts = [t for t in texts if t]
+    if len(texts) <= 1:
+        reply = await handle_message(chat_id, texts[0] if texts else "")
+        return [(0, reply)]
+
+    plan = {"mode": "combined", "message": "\n".join(texts)}  # deterministic fallback
+    try:
+        numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+        raw = router.call(
+            prompt="Plan the reply.",
+            system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
+            tier="frontier", force_json=True,
+        )
+        candidate = json.loads(router.strip_code_fence(raw.text))
+        if candidate.get("mode") == "combined" and candidate.get("message"):
+            plan = {"mode": "combined", "message": str(candidate["message"])}
+        elif candidate.get("mode") == "separate" and candidate.get("items"):
+            items = []
+            for item in candidate["items"][: len(texts)]:
+                idx = int(item.get("index", len(texts) - 1))
+                if not (0 <= idx < len(texts)) or not item.get("message"):
+                    raise ValueError("bad plan item")
+                items.append((idx, str(item["message"])))
+            plan = {"mode": "separate", "items": items}
+        log_event("burst_plan", chat_id=chat_id, n=len(texts), mode=plan["mode"])
+    except Exception as exc:
+        log_event("burst_plan_fallback", chat_id=chat_id, error=str(exc))
+
+    if plan["mode"] == "combined":
+        reply = await handle_message(chat_id, plan["message"])
+        return [(len(texts) - 1, reply)]
+    results = []
+    for idx, message in plan["items"]:
+        results.append((idx, await handle_message(chat_id, message)))
+    return results
+
+
 async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)

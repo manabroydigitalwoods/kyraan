@@ -1072,3 +1072,64 @@ async def test_reminder_with_time_phrase_text_asks_for_the_task(monkeypatch, iso
     result = await orchestrator.handle_message(chat_id=0, raw_text="remind me tomorrow morning at 6am please do it")
     assert "Remind you about what" in result
     assert orchestrator.scheduler.store.list_pending(0) == []
+
+
+async def test_burst_planner_combines_one_thought(monkeypatch):
+    """The owner's spec: evaluate the burst together, then decide. A
+    fragmented single thought merges into one request and one reply."""
+    plans = iter([
+        _FakeRouted(text='{"mode": "combined", "message": "remind me to call the plumber tomorrow at 9am"}'),
+    ])
+    handled = []
+
+    def fake_call(prompt, system="", **kwargs):
+        if "quick messages in one burst" in system:
+            return next(plans)
+        return _FakeRouted(text="ok")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    async def fake_handle(chat_id, text):
+        handled.append(text)
+        return "one reply"
+
+    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    results = await orchestrator.handle_burst(1, ["tomorrow morning", "i need to call the plumber", "remind me at 9am"])
+    assert handled == ["remind me to call the plumber tomorrow at 9am"]
+    assert results == [(2, "one reply")]  # quoted onto the last message
+
+
+async def test_burst_planner_separates_independent_requests(monkeypatch):
+    def fake_call(prompt, system="", **kwargs):
+        return _FakeRouted(text='{"mode": "separate", "items": ['
+                                '{"index": 0, "message": "is the AC on?"}, '
+                                '{"index": 1, "message": "any new emails?"}]}')
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    handled = []
+
+    async def fake_handle(chat_id, text):
+        handled.append(text)
+        return f"answer to {text}"
+
+    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    results = await orchestrator.handle_burst(1, ["is the AC on?", "any new emails?"])
+    assert handled == ["is the AC on?", "any new emails?"]
+    assert [idx for idx, _ in results] == [0, 1]  # each quoted onto its own message
+
+
+async def test_burst_planner_falls_back_to_plain_merge(monkeypatch):
+    def broken_call(prompt, system="", **kwargs):
+        raise orchestrator.router.ModelProviderError("down")
+
+    monkeypatch.setattr(orchestrator.router, "call", broken_call)
+    handled = []
+
+    async def fake_handle(chat_id, text):
+        handled.append(text)
+        return "fallback reply"
+
+    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    results = await orchestrator.handle_burst(1, ["a", "b"])
+    assert handled == ["a\nb"]
+    assert results == [(1, "fallback reply")]
