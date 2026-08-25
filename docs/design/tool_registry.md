@@ -143,14 +143,21 @@ doesn't hold there. Instead:
   credential — treat it like a password; Google can regenerate it if it
   leaks. Implemented in `kyraan.tools.google_calendar` (`icalendar` +
   `recurring-ical-events` for correct RRULE expansion).
-- **Writes, later**: `calendar.create_event` needs real OAuth (GCP project,
-  consent screen, refresh token). Deliberately not built — writes are
-  confirm-gated and wait for the Phase 1 soak anyway, and the OAuth
-  ceremony deserves its own session when that gate opens.
+- **Writes, built 2026-08-25 (owner's call, pulled ahead of the soak)**:
+  `calendar.create_event` — confirm-gated by the registry's hard rule, so
+  every single event needs an explicit yes in chat naming the concrete
+  event (title + times), which is the protection the soak gate was for.
+  Extraction runs *before* the gate and the parsed fields ride in the
+  stashed call, so what the user confirms is byte-identical to what runs.
+  `retries: 0` — a write is never blind-retried into a duplicate. Runtime
+  OAuth is a stdlib refresh-token POST (no Google SDK in the service);
+  the one-time credential ceremony is `scripts/setup_google_oauth.py`
+  (GCP steps in its docstring — the owner does those).
 
 Implemented against this design (2026-08-25): registry + validator,
-`kernel.run_tool`, the Google adapter, and the `calendar.list` skill/intent
-— 23 new tests, including the shipped config passing its own validator.
+`kernel.run_tool`, the Google adapter (reads + OAuth writes), and the
+`calendar.list` / `calendar.create` skills/intents — with the confirm
+flow's first real customer. The shipped config passes its own validator.
 
 ## Explicitly out of scope for this design
 

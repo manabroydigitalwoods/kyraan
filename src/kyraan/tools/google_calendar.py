@@ -1,18 +1,25 @@
-"""Google Calendar adapter — read-only, via the calendar's secret ICS
-address. Zero OAuth: Google Calendar → Settings → [calendar] →
-"Integrate calendar" → "Secret address in iCal format", pasted into .env
-as GOOGLE_CALENDAR_ICS_URL. The URL itself is the credential — treat it
-like a password (anyone holding it can read the calendar).
+"""Google Calendar adapter.
 
-Writes (create/update/delete) are NOT this adapter's job: Google requires
-OAuth for those, and per the rollout plan write tools wait for the Phase 1
-soak anyway. When they arrive they'll be a separate confirm-gated tool.
+Reads: the calendar's secret ICS address (zero OAuth) — Google Calendar →
+Settings → [calendar] → "Integrate calendar" → "Secret address in iCal
+format", pasted into .env as GOOGLE_CALENDAR_ICS_URL. The URL itself is a
+credential — treat it like a password.
+
+Writes: calendar.create_event via the Calendar API with OAuth — Google
+retired non-OAuth write paths. One-time setup: scripts/setup_google_oauth.py
+(needs GOOGLE_OAUTH_CLIENT_ID/SECRET from the user's GCP console, stores
+GOOGLE_OAUTH_REFRESH_TOKEN). At runtime the refresh token is exchanged for
+a short-lived access token with a plain stdlib POST — no Google SDK in the
+service. The tool is confirm-gated by the registry's hard rule; the user
+approves every single event creation.
 
 Adapter contract (docs/design/tool_registry.md): `async def call(tool_name, args)`.
 """
 import asyncio
+import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, time
 
@@ -21,6 +28,9 @@ import recurring_ical_events
 
 from kyraan.control_plane.dnd import local_now
 from kyraan.tools.registry import ToolError, TransientToolError
+
+_TOKEN_URL = "https://oauth2.googleapis.com/token"
+_EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
 
 def _fetch_ics() -> bytes:
@@ -81,8 +91,66 @@ def _list_events(start_iso: str, end_iso: str) -> list[dict]:
     return events
 
 
+def _access_token() -> str:
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "").strip()
+    if not (client_id and client_secret and refresh_token):
+        raise ToolError(
+            "Google OAuth isn't set up for calendar writes — run "
+            "`python scripts/setup_google_oauth.py` once (it walks through the "
+            "GCP credential steps and stores the refresh token in .env)"
+        )
+    body = urllib.parse.urlencode({
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "refresh_token": refresh_token,
+        "grant_type": "refresh_token",
+    }).encode()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(_TOKEN_URL, data=body), timeout=8) as resp:
+            return json.loads(resp.read())["access_token"]
+    except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise TransientToolError(f"Google token endpoint returned {exc.code}") from exc
+        raise ToolError(
+            f"Google refused the OAuth refresh ({exc.code}) — the refresh token may be revoked; "
+            "re-run scripts/setup_google_oauth.py"
+        ) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Google OAuth: {exc}") from exc
+
+
+def _create_event(args: dict) -> dict:
+    payload = {
+        "summary": args["title"],
+        "start": {"dateTime": args["start"]},
+        "end": {"dateTime": args["end"]},
+    }
+    if args.get("location"):
+        payload["location"] = args["location"]
+    request = urllib.request.Request(
+        _EVENTS_URL,
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {_access_token()}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as resp:
+            created = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise TransientToolError(f"Google Calendar returned {exc.code}") from exc
+        raise ToolError(f"Google Calendar rejected the event ({exc.code}): {exc.read().decode()[:200]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Google Calendar: {exc}") from exc
+    return {"id": created.get("id"), "link": created.get("htmlLink"), "title": args["title"]}
+
+
 async def call(tool_name: str, args: dict) -> object:
+    # urllib + ICS parsing are blocking — keep the event loop free.
     if tool_name == "calendar.list_events":
-        # urllib + ICS parsing are blocking — keep the event loop free.
         return await asyncio.to_thread(_list_events, args["start"], args["end"])
+    if tool_name == "calendar.create_event":
+        return await asyncio.to_thread(_create_event, args)
     raise ToolError(f"google_calendar adapter does not provide {tool_name!r}")

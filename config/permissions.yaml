@@ -111,6 +111,12 @@ skills:
     permission: auto      # read-only skill: extracts a time window, calls
                           # the calendar.list_events tool, formats the reply
     model_tier: cheap
+  calendar.create:
+    permission: auto      # the skill itself is auto — the WRITE is gated at
+                          # the tool (calendar.create_event: confirm), so the
+                          # user approves the concrete event, not the vague
+                          # intent to create one
+    model_tier: cheap
 
 # Phase 2 tool registry (design: docs/design/tool_registry.md). Every tool
 # Kyraan can call is declared here — schema, permission, side effects, and
@@ -134,6 +140,22 @@ tools:
     failure:
       retries: 2
       timeout_s: 12
+      on_failure: surface
+  calendar.create_event:
+    description: Create one event on the owner's Google Calendar (OAuth; confirm-gated write).
+    server: calendar
+    permission: confirm
+    side_effects: write
+    params:
+      title: {type: string, required: true}
+      start: {type: datetime, required: true}
+      end: {type: datetime, required: true}
+      location: {type: string}
+    returns: "{id, link, title}"
+    failure:
+      retries: 0            # never blind-retry a write — an ambiguous failure
+                            # retried is how duplicate events happen
+      timeout_s: 15
       on_failure: surface
 
 dnd:

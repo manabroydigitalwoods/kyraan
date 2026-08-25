@@ -245,8 +245,9 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
-- Calendar is read-only until the Phase 1 soak passes: writes need Google
-  OAuth and confirm-gating, deliberately deferred (design doc has the plan)
+- Calendar writes (calendar.create) are built and confirm-gated per event
+  — pulled ahead of the soak by owner decision; awaiting the one-time
+  OAuth setup (scripts/setup_google_oauth.py) before first live write
 - `calendar.list` is untested against a real Google ICS feed until
   `GOOGLE_CALENDAR_ICS_URL` is set in `.env` (owner setup, see design doc)
 - No RAG, relationship graph, agent router, reflection loop, or curiosity

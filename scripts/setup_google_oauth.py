@@ -1,0 +1,78 @@
+"""One-time Google OAuth setup for calendar WRITES (reads use the secret
+ICS URL and don't need this).
+
+Before running, do these steps yourself in the Google Cloud console
+(https://console.cloud.google.com) — Kyraan can't and shouldn't do them
+for you:
+
+  1. Create a project (any name, e.g. "kyraan").
+  2. APIs & Services -> Library -> enable "Google Calendar API".
+  3. APIs & Services -> OAuth consent screen -> External -> fill the two
+     required fields -> add your own Gmail as a Test user. (Stays in
+     "Testing" mode — fine for a personal app; refresh tokens in testing
+     mode expire after ~7 days of NON-use, but daily Kyraan use keeps
+     them alive.)
+  4. Credentials -> Create credentials -> OAuth client ID -> Desktop app.
+  5. Put the client id and secret into .env:
+        GOOGLE_OAUTH_CLIENT_ID=...
+        GOOGLE_OAUTH_CLIENT_SECRET=...
+
+Then run:  .venv/bin/python scripts/setup_google_oauth.py
+
+A browser opens; approve access for your own account. The refresh token is
+written into .env as GOOGLE_OAUTH_REFRESH_TOKEN and the calendar.create
+skill starts working (each event still asks for your yes in chat).
+"""
+import os
+import re
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+REPO = Path(__file__).resolve().parents[1]
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+
+
+def main() -> None:
+    load_dotenv(REPO / ".env")
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+    if not (client_id and client_secret):
+        sys.exit(
+            "GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET are not set in .env — "
+            "do the GCP console steps in this script's docstring first."
+        )
+
+    from google_auth_oauthlib.flow import InstalledAppFlow  # dev extra
+
+    flow = InstalledAppFlow.from_client_config(
+        {
+            "installed": {
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://localhost"],
+            }
+        },
+        scopes=SCOPES,
+    )
+    creds = flow.run_local_server(port=0, prompt="consent")
+    if not creds.refresh_token:
+        sys.exit("Google returned no refresh token — re-run this script (it forces prompt=consent).")
+
+    env_path = REPO / ".env"
+    text = env_path.read_text()
+    line = f"GOOGLE_OAUTH_REFRESH_TOKEN={creds.refresh_token}"
+    if re.search(r"^GOOGLE_OAUTH_REFRESH_TOKEN=", text, flags=re.M):
+        text = re.sub(r"^GOOGLE_OAUTH_REFRESH_TOKEN=.*$", line, text, flags=re.M)
+    else:
+        text = text.rstrip("\n") + "\n" + line + "\n"
+    env_path.write_text(text)
+    print("Refresh token saved to .env — restart the bot service:")
+    print("  launchctl kickstart -k gui/$(id -u)/io.digitalwoods.kyraan")
+
+
+if __name__ == "__main__":
+    main()

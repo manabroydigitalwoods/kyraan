@@ -449,23 +449,24 @@ async def test_cancel_with_description_matching_several_still_asks(monkeypatch, 
     assert len(store.list_pending(0)) == 2
 
 
-async def test_qa_prompt_forbids_pretending_to_create_calendar_events(monkeypatch):
-    """Found live: asked to add a calendar event (a write Kyraan can't do
-    yet), it played along, then silently created a reminder while the user
-    believed it was a calendar event. The prompt must force the honest
-    answer: can't write to the calendar, offer a reminder instead."""
+async def test_qa_prompt_forbids_conflating_reminders_and_calendar_events(monkeypatch):
+    """Found live (pre-writes): asked to add a calendar event, qa.answer
+    played along and a reminder got created that the user believed was a
+    calendar event. Writes exist now, but the honesty guards stay: never
+    claim an event was created unless it was, never present a reminder as
+    a calendar event."""
     _mock_normalize(monkeypatch, "qa.answer")
     captured = {}
 
     def fake_call(prompt, system="", **kwargs):
         captured["system"] = system
-        return _FakeRouted(text="I can't create calendar events yet — want a reminder instead?")
+        return _FakeRouted(text="ok")
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
 
     await orchestrator.handle_message(chat_id=0, raw_text="can you set an event in my calendar")
-    assert "CANNOT create, edit, or delete calendar" in captured["system"]
-    assert "never present a reminder as a calendar event" in captured["system"]
+    assert "unless it actually was" in captured["system"]
+    assert "reminder as a calendar event" in captured["system"]
 
 
 async def test_duplicate_reminder_is_refused_with_the_existing_id(monkeypatch, isolated_store):
@@ -500,3 +501,61 @@ async def test_same_text_at_a_different_time_is_not_a_duplicate(monkeypatch, iso
     second = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 9pm too")
     assert "Reminder set" in second
     assert len(orchestrator.scheduler.store.list_pending(0)) == 2
+
+
+async def test_calendar_create_asks_then_creates_the_exact_confirmed_event(monkeypatch):
+    """The full confirm chain, unmocked at the kernel: the confirm-gated
+    write tool halts the auto skill, the ask names the concrete event, and
+    "yes" runs it with byte-identical args (extraction is NOT re-run)."""
+    from kyraan.tools import registry as reg
+
+    _mock_normalize(monkeypatch, "calendar.create", "add call suman tomorrow 5pm to my calendar")
+    extraction_calls = []
+
+    def fake_call(prompt, system="", **kwargs):
+        extraction_calls.append(prompt)
+        return _FakeRouted(
+            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+05:30", "end_iso": "2099-01-02T18:00:00+05:30", "location": null}'
+        )
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append((spec.name, args))
+        return {"id": "ev1", "link": "https://cal/ev1", "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="add call suman tomorrow 5pm to my calendar")
+    assert "About to create a calendar event" in ask and "Call Suman" in ask and "17:00" in ask
+    assert dispatched == []  # nothing written before the yes
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "Event created" in result and "https://cal/ev1" in result
+    assert dispatched == [("calendar.create_event", {
+        "title": "Call Suman", "start": "2099-01-02T17:00:00+05:30", "end": "2099-01-02T18:00:00+05:30"})]
+    assert len(extraction_calls) == 1  # confirm did NOT re-extract
+
+
+async def test_calendar_create_no_cancels_without_writing(monkeypatch):
+    from kyraan.tools import registry as reg
+
+    _mock_normalize(monkeypatch, "calendar.create", "add call suman tomorrow 5pm to my calendar")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+05:30", "end_iso": "2099-01-02T18:00:00+05:30", "location": null}'
+        ),
+    )
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append(1)
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="add call suman tomorrow 5pm to my calendar")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="no")
+    assert "cancelled" in result.lower()
+    assert dispatched == []

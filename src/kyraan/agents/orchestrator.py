@@ -22,6 +22,13 @@ window they mean — default to the rest of today if unclear; "tomorrow" is
 that full day; "this week" runs to Sunday night. Respond with ONLY JSON:
 {{"start_iso": "<ISO 8601 datetime with the same UTC offset>", "end_iso": "<ISO 8601 datetime with the same UTC offset>", "label": "<short human name for the window, e.g. 'today', 'tomorrow'>"}}"""
 
+_EXTRACT_EVENT_SYSTEM = """Extract a calendar event from the user's message.
+The current date/time is {now} (includes a UTC offset). Use a stated clock
+time EXACTLY — "5pm" means 17:00:00, never the current minutes/seconds
+carried over. If no end time is given, make the event 1 hour long. Respond
+with ONLY JSON:
+{{"title": "<short event title>", "start_iso": "<ISO 8601, same UTC offset as above>", "end_iso": "<ISO 8601, same offset>", "location": "<place or null>"}}"""
+
 _EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
 The current date/time is {now} (includes a UTC offset). Use a stated clock
 time EXACTLY — "8pm" means 20:00:00, never the current minutes/seconds
@@ -41,15 +48,14 @@ specifics like time remaining. Kyraan genuinely can set reminders,
 including short-delay ones — never claim that capability doesn't exist; if
 a message looks like a reminder request that landed here by mistake, ask
 the user to rephrase it as a clear reminder instead of denying you can do it.
-Kyraan can also READ the owner's Google Calendar — never deny that; if a
-calendar question lands here by mistake, suggest phrasing it like "what's
-on my calendar today". But Kyraan CANNOT create, edit, or delete calendar
-events yet — if asked to put something on the calendar, say that plainly
-and offer to set a reminder instead; never play along as if the event will
-be created, and never present a reminder as a calendar event. If the user
-asks whether a calendar event was created, answer that question directly
-(it wasn't — at most a reminder was set), don't deflect to listing the
-calendar.
+Kyraan can also READ the owner's Google Calendar and CREATE events on it
+(each creation needs the owner's explicit yes first) — never deny either;
+if a calendar request lands here by mistake, suggest phrasing like "what's
+on my calendar today" or "add lunch with mom friday 1pm to my calendar".
+Never claim an event was created unless it actually was, and never present
+a reminder as a calendar event — they are different things. If asked
+whether an event was created, answer that directly, don't deflect to
+listing the calendar.
 When the user asks you to CREATE something — a song, poem, story, message,
 code — ask at most ONE clarifying question, then create it. "anything",
 "random", "you choose", "go ahead", "yes" mean: stop asking and produce it
@@ -194,6 +200,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _cancel_reminder(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.list":
             return await _list_calendar(chat_id, parsed.normalized_text)
+        if parsed.intent == "calendar.create":
+            return await _create_event(chat_id, parsed.normalized_text)
         # qa.answer, and anything the classifier couldn't place ("unknown"
         # with reasonable confidence) both fall through here — Phase 1's
         # taxonomy only has one truly distinct path (reminders), so
@@ -222,14 +230,17 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         return "Something went wrong handling that — try again, or rephrase."
 
 
-async def _gated(chat_id: int, call: SkillCall, handler) -> str:
-    """Run a skill through the kernel; if it needs confirm-first approval,
-    stash it and ask, so the next affirmative message from this chat runs it."""
+async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> str:
+    """Run a skill through the kernel; if it (or a confirm-gated tool
+    inside it) needs approval, stash it and ask — `describe` names the
+    concrete action so the user confirms a specific thing, not a vague
+    intent."""
     try:
         return str(await kernel.run_skill(call, handler))
     except ConfirmationRequired:
         _pending_confirmations[chat_id] = (call, handler)
-        return f"'{call.skill_name}' needs your confirmation first — reply \"yes\" to run it or \"no\" to cancel."
+        what = describe or f"'{call.skill_name}' needs your confirmation first"
+        return f"{what} — reply \"yes\" to confirm or \"no\" to cancel."
 
 
 async def _create_reminder(chat_id: int, text: str) -> str:
@@ -354,6 +365,37 @@ async def _list_calendar(chat_id: int, text: str) -> str:
         return f"Calendar {label}:\n" + "\n".join(lines)
 
     return await _gated(chat_id, SkillCall("calendar.list", {"text": text}), handler)
+
+
+async def _create_event(chat_id: int, text: str) -> str:
+    # Extraction runs BEFORE the confirm gate, and the parsed fields go
+    # into the stashed SkillCall args — so what the user confirms is
+    # byte-identical to what runs. Re-extracting on "yes" could produce a
+    # different time than the one shown (model nondeterminism).
+    extracted = router.call(
+        prompt=text, system=_EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()), tier="cheap"
+    )
+    try:
+        data = json.loads(router.strip_code_fence(extracted.text))
+        args = {"title": str(data["title"]), "start": str(data["start_iso"]), "end": str(data["end_iso"])}
+        if data.get("location"):
+            args["location"] = str(data["location"])
+        scheduler._parse_when(args["start"]), scheduler._parse_when(args["end"])  # validate before gating
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        log_event("event_extraction_failed", text=text, raw=extracted.text, error=str(exc))
+        return "I couldn't work out the event details — try e.g. \"add a meeting with Suman tomorrow 5pm to my calendar\"."
+
+    async def handler(handler_args: dict) -> str:
+        try:
+            created = await kernel.run_tool(kernel.ToolCall("calendar.create_event", handler_args))
+        except kernel.ToolFailed as exc:
+            return f"Couldn't create the event: {exc}"
+        link = f"\n{created['link']}" if created.get("link") else ""
+        return f"Event created on your calendar: \"{created['title']}\" at {handler_args['start']}{link}"
+
+    where = f" at {args['location']}" if args.get("location") else ""
+    describe = f"About to create a calendar event: \"{args['title']}\" {args['start']} → {args['end']}{where}"
+    return await _gated(chat_id, SkillCall("calendar.create", args), handler, describe=describe)
 
 
 async def _answer(chat_id: int, text: str) -> str:

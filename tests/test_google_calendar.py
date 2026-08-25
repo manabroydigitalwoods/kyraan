@@ -88,3 +88,42 @@ async def test_missing_url_is_a_clear_setup_error(monkeypatch):
 async def test_unknown_tool_name_rejected(fixture_ics):
     with pytest.raises(registry.ToolError, match="does not provide"):
         await google_calendar.call("calendar.delete_everything", {})
+
+
+async def test_create_without_oauth_setup_gives_the_setup_instruction(monkeypatch):
+    for var in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"):
+        monkeypatch.delenv(var, raising=False)
+    with pytest.raises(registry.ToolError, match="setup_google_oauth"):
+        await google_calendar.call(
+            "calendar.create_event",
+            {"title": "x", "start": "2026-08-26T17:00:00+05:30", "end": "2026-08-26T18:00:00+05:30"},
+        )
+
+
+async def test_create_event_posts_the_right_payload(monkeypatch):
+    import io, json, urllib.request
+
+    monkeypatch.setattr(google_calendar, "_access_token", lambda: "tok123")
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["auth"] = request.headers.get("Authorization")
+        captured["payload"] = json.loads(request.data)
+        return io.BytesIO(json.dumps({"id": "ev1", "htmlLink": "https://cal/ev1"}).encode())
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+    result = await google_calendar.call(
+        "calendar.create_event",
+        {"title": "Call Suman", "start": "2026-08-26T17:00:00+05:30",
+         "end": "2026-08-26T18:00:00+05:30", "location": "Office"},
+    )
+    assert captured["auth"] == "Bearer tok123"
+    assert captured["payload"] == {
+        "summary": "Call Suman",
+        "start": {"dateTime": "2026-08-26T17:00:00+05:30"},
+        "end": {"dateTime": "2026-08-26T18:00:00+05:30"},
+        "location": "Office",
+    }
+    assert result == {"id": "ev1", "link": "https://cal/ev1", "title": "Call Suman"}
