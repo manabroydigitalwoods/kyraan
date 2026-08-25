@@ -41,7 +41,7 @@ def test_create_reminder_rejects_bad_datetime_without_persisting(isolated_store)
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
 
     with pytest.raises(ValueError):
-        scheduler.create_reminder(chat_id=0, text="test", when_iso="2026-08-25T13:26:44+05:30+04:00")
+        scheduler.create_reminder(chat_id=0, text="test", when_iso="2026-13-45Tnot-a-time")
 
     assert store.list_pending() == []
 
@@ -50,7 +50,7 @@ def test_init_skips_a_corrupted_persisted_reminder_instead_of_crashing(isolated_
     """Defense in depth for any record that predates the validate-before-
     persist fix (or reaches disk some other way) — one bad reminder must
     not take down scheduling for every other reminder on startup."""
-    store.add(chat_id=0, text="bad", when_iso="2026-08-25T13:26:44+05:30+04:00")
+    store.add(chat_id=0, text="bad", when_iso="2026-13-45Tnot-a-time")
     store.add(chat_id=0, text="good", when_iso="2026-08-25T17:30:00+05:30")
 
     scheduled_ids = []
@@ -194,3 +194,18 @@ def test_init_only_chat_never_schedules_other_chats_reminders(isolated_store):
         cancel_fn=lambda *a, **k: None, send_fn=None, only_chat=0,
     )
     assert scheduled == ["dev thing"]
+
+
+def test_z_glued_to_offset_is_repaired(monkeypatch):
+    """Seen live: '2026-08-26T09:00:00.000Z+05:30' — the composed
+    date/time were right, only the format was junk."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    parsed = _parse_when("2026-08-26T09:00:00.000Z+05:30")
+    assert (parsed.hour, parsed.minute) == (9, 0)
+    assert parsed.utcoffset().total_seconds() == 5.5 * 3600
+
+
+def test_doubled_offset_keeps_the_first(monkeypatch):
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    parsed = _parse_when("2026-08-25T13:26:44+05:30+04:00")
+    assert parsed.utcoffset().total_seconds() == 5.5 * 3600

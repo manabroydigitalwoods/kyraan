@@ -63,7 +63,7 @@ async def test_reminder_with_unparseable_datetime_gives_a_clear_message(monkeypa
     monkeypatch.setattr(
         orchestrator.router,
         "call",
-        lambda **kwargs: _FakeRouted(text='{"text": "test", "when_iso": "2026-08-25T13:26:44+05:30+04:00"}'),
+        lambda **kwargs: _FakeRouted(text='{"text": "test", "when_iso": "2026-13-45Tnot-a-time"}'),
     )
     orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
 

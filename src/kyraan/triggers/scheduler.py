@@ -6,6 +6,7 @@ background-thread scheduler into asyncio. Every fire checks
 kernel.can_send_proactively() (kill switch + DND) before sending; a
 reminder blocked by DND is rescheduled 15 minutes out instead of dropped.
 """
+import re
 from datetime import datetime, timedelta
 from typing import Awaitable, Callable
 
@@ -76,11 +77,26 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         log_event("reminder_sent", reminder_id=reminder_id, chat_id=chat_id)
 
 
+def _sanitize_iso(value: str) -> str:
+    """Deterministic repairs for the malformed-ISO family models emit:
+    'Z' glued to an explicit offset ('...09:00:00.000Z+05:30', seen live —
+    the composed date/time were RIGHT, only the format was junk) and
+    doubled offsets ('...+05:30+04:00', the original day-one crash).
+    Keep the first explicit offset; drop a redundant Z."""
+    value = value.strip()
+    value = re.sub(r"Z(?=[+-]\d{2}:?\d{2}$)", "", value)
+    match = re.match(r"^(.*?[+-]\d{2}:\d{2})[+-]\d{2}:\d{2}$", value)
+    if match:
+        value = match.group(1)
+    return value
+
+
 def _parse_when(when_iso: str) -> datetime:
     """The extraction prompt asks the model for an offset-aware ISO datetime,
     but models sometimes drop the offset — if so, assume it meant
     KYRAAN_TIMEZONE (the same tz "now" was expressed in) rather than
     crashing or silently assuming UTC/system tz."""
+    when_iso = _sanitize_iso(when_iso)
     parsed = datetime.fromisoformat(when_iso)
     now = local_now()
     if parsed.tzinfo is None:
