@@ -39,6 +39,21 @@ from kyraan.control_plane.dnd import local_now
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
 
+def _build_stamp() -> str:
+    """Git hash + time of the running code — a dev harness process outlives
+    commits, and a stale one silently lacks the latest fixes. The stamp
+    makes staleness visible at a glance."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%h %ad", "--date=format:%H:%M"],
+            capture_output=True, text=True, cwd=__file__.rsplit("/", 2)[0], timeout=3,
+        ).stdout.strip()
+        return f"build {out} — restart me after new commits"
+    except Exception:
+        return "build unknown"
+
+
 CHAT_ID = 0
 TRANSCRIPT_DIR = Path(__file__).resolve().parents[1] / "data" / "transcripts"
 
@@ -343,19 +358,3 @@ class KyraanTUI(App):
 if __name__ == "__main__":
     load_dotenv()
     KyraanTUI().run()
-
-
-def _build_stamp() -> str:
-    """Git hash + time of the running code — a dev harness process outlives
-    commits, and a stale one silently lacks the latest fixes (seen live:
-    a TUI started 6 minutes before a fix, testing code that didn't have
-    it). The stamp makes staleness visible at a glance."""
-    import subprocess
-    try:
-        out = subprocess.run(
-            ["git", "log", "-1", "--format=%h %ad", "--date=format:%H:%M"],
-            capture_output=True, text=True, cwd=__file__.rsplit("/", 2)[0], timeout=3,
-        ).stdout.strip()
-        return f"build {out} — restart me after new commits"
-    except Exception:
-        return "build unknown"
