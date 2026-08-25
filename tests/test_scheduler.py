@@ -119,3 +119,29 @@ async def test_fire_is_idempotent_against_duplicate_scheduling(isolated_store):
     store.cancel(r2.id)
     await scheduler.fire(r2.id, 0, r2.text)  # cancelled record: must not send
     assert sends == ["Reminder: water plants"]
+
+
+def test_utc_offset_from_model_is_reinterpreted_as_local_wall_time(monkeypatch):
+    """Found live: "call suman at 7pm" extracted as 19:00:00.000Z — the
+    model dropped the +05:30 offset to Z, which would have fired at 00:30
+    local, 5.5 hours late. A Z timestamp in a non-UTC KYRAAN_TIMEZONE is
+    offset-dropping, not UTC intent: keep the wall time, fix the zone."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    parsed = _parse_when("2026-08-25T19:00:00.000Z")
+    assert parsed.hour == 19
+    assert parsed.utcoffset().total_seconds() == 5.5 * 3600
+
+
+def test_genuine_utc_in_a_utc_timezone_is_untouched(monkeypatch):
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "UTC")
+    parsed = _parse_when("2026-08-25T19:00:00+00:00")
+    assert parsed.hour == 19
+    assert parsed.utcoffset().total_seconds() == 0
+
+
+def test_non_utc_offset_from_model_is_respected(monkeypatch):
+    """Only a zero offset triggers reinterpretation — an explicit non-UTC
+    offset from the model is kept exactly."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    parsed = _parse_when("2026-08-25T19:00:00+02:00")
+    assert parsed.utcoffset().total_seconds() == 2 * 3600

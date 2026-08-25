@@ -68,8 +68,22 @@ def _parse_when(when_iso: str) -> datetime:
     KYRAAN_TIMEZONE (the same tz "now" was expressed in) rather than
     crashing or silently assuming UTC/system tz."""
     parsed = datetime.fromisoformat(when_iso)
+    now = local_now()
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=local_now().tzinfo)
+        parsed = parsed.replace(tzinfo=now.tzinfo)
+    elif (
+        parsed.utcoffset().total_seconds() == 0
+        and now.utcoffset() is not None
+        and now.utcoffset().total_seconds() != 0
+    ):
+        # Model wrote "...Z" while the user lives in a non-UTC timezone —
+        # seen live: "call suman at 7pm" came back 19:00:00.000Z, which
+        # would have fired at 00:30 local, 5.5h late. For a personal
+        # assistant a stated clock time is always wall-clock in the user's
+        # tz; a Z here is the model dropping the offset, not the user
+        # meaning UTC. Reinterpret the wall time as local.
+        log_event("reminder_tz_reinterpreted", when_iso=when_iso)
+        parsed = parsed.replace(tzinfo=now.tzinfo)
     return parsed
 
 

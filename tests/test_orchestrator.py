@@ -447,3 +447,22 @@ async def test_cancel_with_description_matching_several_still_asks(monkeypatch, 
 
     assert "which should I cancel" in result
     assert len(store.list_pending(0)) == 2
+
+
+async def test_qa_prompt_forbids_pretending_to_create_calendar_events(monkeypatch):
+    """Found live: asked to add a calendar event (a write Kyraan can't do
+    yet), it played along, then silently created a reminder while the user
+    believed it was a calendar event. The prompt must force the honest
+    answer: can't write to the calendar, offer a reminder instead."""
+    _mock_normalize(monkeypatch, "qa.answer")
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["system"] = system
+        return _FakeRouted(text="I can't create calendar events yet — want a reminder instead?")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="can you set an event in my calendar")
+    assert "CANNOT create, edit, or delete calendar" in captured["system"]
+    assert "never present a reminder as a calendar event" in captured["system"]

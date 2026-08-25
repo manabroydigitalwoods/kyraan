@@ -34,7 +34,16 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   E.g. "what's on my calendar today", "any meetings tomorrow?", "am I free
   Friday afternoon?", "what does my week look like". Reminders are Kyraan's
   own; the calendar is external — "do I have reminders" is reminders.list,
-  "do I have meetings" is calendar.list.
+  "do I have meetings" is calendar.list. READING only: a request to ADD/
+  CREATE an event on the calendar ("set an event in my calendar", "add a
+  meeting to my calendar") is qa.answer — Kyraan cannot write to the
+  calendar yet, and qa.answer explains that and offers a reminder instead.
+  This holds for follow-ups too: details given while adding a calendar
+  event ("call suman at 7pm" after being asked the event name) stay
+  qa.answer — never silently turn them into reminders.create; only an
+  explicit reminder request is reminders.create. And "did you set/create
+  the calendar event?" is a question about what Kyraan did — qa.answer,
+  never calendar.list.
 - qa.answer: everything else conversational — questions, greetings, small talk, or
   anything that isn't about reminders. This should be the common case for
   ordinary chat, not a rare fallback.
