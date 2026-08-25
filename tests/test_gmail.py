@@ -48,10 +48,12 @@ async def test_unread_returns_metadata_only(fake_gmail):
 async def test_unauthorized_scope_gives_rerun_instruction(monkeypatch):
     monkeypatch.setattr(gmail, "access_token", lambda: "tok")
 
-    def deny(request, timeout=None):
-        raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, io.BytesIO(b""))
-
     import urllib.error
+
+    def deny(request, timeout=None):
+        body = b'{"error": {"code": 403, "message": "Gmail API has not been used in project 123 before or it is disabled."}}'
+        raise urllib.error.HTTPError(request.full_url, 403, "forbidden", {}, io.BytesIO(body))
+
     monkeypatch.setattr(urllib.request, "urlopen", deny)
-    with pytest.raises(registry.ToolError, match="setup_google_oauth"):
+    with pytest.raises(registry.ToolError, match="Gmail API has not been used"):
         await gmail.call("email.unread", {"limit": 1})

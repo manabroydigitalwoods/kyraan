@@ -715,3 +715,22 @@ async def test_email_failure_surfaces_and_history_stays_clean(monkeypatch):
     monkeypatch.setattr(orchestrator.kernel, "run_tool", failing_run_tool)
     result = await orchestrator.handle_message(chat_id=0, raw_text="any new emails?")
     assert "Couldn't check email" in result
+
+
+async def test_unconverged_switch_reply_is_honest(monkeypatch):
+    _mock_normalize(monkeypatch, "home.control", "turn on the AC")
+
+    async def fake_run_tool(call, **kwargs):
+        return {"entity": "switch.ac", "state": "off", "converged": False, "unit": None, "name": "AC"}
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    await orchestrator.handle_message(chat_id=0, raw_text="turn on the AC")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "still reports OFF" in result and "Done" not in result
+
+
+async def test_proactive_sends_enter_history(monkeypatch):
+    """Seen live: 'Thanks for the reminder' got 'I didn't actually send
+    you any reminders' — fire() bypassed history entirely."""
+    orchestrator.record_proactive(0, "Reminder: call Suman")
+    assert "assistant: Reminder: call Suman" in orchestrator._history_block(0)

@@ -63,3 +63,36 @@ async def test_missing_setup_is_a_clear_instruction(monkeypatch):
     monkeypatch.delenv("HASS_TOKEN", raising=False)
     with pytest.raises(registry.ToolError, match="HASS_URL and HASS_TOKEN"):
         await home_assistant.call("home.get_state", {"entity": "switch.ac"})
+
+
+async def test_switch_polls_until_state_converges(monkeypatch, hass_env):
+    """Seen live: confirmed ON, reply said OFF — HA applies service calls
+    asynchronously, so the immediate read-back returns the pre-switch
+    state. The adapter must poll until convergence."""
+    monkeypatch.setattr(home_assistant.time, "sleep", lambda s: None)
+    states = iter(["off", "off", "on"])  # stale twice, then converged
+    posts = []
+
+    def fake_api(path, payload=None):
+        if payload is not None:
+            posts.append(path)
+            return {}
+        return {"state": next(states), "attributes": {"friendly_name": "AC"}}
+
+    monkeypatch.setattr(home_assistant, "_api", fake_api)
+    result = await home_assistant.call("home.turn_on", {"entity": "switch.ac"})
+    assert posts == ["/api/services/switch/turn_on"]
+    assert result["state"] == "on" and result["converged"] is True
+
+
+async def test_switch_reports_unconverged_honestly(monkeypatch, hass_env):
+    monkeypatch.setattr(home_assistant.time, "sleep", lambda s: None)
+
+    def fake_api(path, payload=None):
+        if payload is not None:
+            return {}
+        return {"state": "off", "attributes": {"friendly_name": "AC"}}  # never converges
+
+    monkeypatch.setattr(home_assistant, "_api", fake_api)
+    result = await home_assistant.call("home.turn_on", {"entity": "switch.ac"})
+    assert result["converged"] is False and result["state"] == "off"

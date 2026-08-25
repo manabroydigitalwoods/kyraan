@@ -26,9 +26,20 @@ def _api(path: str) -> dict:
             return json.loads(resp.read())
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
+            # Google's own message names the actual cause (disabled API vs
+            # missing scope vs revoked token) — pass it through instead of
+            # guessing; a collapsed message sent the owner to the wrong fix
+            # once already.
+            detail = ""
+            try:
+                body = json.loads(exc.read())
+                detail = body.get("error", {}).get("message", "")[:300]
+            except Exception:
+                pass
             raise ToolError(
-                "Gmail access isn't authorized yet — re-run `python scripts/setup_google_oauth.py` "
-                "to grant the added read-only Gmail scope"
+                f"Gmail refused access ({exc.code}): {detail or 'no detail'} — if it mentions scopes, "
+                "re-run scripts/setup_google_oauth.py; if it mentions the API being disabled, enable "
+                "the Gmail API in the GCP console"
             ) from exc
         if exc.code >= 500:
             raise TransientToolError(f"Gmail returned {exc.code}") from exc

@@ -11,6 +11,7 @@ Adapter contract (docs/design/tool_registry.md): `async def call(tool_name, args
 import asyncio
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -81,8 +82,21 @@ def _switch(entity: str, turn_on: bool) -> dict:
     if domain != "switch":
         raise ToolError(f"only switch entities are switchable; {entity!r} is a {domain}")
     _api(f"/api/services/switch/turn_{'on' if turn_on else 'off'}", {"entity_id": entity})
-    # Read back — report what the device actually did, never assume.
-    return _get_state(entity)
+    # Read back — report what the device actually did, never assume. HA
+    # applies service calls asynchronously, so the immediate read returns
+    # the PRE-switch state (seen live: confirmed ON, reply said OFF). Poll
+    # briefly until the state converges; an unconverged result is returned
+    # as-is with converged=False so the caller can be honest about it.
+    expected = "on" if turn_on else "off"
+    state = {}
+    for _ in range(10):
+        state = _get_state(entity)
+        if state["state"] == expected:
+            state["converged"] = True
+            return state
+        time.sleep(0.6)
+    state["converged"] = False
+    return state
 
 
 async def call(tool_name: str, args: dict) -> object:

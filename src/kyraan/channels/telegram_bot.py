@@ -54,6 +54,7 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
             logger.warning("Retiring reminder for non-owner chat %s (dev-harness record)", chat_id)
             return False
         await bot.send_message(chat_id=chat_id, text=text)
+        orchestrator.record_proactive(chat_id, text)
         return True
 
     scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)
@@ -67,6 +68,7 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
     async def _brief_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         async def send_fn(chat_id: int, text: str) -> None:
             await context.bot.send_message(chat_id=chat_id, text=text)
+            orchestrator.record_proactive(chat_id, text)
 
         await briefs.fire(_owner_id(), send_fn)
 

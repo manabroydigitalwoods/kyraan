@@ -118,6 +118,13 @@ _EXTRACTION_MIN_CHARS = 8
 _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_redaction", default=None)
 
 
+def record_proactive(chat_id: int, text: str) -> None:
+    """Proactive sends (reminders, briefs) belong in conversation history
+    too — found live: \"Thanks for the reminder\" got \"I didn't actually
+    send you any reminders\" because fire() bypassed _history entirely."""
+    _history[chat_id].append(("assistant", text))
+
+
 def _history_block(chat_id: int) -> str:
     return "\n".join(f"{role}: {text}" for role, text in _history[chat_id]) or "(no conversation yet)"
 
@@ -557,7 +564,15 @@ async def _home_control(chat_id: int, text: str) -> str:
             result = await kernel.run_tool(kernel.ToolCall(tool, args))
         except kernel.ToolFailed as exc:
             return f"Couldn't switch the AC: {exc}"
-        # Read-back truth, not assumption: report what the plug says now.
+        # Read-back truth, not assumption: report what the plug says now —
+        # and when HA's state hasn't converged (adapter polled and gave
+        # up), say so honestly instead of reporting the stale value as
+        # fact (seen live: confirmed ON, reply said OFF).
+        if result.get("converged") is False:
+            return (
+                f"I sent the {verb} command, but the plug still reports "
+                f"{result['state'].upper()} — give it a few seconds, then ask \"is the AC on?\" to verify."
+            )
         return f"Done — the AC is now {result['state'].upper()}."
 
     describe = f"About to turn the AC {verb}"
