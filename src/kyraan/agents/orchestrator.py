@@ -128,22 +128,20 @@ async def _gated(chat_id: int, call: SkillCall, handler) -> str:
 
 async def _create_reminder(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
-        # frontier, not cheap — verified live (2026-08-25): the cheap
-        # tier's local model produced malformed JSON (a stray trailing
-        # "}}") and once embedded prose inside the when_iso value itself
-        # ("...remains the same, as no further datetime was provided."),
-        # corrupting the datetime outright. Frontier was clean and correct
-        # across every sample tested. Same reliability gap as intent
-        # classification — see handle_message's comment.
-        # No max_tokens cap below the router's default: the frontier tier
-        # is a reasoning model that spends hidden tokens before the visible
-        # JSON, and a 200-token cap truncated the output mid-string live
-        # (2026-08-25) — exactly the failure mode permissions.yaml warns
-        # about.
+        # cheap, backed by llama3.1:8b as of 2026-08-25 — the earlier 3B
+        # model (llama3.2) produced malformed JSON here and once embedded
+        # prose inside the when_iso value itself, corrupting the datetime
+        # outright, so every call was moved to frontier. llama3.1:8b tested
+        # clean and correct across every sample (4/4, matching frontier
+        # exactly) — see config/permissions.yaml's model_tiers comment.
+        # No max_tokens cap below the router's default: a reasoning-model
+        # tier (frontier, or if this ever points at one again) spends
+        # hidden tokens before the visible JSON, and a 200-token cap
+        # truncated the output mid-string live (2026-08-25).
         extraction = router.call(
             prompt=text,
             system=_EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()),
-            tier="frontier",
+            tier="cheap",
         )
         try:
             data = json.loads(extraction.text)
@@ -202,17 +200,14 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _answer(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
-        # frontier, not call_with_escalation()'s cheap-first path — verified
-        # live (2026-08-25): asked "what time is it?" with the correct
-        # current time given directly in the system prompt, the cheap
-        # tier's local model still answered wrong in 3/3 tries (14:40,
-        # 17:30, 15:50 — actual was 13:50); frontier was exactly right in
-        # 3/3. call_with_escalation() only escalates on an exception, and a
-        # confidently wrong answer isn't one, so it would never have caught
-        # this. Same reliability gap as intent classification and
-        # reminder extraction — see handle_message's comment.
+        # cheap, backed by llama3.1:8b as of 2026-08-25 — asked "what time
+        # is it?" with the correct current time given directly in the
+        # system prompt, the earlier 3B model (llama3.2) answered wrong in
+        # 3/3 tries (14:40, 17:30, 15:50 — actual was 13:50); llama3.1:8b
+        # was exactly right in 3/3, matching frontier. See
+        # config/permissions.yaml's model_tiers comment.
         response = router.call(
-            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat()), tier="frontier"
+            prompt=args["text"], system=_ANSWER_SYSTEM.format(now=local_now().isoformat()), tier="cheap"
         )
         return response.text
 

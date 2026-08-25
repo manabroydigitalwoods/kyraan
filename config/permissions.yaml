@@ -51,10 +51,8 @@ providers:
 
 model_tiers:
   # Each tier just names a provider (must exist above) + that provider's
-  # model id. cheap = local Ollama: zero cost, zero rate limit, fast enough
-  # for intent normalization and everyday replies. frontier = Groq: still
-  # free, but a real ~120B-class model for harder qa.answer escalations,
-  # served fast by Groq's inference hardware. OpenRouter/Gemini/OpenCode
+  # model id. cheap = local Ollama: zero cost, zero rate limit. frontier =
+  # Groq: still free, a real ~120B-class model. OpenRouter/Gemini/OpenCode
   # are configured above and ready to use — assign either tier to them, or
   # add a third tier later, purely by editing this file.
   #
@@ -67,9 +65,19 @@ model_tiers:
   #   anthropic/claude-haiku-4-5 in 1.00  out 5.00
   #   anthropic/claude-sonnet-5  in 2.00  out 10.00
   #   gemini/gemini-flash-latest in 0.75  out 3.75
+  #
+  # cheap was llama3.2 (3B) until 2026-08-25, live-tested unreliable for
+  # Kyraan's structured/factual tasks (see docs/progress.md) — every call
+  # was moved to frontier as a result. llama3.1:8b (pulled 2026-08-25) then
+  # tested close to frontier-equivalent for Q&A/reminder-extraction (3/3
+  # and 4/4 correct, matching Groq exactly) and meaningfully better than
+  # llama3.2 for intent classification (12-13/14 vs ~8/14, vs. frontier's
+  # 14/14) — good enough to bring qa.answer/reminders.create back to cheap;
+  # intent classification stays on frontier specifically, still the more
+  # reliable of the two there (see orchestrator.py).
   cheap:
     provider: ollama
-    model: llama3.2
+    model: llama3.1:8b
   frontier:
     provider: groq
     model: openai/gpt-oss-120b
