@@ -24,6 +24,13 @@ def list_pending() -> None:
     for p in proposals:
         print(f"── {p.name}")
         print(p.read_text().rstrip())
+        target_line = next((l for l in p.read_text().splitlines() if l.startswith("target:")), "")
+        target_rel = target_line.split("target:", 1)[1].strip() if target_line else ""
+        existing = store.read_fact_file(target_rel).strip() if target_rel else ""
+        if existing:
+            print(f"   ┌ already in memory/{target_rel} — check for contradictions:")
+            for line in existing.splitlines():
+                print(f"   │ {line}")
         print()
     print(f"{len(proposals)} proposal(s). Promote/reject by filename, or 'all'.")
 

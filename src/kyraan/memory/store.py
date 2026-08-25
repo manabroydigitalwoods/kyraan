@@ -86,6 +86,41 @@ def reject(proposal_path: Path) -> None:
     proposal_path.unlink()
 
 
+def _fact_words(line: str) -> frozenset:
+    return frozenset(
+        w.strip(".,!?'\"").casefold() for w in line.strip().lstrip("-").split()
+        if len(w.strip(".,!?'\"")) > 2 and w.casefold() not in ("my", "the", "our", "his", "her")
+    )
+
+
+def known_fact_lines() -> list:
+    """Word-sets of every fact line, live AND pending — the dedup baseline.
+    Word-set containment, not exact match: live testing showed "my wife's
+    name is Mira" (model) vs "Wife's name is Mira" (stored) defeating
+    string equality."""
+    sets = []
+    for rel in list_fact_files():
+        if rel == "README.md":
+            continue
+        for line in read_fact_file(rel).splitlines():
+            if line.strip().startswith("-"):
+                sets.append(_fact_words(line))
+    for proposal in PENDING_DIR.glob("*.md"):
+        _, _, rest = proposal.read_text().partition("---\n")
+        _, _, body = rest.partition("---\n")
+        for line in body.splitlines():
+            if line.strip().startswith("-"):
+                sets.append(_fact_words(line))
+    return [s for s in sets if len(s) >= 2]
+
+
+def is_known_fact(content: str, known: list) -> bool:
+    words = _fact_words(content)
+    if len(words) < 2:
+        return False
+    return any(words <= existing or existing <= words for existing in known)
+
+
 def load_all_facts(max_chars: int = 4000) -> str:
     """Every live fact, formatted for direct inclusion in a system prompt.
 

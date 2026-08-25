@@ -137,3 +137,38 @@ async def test_fabricated_facts_sharing_no_words_are_dropped(monkeypatch, isolat
     queued = await extraction.propose_from_message("my favourite tea is masala chai")
     assert queued == ["- Favourite tea is masala chai"]  # the fabricated one is gone
     assert len(list(isolated_memory.glob("*.md"))) == 1
+
+
+async def test_extraction_is_frontier_first_with_local_fallback(monkeypatch, isolated_memory):
+    tiers = []
+
+    def fake_call(prompt, system="", tier="cheap", **kwargs):
+        tiers.append(tier)
+        if tier == "frontier":
+            raise __import__("kyraan.model_router.router", fromlist=["x"]).ModelProviderError("429")
+        return _FakeRouted(text='{"facts": []}')
+
+    monkeypatch.setattr(router, "call", fake_call)
+    await extraction.propose_from_message("my favourite tea is masala chai")
+    assert tiers == ["frontier", "cheap"]
+
+
+async def test_restating_a_known_fact_is_not_reproposed(monkeypatch, isolated_memory):
+    """Seen live: a duplicate wife-name proposal. Live + pending fact lines
+    are the dedup baseline."""
+    live = store.MEMORY_ROOT / "people"
+    live.mkdir()
+    (live / "ruma.md").write_text("- Wife's name is Mira\n")
+    _mock_model(monkeypatch, '{"facts": [{"path": "people/wife.md", "content": "- Wife\'s name is Mira"}]}')
+
+    queued = await extraction.propose_from_message("my wife's name is Mira")
+    assert queued == []
+    assert list(isolated_memory.glob("*.md")) == []
+
+
+async def test_pending_proposals_also_count_as_known(monkeypatch, isolated_memory):
+    _mock_model(monkeypatch, '{"facts": [{"path": "preferences/tea.md", "content": "- Favourite tea is masala chai"}]}')
+    first = await extraction.propose_from_message("my favourite tea is masala chai")
+    second = await extraction.propose_from_message("my favourite tea is masala chai")
+    assert first and second == []
+    assert len(list(isolated_memory.glob("*.md"))) == 1

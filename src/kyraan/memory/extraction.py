@@ -59,11 +59,16 @@ async def propose_from_message(raw_text: str) -> list[str]:
         return []
 
     async def handler(args: dict) -> list[str]:
-        response = router.call(
-            prompt=args["text"],
-            system=_EXTRACT_FACTS_SYSTEM.format(now=local_now().isoformat()),
-            tier="cheap",
-        )
+        system = _EXTRACT_FACTS_SYSTEM.format(now=local_now().isoformat())
+        # Frontier-first for extraction quality (terse/fabricated facts
+        # were the local 8B's signature); local fallback keeps memory
+        # working when the cloud tier is exhausted — same pattern as the
+        # structured extractions. Quota tracking warns before it runs dry.
+        try:
+            response = router.call(prompt=args["text"], system=system, tier="frontier")
+        except router.ModelProviderError as exc:
+            log_event("extraction_fallback_cheap", error=str(exc))
+            response = router.call(prompt=args["text"], system=system, tier="cheap")
         try:
             data = json.loads(router.strip_code_fence(response.text))
             facts = data.get("facts") or []
@@ -74,6 +79,7 @@ async def propose_from_message(raw_text: str) -> list[str]:
             return []
 
         message_words = {w.strip(".,!?'\"").lower() for w in args["text"].split() if len(w) > 3}
+        known = store.known_fact_lines()
         queued = []
         for fact in facts[:_MAX_FACTS_PER_MESSAGE]:
             # Anti-fabrication: a real extraction reuses the message's own
@@ -83,6 +89,12 @@ async def propose_from_message(raw_text: str) -> list[str]:
             fact_words = {w.strip(".,!?'\"").lower() for w in str(fact.get("content", "")).split() if len(w) > 3}
             if message_words and not (fact_words & message_words):
                 log_event("extraction_fact_fabricated", fact=fact, source=args["text"])
+                continue
+            # Dedup: restating something already live or already pending
+            # review is queue noise, not new memory (a duplicate wife-name
+            # proposal was seen live).
+            if store.is_known_fact(str(fact.get("content", "")), known):
+                log_event("extraction_duplicate_skipped", fact=fact)
                 continue
             try:
                 store.propose_fact(fact["path"], fact["content"], source=args["text"])
