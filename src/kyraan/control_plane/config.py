@@ -18,10 +18,6 @@ def skill_config(skill_name: str) -> dict:
     return cfg["skills"].get(skill_name, cfg["defaults"])
 
 
-def model_for_tier(tier: str) -> str:
-    return load()["model_tiers"][tier]["model"]
-
-
 def reload() -> None:
     """Drop the cache — call after editing permissions.yaml at runtime."""
     load.cache_clear()

@@ -7,12 +7,17 @@ defaults:
   model_tier: cheap      # cheap | frontier
 
 model_tiers:
+  # provider is one of: anthropic | opencode | openai | ollama
+  # (see src/kyraan/model_router/router.py). Using OpenCode Zen's free tier
+  # as a stand-in for now — swap provider/model per tier as real keys or a
+  # local Ollama model become available; nothing else in the codebase
+  # changes. Full OpenCode catalog: https://opencode.ai/zen/v1/models.
   cheap:
-    provider: anthropic
-    model: claude-haiku-4-5-20251001
+    provider: opencode
+    model: big-pickle
   frontier:
-    provider: anthropic
-    model: claude-sonnet-5
+    provider: opencode
+    model: nemotron-3-ultra-free
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.
