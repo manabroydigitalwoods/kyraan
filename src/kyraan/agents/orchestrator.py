@@ -5,6 +5,7 @@ for the Response Engine (here, just the Telegram send call) to deliver.
 """
 import contextvars
 import json
+import time
 from collections import defaultdict, deque
 
 from kyraan.agents.capabilities import capability_brief
@@ -87,6 +88,10 @@ it to resolve follow-ups and pronouns:
 # default to it), so the path for the user to say "yes" must exist before
 # Phase 2 adds tools that rely on it.
 _pending_confirmations: dict = {}
+# A pending confirmation goes stale: "About to turn the AC ON" asked at
+# noon must not execute on an unrelated "yes" hours later. Physical
+# actions deserve freshness.
+_CONFIRMATION_TTL_S = 300
 _CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead"}
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 
@@ -159,6 +164,9 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
     reply = await _dispatch(chat_id, raw_text)
     reply += await _extraction_note(raw_text)
+    quota_warning = router.quota_alert_due()
+    if quota_warning:
+        reply += f"\n\n⚠️ {quota_warning}."
     if router.budget_alert_due():
         reply += (
             f"\n\n⚠️ Model spend today is ${router.today_cost_usd():.2f} — past "
@@ -177,20 +185,30 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
     try:
         pending = _pending_confirmations.pop(chat_id, None)
         if pending:
-            call, handler = pending
+            call, handler, stashed_at = pending
             word = raw_text.strip().lower().rstrip(".!")
-            if word in _CONFIRM_WORDS:
+            if time.monotonic() - stashed_at > _CONFIRMATION_TTL_S:
+                log_event("confirmation_expired", skill=call.skill_name)
+                if word in _CONFIRM_WORDS or word in _DENY_WORDS:
+                    return (
+                        f"That confirmation for '{call.skill_name}' expired "
+                        "(over 5 minutes old) — ask again if you still want it."
+                    )
+                # An unrelated message: drop the stale ask silently and
+                # handle the new message normally.
+            elif word in _CONFIRM_WORDS:
                 call.confirmed = True
                 # Re-runs the full gate: the kill switch is re-checked at
                 # confirmation time, not just at the original request.
                 return str(await kernel.run_skill(call, handler))
-            if word in _DENY_WORDS:
+            elif word in _DENY_WORDS:
                 log_event("confirmation_denied", skill=call.skill_name)
                 return f"Okay — '{call.skill_name}' cancelled, nothing was done."
-            # Anything else: the user moved on. Drop the pending action
-            # (fail safe, never run it implicitly) and handle the new
-            # message normally.
-            log_event("confirmation_dropped", skill=call.skill_name)
+            else:
+                # Anything else: the user moved on. Drop the pending action
+                # (fail safe, never run it implicitly) and handle the new
+                # message normally.
+                log_event("confirmation_dropped", skill=call.skill_name)
 
         # Structured JSON intent classification needs more reliability than
         # the cheap tier's local 3B model consistently gives — verified
@@ -275,7 +293,7 @@ async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> 
     try:
         return str(await kernel.run_skill(call, handler))
     except ConfirmationRequired:
-        _pending_confirmations[chat_id] = (call, handler)
+        _pending_confirmations[chat_id] = (call, handler, time.monotonic())
         what = describe or f"'{call.skill_name}' needs your confirmation first"
         return f"{what} — reply \"yes\" to confirm or \"no\" to cancel."
 

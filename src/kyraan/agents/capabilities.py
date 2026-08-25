@@ -52,7 +52,10 @@ def capability_brief() -> str:
     else:
         not_connected.append("Smart home (needs the Home Assistant URL + token)")
 
-    lines.append("- A morning brief arrives daily at 07:30 (calendar, reminders, home status).")
+    from kyraan.triggers.briefs import brief_time  # lazy: avoids import order issues
+    at = brief_time()
+    if at is not None:
+        lines.append(f"- A morning brief arrives daily at {at.strftime('%H:%M')} (calendar, reminders, home status).")
     lines.append("")
     lines.append(
         "YOU HAVE NO INTERNET ACCESS: no web search, no browsing, no news, no "

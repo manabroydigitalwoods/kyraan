@@ -832,3 +832,43 @@ async def test_provider_error_surfaces_clean_not_raw(monkeypatch):
     result = await orchestrator.handle_message(chat_id=0, raw_text="hello")
     assert "org_SECRET" not in result and "console.groq.com" not in result
     assert "having trouble" in result
+
+
+async def test_stale_confirmation_expires_instead_of_executing(monkeypatch):
+    """Deep-review safety catch: 'About to turn the AC ON' asked at noon
+    must not execute on an unrelated 'yes' hours later."""
+    _make_skill_confirm(monkeypatch, "reminders.create")
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to test")
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(orchestrator.time, "monotonic", lambda: clock["t"])
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="remind me to test")
+    assert "confirmation" in ask
+
+    clock["t"] += 400  # 6.7 minutes later — past the 5-minute TTL
+    ran = []
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: ran.append(1) or _FakeRouted(text="{}"))
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "expired" in result
+    assert ran == []  # the stale action never executed
+
+
+async def test_fresh_confirmation_still_works_within_ttl(monkeypatch):
+    from kyraan.tools import registry as reg
+
+    _mock_normalize(monkeypatch, "calendar.create", "add test tomorrow 3pm to calendar")
+    monkeypatch.setattr(
+        orchestrator.router, "call",
+        lambda **kwargs: _FakeRouted(
+            text='{"title": "T", "start_iso": "2099-01-02T15:00:00+00:00", "end_iso": "2099-01-02T16:00:00+00:00", "location": null}'
+        ),
+    )
+
+    async def fake_dispatch(spec, args):
+        return {"id": "e", "link": None, "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    await orchestrator.handle_message(chat_id=0, raw_text="add test tomorrow 3pm to calendar")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "Event created" in result

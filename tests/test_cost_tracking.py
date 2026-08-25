@@ -64,3 +64,17 @@ def test_budget_alert_fires_once_per_day_at_threshold(monkeypatch, tmp_path):
     assert router.budget_alert_due() is False  # same day: never twice
     # "restart" (fresh reads) must not re-alert either — the marker is in the file
     assert router.budget_alert_due() is False
+
+
+def test_provider_token_quota_alerts_once_at_80pct(monkeypatch, tmp_path):
+    """The Groq free tier ran dry live with zero warning — usage is now
+    tracked per provider per day, with one warning at 80%."""
+    monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "ledger.json")
+    router._record_tokens("groq", router.Usage(input_tokens=100_000, output_tokens=50_000))
+    assert router.quota_alert_due() == ""  # 150k of 200k = 75%, quiet
+
+    router._record_tokens("groq", router.Usage(input_tokens=20_000, output_tokens=0))
+    warning = router.quota_alert_due()    # 170k = 85% — one warning
+    assert "groq" in warning and "85%" in warning
+    assert router.quota_alert_due() == ""  # never twice in a day
+    assert router.provider_tokens_today("groq") == 170_000

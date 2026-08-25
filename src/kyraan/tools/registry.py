@@ -108,6 +108,14 @@ def load() -> dict:
         )
         _validate(name, spec, all_names, servers)
         specs[name] = spec
+    for spec in specs.values():
+        if spec.on_failure.startswith("fallback:"):
+            target = specs[spec.on_failure.split(":", 1)[1]]
+            if target.permission == "confirm":
+                raise ValueError(
+                    f"tool {spec.name!r}: fallback target {target.name!r} is confirm-gated — "
+                    "a mid-failure fallback must never spring a confirmation on the user"
+                )
     return specs
 
 

@@ -41,6 +41,8 @@ providers:
     kind: openai_compatible
     base_url: https://api.groq.com/openai/v1
     api_key_env: GROQ_API_KEY
+    daily_token_limit: 200000   # free-tier TPD cap — hit live 2026-08-25
+                                # with zero warning; tracked + 80% alert now
   openrouter:
     kind: openai_compatible
     base_url: https://openrouter.ai/api/v1

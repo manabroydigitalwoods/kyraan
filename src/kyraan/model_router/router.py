@@ -46,6 +46,52 @@ def _record_cost(cost_usd: float) -> None:
     COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
 
+def _provider_token_limit(provider: str) -> int:
+    return int((config.load()["providers"].get(provider) or {}).get("daily_token_limit", 0))
+
+
+def provider_tokens_today(provider: str) -> int:
+    key = f"tokens:{provider}:{local_now().date().isoformat()}"
+    return int(_read_ledger().get(key, 0))
+
+
+def _record_tokens(provider: str, usage: "Usage") -> None:
+    total = (usage.input_tokens or 0) + (usage.output_tokens or 0)
+    if total <= 0:
+        return
+    ledger = _read_ledger()
+    key = f"tokens:{provider}:{local_now().date().isoformat()}"
+    ledger[key] = int(ledger.get(key, 0)) + total
+    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+
+
+def quota_alert_due() -> str:
+    """Once per provider per day, the first time usage crosses 80% of a
+    declared daily_token_limit — returns a human warning line, or "".
+    The Groq free tier ran dry live with zero warning; never again."""
+    ledger = _read_ledger()
+    day = local_now().date().isoformat()
+    for provider in config.load()["providers"]:
+        limit = _provider_token_limit(provider)
+        if limit <= 0:
+            continue
+        used = int(ledger.get(f"tokens:{provider}:{day}", 0))
+        if used < 0.8 * limit:
+            continue
+        marker = f"quota_alerted:{provider}:{day}"
+        if ledger.get(marker):
+            continue
+        ledger[marker] = True
+        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+        log_event("quota_alert", provider=provider, used=used, limit=limit)
+        return (
+            f"{provider} is at {used * 100 // limit}% of its {limit:,}-token free daily "
+            "quota — replies may switch to the local model when it runs out"
+        )
+    return ""
+
+
 def budget_alert_due() -> bool:
     """True exactly once per day, the first time today's spend crosses
     cost_monitor.alert_threshold_pct of the daily budget — the caller
@@ -337,6 +383,7 @@ def call(
             last_call = response
             session_cost_usd += cost_usd
             _record_cost(cost_usd)
+            _record_tokens(provider, raw.usage)
             return response
         except Exception as exc:
             last_exc = exc
