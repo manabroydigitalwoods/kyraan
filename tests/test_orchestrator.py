@@ -108,7 +108,7 @@ async def test_qa_system_prompt_forbids_claiming_a_fact_is_already_saved(monkeyp
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
 
     await orchestrator.handle_message(chat_id=0, raw_text="remember that my wife's name is Mira")
-    assert "permanently\nsaved" in captured["system"] or "permanently saved" in captured["system"]
+    assert "already permanently" in captured["system"]
 
 
 @pytest.fixture(autouse=True)
@@ -465,8 +465,8 @@ async def test_qa_prompt_forbids_conflating_reminders_and_calendar_events(monkey
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
 
     await orchestrator.handle_message(chat_id=0, raw_text="can you set an event in my calendar")
-    assert "unless it actually was" in captured["system"]
-    assert "reminder as a calendar event" in captured["system"]
+    assert "unless it actually did" in captured["system"]
+    assert "is not a calendar" in captured["system"]
 
 
 async def test_duplicate_reminder_is_refused_with_the_existing_id(monkeypatch, isolated_store):
@@ -775,3 +775,17 @@ async def test_asking_details_about_a_specific_email_states_the_boundary(monkeyp
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
     result = await orchestrator.handle_message(chat_id=0, raw_text="can you tell more about the Kotak email?")
     assert "can't open email contents" in result
+
+
+async def test_qa_prompt_carries_the_generated_capability_brief(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator, "capability_brief", lambda: "CAPABILITY_SENTINEL")
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["system"] = system
+        return _FakeRouted(text="ok")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    await orchestrator.handle_message(chat_id=0, raw_text="can you book a cab?")
+    assert "CAPABILITY_SENTINEL" in captured["system"]
