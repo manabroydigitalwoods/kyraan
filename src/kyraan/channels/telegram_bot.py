@@ -83,7 +83,12 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         reply = await orchestrator.handle_message(chat_id, text)
     finally:
         typing.cancel()
-    await update.message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id))
+    # Quote the message being answered — when the owner sends several
+    # messages in a burst, replies land serially seconds later and read
+    # as random without a visual link to their question (seen live: a
+    # rapid-fire session felt like "randomly answering" partly because
+    # nothing showed which answer belonged to which message).
+    await update.message.reply_text(reply, reply_markup=_confirm_keyboard(chat_id), do_quote=True)
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
