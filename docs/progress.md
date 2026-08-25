@@ -91,7 +91,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 40 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 48 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
 math, orchestrator error handling (including a pin on the qa.answer
@@ -175,20 +175,11 @@ imply a fact was saved. Live-verified honest answers after the fix.
   therefore not actually complete — the store exists, the pipeline doesn't
 - **No conversation context**: every message is handled statelessly;
   follow-up questions ("what about tomorrow?") have nothing to refer to
-- **The confirm-permission flow is a dead end**: the kernel raises
-  `ConfirmationRequired`, but there's no path for the user to actually
-  confirm — fine while all active skills are `auto`, must be built before
-  Phase 2's tools
 - `cancel_reminder`'s cancel path is best-effort in both dev harnesses (an
   already-scheduled asyncio task still fires even if the record is
-  cancelled) — fine for dev, not for production. Also, when no id in the
-  message matches, it falls back to cancelling the *first* pending
-  reminder — the walkthrough's cancel-by-description passed only because
-  the intended reminder happened to be first
-- **Past-due reminders on restart are unhandled**: `scheduler.init()`
-  reschedules every pending reminder without checking whether its time
-  already passed during downtime — behavior then depends on the channel's
-  scheduler (JobQueue fires immediately), not on a deliberate choice
+  cancelled) — fine for dev, not for production
+- The confirm flow's pending state is in-memory only — a restart drops an
+  unanswered confirmation (fails safe: the action just doesn't run)
 - No CI (tests only run when run by hand) and no rotation for
   `logs/events.jsonl` (~180 KB after one dev day — and it's the audit
   trail, so it shouldn't be cleaned up ad hoc)
@@ -208,20 +199,18 @@ imply a fact was saved. Live-verified honest answers after the fix.
 
 ## Next steps
 
-1. Small correctness fixes: cancel fallback (ask instead of cancelling the
-   first pending), past-due reminders on restart, a real confirm flow
-2. Get `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`, run the real bot
+1. Get `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`, run the real bot
    end-to-end for the first time
-3. **Wire the memory loop** — the missing half of Phase 1: extraction pass
+2. **Wire the memory loop** — the missing half of Phase 1: extraction pass
    after `handle_message` calling the existing `propose_fact()`, memory
    reads feeding qa.answer's prompt, seed the empty `memory/` tree, and a
    short rolling conversation history in the same change
-4. CI for the test suite + rotation for `logs/events.jsonl`
-5. Consider whether `anthropic`/`openai` should become the default tiers
+3. CI for the test suite + rotation for `logs/events.jsonl`
+4. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
-6. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
+5. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
    — the dev machine, Apple M3 Pro/18GB, comfortably fits either) and
    re-run the same reliability comparison against frontier, to see whether
    local becomes viable again at that size
-7. Phase 2 groundwork: tool registry design, first MCP server (likely
+6. Phase 2 groundwork: tool registry design, first MCP server (likely
    Home Assistant or a calendar) — not started
