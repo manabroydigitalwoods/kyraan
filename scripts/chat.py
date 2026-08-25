@@ -91,7 +91,7 @@ def handle_slash(cmd: str) -> bool:
 async def main() -> None:
     load_dotenv()
     scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)
-    console.print("[bold cyan]Kyraan[/bold cyan] local CLI — real model calls, no Telegram needed.")
+    console.print(f"[bold cyan]Kyraan[/bold cyan] local CLI — real model calls. [dim]{_build_stamp()}[/dim]")
     console.print("Type [bold]/help[/bold] for commands, Ctrl-D to quit.\n")
 
     loop = asyncio.get_event_loop()
@@ -123,3 +123,19 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         console.print("\n[dim]bye[/dim]")
+
+
+def _build_stamp() -> str:
+    """Git hash + time of the running code — a dev harness process outlives
+    commits, and a stale one silently lacks the latest fixes (seen live:
+    a TUI started 6 minutes before a fix, testing code that didn't have
+    it). The stamp makes staleness visible at a glance."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%h %ad", "--date=format:%H:%M"],
+            capture_output=True, text=True, cwd=__file__.rsplit("/", 2)[0], timeout=3,
+        ).stdout.strip()
+        return f"build {out} — restart me after new commits"
+    except Exception:
+        return "build unknown"

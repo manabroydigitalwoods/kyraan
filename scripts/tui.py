@@ -113,7 +113,7 @@ class KyraanTUI(App):
         self.app_loop = asyncio.get_running_loop()
         scheduler.init(schedule_fn=self._schedule_fn, cancel_fn=self._cancel_fn, send_fn=self._send_fn)
         self.title = "Kyraan"
-        self.sub_title = "local TUI — real model calls, no Telegram needed"
+        self.sub_title = f"local TUI — real model calls — {_build_stamp()}"
         await self._log("[bold cyan]Kyraan[/bold cyan] — type a message, or /help for commands.")
         self._refresh_sidebar()
         self.query_one("#chat-input", Input).focus()
@@ -343,3 +343,19 @@ class KyraanTUI(App):
 if __name__ == "__main__":
     load_dotenv()
     KyraanTUI().run()
+
+
+def _build_stamp() -> str:
+    """Git hash + time of the running code — a dev harness process outlives
+    commits, and a stale one silently lacks the latest fixes (seen live:
+    a TUI started 6 minutes before a fix, testing code that didn't have
+    it). The stamp makes staleness visible at a glance."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["git", "log", "-1", "--format=%h %ad", "--date=format:%H:%M"],
+            capture_output=True, text=True, cwd=__file__.rsplit("/", 2)[0], timeout=3,
+        ).stdout.strip()
+        return f"build {out} — restart me after new commits"
+    except Exception:
+        return "build unknown"
