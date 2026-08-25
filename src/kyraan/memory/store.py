@@ -121,6 +121,19 @@ def is_known_fact(content: str, known: list) -> bool:
     return any(words <= existing or existing <= words for existing in known)
 
 
+def load_pending_facts(max_chars: int = 1500) -> str:
+    """Fact lines awaiting review — conversationally usable (the user
+    stated them) while the live tree still requires the owner's promote.
+    Found live: "who is biren?" failed although the fact sat in the queue."""
+    lines = []
+    for proposal in sorted(PENDING_DIR.glob("*.md")):
+        _, _, rest = proposal.read_text().partition("---\n")
+        _, _, body = rest.partition("---\n")
+        lines.extend(l for l in body.splitlines() if l.strip().startswith("-"))
+    text = "\n".join(lines)
+    return text[:max_chars]
+
+
 def load_all_facts(max_chars: int = 4000) -> str:
     """Every live fact, formatted for direct inclusion in a system prompt.
 

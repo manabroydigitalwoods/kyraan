@@ -972,3 +972,36 @@ async def test_no_stated_clock_leaves_extraction_alone(monkeypatch, isolated_sto
     orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
     result = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call mom in 45 minutes")
     assert "8:15 PM" in result  # untouched
+
+
+async def test_typo_correction_rewrites_are_accepted(monkeypatch):
+    """The rewrite guard rejected 'wat tym is it' -> 'what time is it' — a
+    CORRECT typo fix. Textual similarity is the second legitimate path."""
+    def typo_fix(raw_text, tier="cheap", history=""):
+        return NormalizedIntent(intent="qa.answer", confidence=0.96, normalized_text="what time is it")
+
+    monkeypatch.setattr(orchestrator, "normalize", typo_fix)
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["prompt"] = prompt
+        return _FakeRouted(text="9pm")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    await orchestrator.handle_message(chat_id=0, raw_text="wat tym is it")
+    assert captured["prompt"] == "what time is it"  # correction kept
+
+
+async def test_pending_facts_reach_the_qa_prompt(monkeypatch):
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.memory_store, "load_pending_facts", lambda **kwargs: "- His name is biren roy")
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["system"] = system
+        return _FakeRouted(text="Deven Roy is your father (awaiting your review).")
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    await orchestrator.handle_message(chat_id=0, raw_text="who is biren?")
+    assert "- His name is biren roy" in captured["system"]
+    assert "awaiting the" in captured["system"]  # honest framing instruction

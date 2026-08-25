@@ -78,6 +78,11 @@ fact in neither, say you don't know it yet (general knowledge — geography,
 code, science — is unaffected; answer normally):
 {facts}
 
+Facts the user has STATED but the owner hasn't reviewed yet — use them to
+answer (the user said them), and mention they're still awaiting the
+owner's review when relevant:
+{pending_facts}
+
 Recent conversation, oldest first — your only memory of this session; use
 it to resolve follow-ups and pronouns:
 {history}"""
@@ -286,9 +291,17 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # from neither is hallucination — use the raw text.
         def _words(t):
             return {w.strip(".,!?'\"").lower() for w in t.split() if len(w) > 2}
+        import difflib
         norm_w = _words(parsed.normalized_text)
         allowed = _words(raw_text) | _words(context)
-        if norm_w and len(norm_w & allowed) / len(norm_w) < 0.3:
+        word_grounded = bool(norm_w) and len(norm_w & allowed) / len(norm_w) >= 0.3
+        # Typo corrections change the words themselves ("wat tym" ->
+        # "what time"), so textual similarity is the other legitimate
+        # path — the guard was seen rejecting a correct typo fix.
+        textually_close = difflib.SequenceMatcher(
+            None, raw_text.lower(), parsed.normalized_text.lower()
+        ).ratio() >= 0.5
+        if norm_w and not word_grounded and not textually_close:
             log_event("normalized_text_rejected", chat_id=chat_id,
                       normalized=parsed.normalized_text, raw=raw_text)
             parsed.normalized_text = raw_text
@@ -705,6 +718,7 @@ async def _answer(chat_id: int, text: str) -> str:
             now=local_now().isoformat(),
             capabilities=capability_brief(),
             facts=memory_store.load_all_facts() or "(no facts stored yet)",
+            pending_facts=memory_store.load_pending_facts() or "(none)",
             history=_history_block(chat_id),
         )
         try:
