@@ -233,88 +233,67 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
     return f"\n\n📝 Noted for review: {facts}"
 
 
-_BURST_PLAN_SYSTEM = """The user sent {n} quick messages in one burst. Decide how
-to answer them, like an attentive human assistant reading all of them
-before replying:
-- If they form ONE request or thought spread across messages, merge them
-  into a single complete, self-contained message.
-- If they are genuinely INDEPENDENT requests, keep them separate (in
-  order), each rewritten self-contained.
+_BURST_PLAN_SYSTEM = """The user sent {n} quick messages as ONE burst. Extract the
+MINIMAL ordered list of self-contained requests to act on:
+- Fragments of one thought merge into a single request.
+- Greetings, filler, and acknowledgements ("hey", "how are you", "let me
+  know", "ok") FOLD into the requests — never become requests of their
+  own. If the burst is ONLY chit-chat, output one conversational request.
+- Genuinely distinct actionable asks stay distinct, each self-contained.
+Respond with ONLY JSON: {{"requests": ["...", "..."]}}
 Examples:
+- ["hey hi", "how are you?", "check tomorrow email", "let me know", "what is plan"]
+  -> {{"requests": ["hi! how are you", "check my unread emails, and tell me tomorrow's plan from the calendar"]}}
 - ["tomorrow morning", "i need to call the plumber", "remind me at 9am"]
-  -> combined: "remind me to call the plumber tomorrow at 9am"
-- ["is the AC on?", "any new emails?"] -> separate: two items, different
-  domains, each needs its own answer — merging would lose one.
-- ["cancel my reminder", "the call mom one"] -> combined:
-  "cancel the call mom reminder"
-Respond with ONLY JSON:
-{{"mode": "combined", "message": "<the one merged request>"}}
-or
-{{"mode": "separate", "items": [{{"index": <0-based index of the LAST
-original message this item covers>, "message": "<self-contained request>"}}]}}
+  -> {{"requests": ["remind me to call the plumber tomorrow at 9am"]}}
+- ["is the AC on?", "any new emails?"]
+  -> {{"requests": ["is the AC on?", "any new emails?"]}}
 The messages, numbered:
 {numbered}"""
 
 
 async def handle_burst(chat_id: int, texts: list) -> list:
-    """Evaluate a burst of quick messages TOGETHER, then answer either as
-    one combined request or per independent message — the owner's spec:
-    'evaluate all messages together and check: reply on a particular
-    message, or combine and reply all together.' Returns
-    [(index_of_message_to_quote, reply), ...]."""
+    """Evaluate a burst TOGETHER, act on the minimal set of requests it
+    contains, and ALWAYS answer with ONE composed reply — a human never
+    sends five messages back (seen live: a 5-fragment casual burst got 5
+    scattered replies). Returns [(quote_index, reply)] — a single tuple."""
     texts = [t for t in texts if t]
-    if len(texts) <= 1:
-        reply = await handle_message(chat_id, texts[0] if texts else "")
-        return [(0, reply)]
+    if not texts:
+        return [(0, "")]
+    if len(texts) == 1:
+        return [(0, await handle_message(chat_id, texts[0]))]
 
-    # Deterministic pre-verdict: several complete questions in one burst
-    # are independent requests — no model needed (and rate limits can't
-    # break it). Seen live twice: "is the AC on?" + "any new emails?"
-    # collapsed to one answer when the planner couldn't run.
+    requests = ["\n".join(texts)]  # last-resort: treat as one merged message
+    # Deterministic pre-verdict: all complete questions = distinct asks,
+    # no model needed (rate-limit-proof).
     if all(t.rstrip().endswith("?") for t in texts):
-        log_event("burst_plan", chat_id=chat_id, n=len(texts), mode="separate_heuristic")
-        results = []
-        for idx, message in enumerate(texts):
-            results.append((idx, await handle_message(chat_id, message)))
-        return results
-
-    plan = {"mode": "combined", "message": "\n".join(texts)}  # last-resort fallback
-    try:
-        numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+        requests = list(texts)
+        log_event("burst_plan", chat_id=chat_id, n=len(texts), mode="questions_heuristic")
+    else:
         try:
-            raw = router.call(
-                prompt="Plan the reply.",
-                system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
-                tier="frontier", force_json=True,
-            )
-        except router.ModelProviderError:
-            raw = router.call(
-                prompt="Plan the reply.",
-                system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
-                tier="cheap", force_json=True,
-            )
-        candidate = json.loads(router.strip_code_fence(raw.text))
-        if candidate.get("mode") == "combined" and candidate.get("message"):
-            plan = {"mode": "combined", "message": str(candidate["message"])}
-        elif candidate.get("mode") == "separate" and candidate.get("items"):
-            items = []
-            for item in candidate["items"][: len(texts)]:
-                idx = int(item.get("index", len(texts) - 1))
-                if not (0 <= idx < len(texts)) or not item.get("message"):
-                    raise ValueError("bad plan item")
-                items.append((idx, str(item["message"])))
-            plan = {"mode": "separate", "items": items}
-        log_event("burst_plan", chat_id=chat_id, n=len(texts), mode=plan["mode"])
-    except Exception as exc:
-        log_event("burst_plan_fallback", chat_id=chat_id, error=str(exc))
+            numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
+            system = _BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered)
+            try:
+                raw = router.call(prompt="Plan the requests.", system=system,
+                                  tier="frontier", force_json=True)
+            except router.ModelProviderError:
+                raw = router.call(prompt="Plan the requests.", system=system,
+                                  tier="cheap", force_json=True)
+            candidate = json.loads(router.strip_code_fence(raw.text))
+            planned = [str(r) for r in candidate.get("requests", []) if str(r).strip()]
+            if 0 < len(planned) <= len(texts):
+                requests = planned
+                log_event("burst_plan", chat_id=chat_id, n=len(texts), requests=len(planned))
+            else:
+                raise ValueError("empty or oversized plan")
+        except Exception as exc:
+            log_event("burst_plan_fallback", chat_id=chat_id, error=str(exc))
 
-    if plan["mode"] == "combined":
-        reply = await handle_message(chat_id, plan["message"])
-        return [(len(texts) - 1, reply)]
-    results = []
-    for idx, message in plan["items"]:
-        results.append((idx, await handle_message(chat_id, message)))
-    return results
+    replies = []
+    for request in requests:
+        replies.append(await handle_message(chat_id, request))
+    combined = "\n\n".join(r for r in replies if r)
+    return [(len(texts) - 1, combined)]
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:

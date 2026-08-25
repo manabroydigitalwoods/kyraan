@@ -1078,12 +1078,12 @@ async def test_burst_planner_combines_one_thought(monkeypatch):
     """The owner's spec: evaluate the burst together, then decide. A
     fragmented single thought merges into one request and one reply."""
     plans = iter([
-        _FakeRouted(text='{"mode": "combined", "message": "remind me to call the plumber tomorrow at 9am"}'),
+        _FakeRouted(text='{"requests": ["remind me to call the plumber tomorrow at 9am"]}'),
     ])
     handled = []
 
     def fake_call(prompt, system="", **kwargs):
-        if "quick messages in one burst" in system:
+        if "quick messages as ONE burst" in system:
             return next(plans)
         return _FakeRouted(text="ok")
 
@@ -1096,16 +1096,17 @@ async def test_burst_planner_combines_one_thought(monkeypatch):
     monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
     results = await orchestrator.handle_burst(1, ["tomorrow morning", "i need to call the plumber", "remind me at 9am"])
     assert handled == ["remind me to call the plumber tomorrow at 9am"]
-    assert results == [(2, "one reply")]  # quoted onto the last message
+    assert results == [(2, "one reply")]  # ONE reply, quoted onto the last message
 
 
-async def test_burst_planner_separates_independent_requests(monkeypatch):
-    def fake_call(prompt, system="", **kwargs):
-        return _FakeRouted(text='{"mode": "separate", "items": ['
-                                '{"index": 0, "message": "is the AC on?"}, '
-                                '{"index": 1, "message": "any new emails?"}]}')
+async def test_burst_multiple_requests_compose_one_reply(monkeypatch):
+    """Distinct asks are executed distinctly but ANSWERED as one composed
+    message — a human never sends five replies (seen live: a 5-fragment
+    burst got 5 scattered answers)."""
+    def explode(**kwargs):
+        raise AssertionError("questions heuristic needs no model")
 
-    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    monkeypatch.setattr(orchestrator.router, "call", explode)
     handled = []
 
     async def fake_handle(chat_id, text):
@@ -1115,7 +1116,9 @@ async def test_burst_planner_separates_independent_requests(monkeypatch):
     monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
     results = await orchestrator.handle_burst(1, ["is the AC on?", "any new emails?"])
     assert handled == ["is the AC on?", "any new emails?"]
-    assert [idx for idx, _ in results] == [0, 1]  # each quoted onto its own message
+    assert len(results) == 1  # one composed reply
+    idx, reply = results[0]
+    assert idx == 1 and "answer to is the AC on?" in reply and "answer to any new emails?" in reply
 
 
 async def test_burst_planner_falls_back_to_plain_merge(monkeypatch):
@@ -1130,25 +1133,28 @@ async def test_burst_planner_falls_back_to_plain_merge(monkeypatch):
         return "fallback reply"
 
     monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
-    results = await orchestrator.handle_burst(1, ["a", "b"])
-    assert handled == ["a\nb"]
+    results = await orchestrator.handle_burst(1, ["do a thing", "b thing"])
+    assert handled == ["do a thing\nb thing"]
     assert results == [(1, "fallback reply")]
 
 
-async def test_all_question_bursts_separate_deterministically(monkeypatch):
-    """Two complete questions in a burst are independent — decided without
-    any model, so rate limits can't collapse them (seen live twice)."""
-    def explode(**kwargs):
-        raise AssertionError("no planner model call for all-question bursts")
+async def test_filler_folds_into_minimal_requests(monkeypatch):
+    """The live 5-fragment casual burst: greetings and filler fold away;
+    the plan is the minimal request set; ONE composed reply comes back."""
+    def fake_call(prompt, system="", **kwargs):
+        return _FakeRouted(text='{"requests": ["hi! how are you", '
+                                '"check my unread emails and tell me tomorrow\'s plan"]}')
 
-    monkeypatch.setattr(orchestrator.router, "call", explode)
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
     handled = []
 
     async def fake_handle(chat_id, text):
         handled.append(text)
-        return f"answer: {text}"
+        return f"[{text}]"
 
     monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
-    results = await orchestrator.handle_burst(1, ["is the AC on?", "any new emails?"])
-    assert handled == ["is the AC on?", "any new emails?"]
-    assert [i for i, _ in results] == [0, 1]
+    results = await orchestrator.handle_burst(
+        1, ["hey hi", "how are you?", "let cehck tomorrow email", "lety me kow", "what is plan"])
+    assert len(handled) == 2  # five fragments, two real requests
+    assert len(results) == 1  # one reply
+    assert results[0][0] == 4  # quoted on the last fragment
