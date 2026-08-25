@@ -27,7 +27,13 @@ def init(schedule_fn: ScheduleFn, cancel_fn: CancelFn, send_fn: SendFn) -> None:
     global _schedule_fn, _cancel_fn, _send_fn
     _schedule_fn, _cancel_fn, _send_fn = schedule_fn, cancel_fn, send_fn
     for reminder in store.list_pending():
-        _schedule(reminder)
+        try:
+            _schedule(reminder)
+        except ValueError as exc:
+            # A persisted record with an unparseable when_iso must not take
+            # the whole app down on every future startup — log it and skip
+            # rather than crash init() (which runs on every mount/launch).
+            log_event("reminder_schedule_failed", reminder_id=reminder.id, when_iso=reminder.when_iso, error=str(exc))
 
 
 async def fire(reminder_id: str, chat_id: int, text: str) -> None:
@@ -66,6 +72,10 @@ def _schedule(reminder: store.Reminder) -> None:
 
 
 def create_reminder(chat_id: int, text: str, when_iso: str) -> store.Reminder:
+    # Validate before persisting — a bad when_iso (e.g. a model producing a
+    # duplicated UTC offset, seen live) must never be written to disk, or
+    # it becomes a landmine that re-crashes init() on every future startup.
+    _parse_when(when_iso)
     reminder = store.add(chat_id=chat_id, text=text, when_iso=when_iso)
     _schedule(reminder)
     log_event("reminder_created", reminder_id=reminder.id, chat_id=chat_id, when=when_iso)

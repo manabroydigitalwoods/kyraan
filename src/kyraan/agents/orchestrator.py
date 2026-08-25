@@ -8,6 +8,7 @@ import json
 from kyraan.control_plane import kernel
 from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
+from kyraan.control_plane.logging_setup import log_event
 from kyraan.intent.normalize import normalize
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
@@ -62,6 +63,17 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         return "The kill switch is engaged — no autonomous action will run until it's disengaged."
     except router.ModelProviderError as exc:
         return f"The model provider failed, not a misunderstanding on my part: {exc}"
+    except Exception as exc:
+        # Last-resort safety net: a skill handler can fail in ways we can't
+        # enumerate up front (a model producing malformed JSON, a garbled
+        # datetime, ...). kernel.run_skill re-raises after logging, so
+        # without this catch-all an unexpected failure crashes the whole
+        # call uncaught — in the TUI that meant the exception propagated
+        # out of the worker thread and broke the app's ability to handle
+        # any further input. Log the real error, tell the user something
+        # generic and safe.
+        log_event("handle_message_error", raw_text=raw_text, error=str(exc), error_type=type(exc).__name__)
+        return "Something went wrong handling that — try again, or rephrase."
 
 
 async def _create_reminder(chat_id: int, text: str) -> str:
@@ -72,8 +84,17 @@ async def _create_reminder(chat_id: int, text: str) -> str:
             tier="cheap",
             max_tokens=200,
         )
-        data = json.loads(extraction.text)
-        reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
+        try:
+            data = json.loads(extraction.text)
+            reminder = scheduler.create_reminder(chat_id, data["text"], data["when_iso"])
+        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+            # A small local model doesn't always produce valid JSON or a
+            # parseable datetime (e.g. a duplicated UTC offset like
+            # "+05:30+04:00", seen live) — surface a clear, specific
+            # message rather than falling through to handle_message's
+            # generic catch-all.
+            log_event("reminder_extraction_failed", text=text, raw=extraction.text, error=str(exc))
+            return "I couldn't work out a time for that reminder — try rephrasing with a clearer date/time."
         return f"Reminder set: \"{data['text']}\" at {data['when_iso']} (id {reminder.id[:8]})"
 
     return await kernel.run_skill(SkillCall("reminders.create", {"text": text}), handler)
