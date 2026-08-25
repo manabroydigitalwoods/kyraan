@@ -150,6 +150,11 @@ skills:
                           # user approves the concrete event, not the vague
                           # intent to create one
     model_tier: cheap
+  calendar.cancel:
+    permission: auto      # same pattern: the DELETE is gated at the tool
+                          # (calendar.delete_event: confirm) — the ask names
+                          # the exact events about to be removed
+    model_tier: cheap
   email.check:
     permission: auto      # read-only metadata; replies are kept out of the
                           # history fed to cloud models (data boundary)
@@ -268,6 +273,19 @@ tools:
     failure:
       retries: 0            # never blind-retry a write — an ambiguous failure
                             # retried is how duplicate events happen
+      timeout_s: 15
+      on_failure: surface
+  calendar.delete_event:
+    description: Delete one event from the owner's Google Calendar by id (OAuth; confirm-gated write).
+    server: calendar
+    permission: confirm
+    side_effects: write
+    params:
+      event_id: {type: string, required: true}
+      title: {type: string}   # for the audit log — says WHAT was deleted
+    returns: "{id, deleted, already_gone}"
+    failure:
+      retries: 0
       timeout_s: 15
       on_failure: surface
 

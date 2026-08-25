@@ -1306,3 +1306,86 @@ def test_home_word_guard_still_passes_real_home_questions():
     assert orchestrator._mentions_home("did I leave it off")
     assert not orchestrator._mentions_home("on my smoke havite")
     assert not orchestrator._mentions_home("what's your favorite place?")
+
+
+def _cancel_flow_fixtures(monkeypatch):
+    """Shared setup for calendar.cancel tests: window extraction + a
+    3-event calendar behind the real kernel gate."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-01-02T00:00:00+00:00", "end_iso": "2099-01-02T23:59:59+00:00", "label": "today"}'))
+
+    events = [
+        {"id": "ev-train", "title": "Train to NJP", "start": "2099-01-02T10:30:00+00:00",
+         "end": "2099-01-02T11:00:00+00:00", "all_day": False, "location": None, "recurring": False},
+        {"id": "ev-test", "title": "Test Event", "start": "2099-01-02T15:00:00+00:00",
+         "end": "2099-01-02T15:30:00+00:00", "all_day": False, "location": None, "recurring": False},
+        {"id": "ev-call", "title": "Call of client", "start": "2099-01-02T15:30:00+00:00",
+         "end": "2099-01-02T16:00:00+00:00", "all_day": False, "location": None, "recurring": False},
+    ]
+    deleted = []
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        deleted.append(args["event_id"])
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    return deleted
+
+
+async def test_cancel_all_events_asks_naming_every_event_then_deletes(monkeypatch):
+    """The live disaster this exists for: 'cancel all events' got a fake
+    promise, then 'yes right now' created a junk event titled 'Cancel All
+    Events'. Now: the ask NAMES the exact events, nothing is touched
+    before the yes, and the yes deletes precisely those."""
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events today")
+    deleted = _cancel_flow_fixtures(monkeypatch)
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
+    assert "DELETE 3 event(s)" in ask
+    assert "Train to NJP" in ask and "Test Event" in ask and "Call of client" in ask
+    assert deleted == []  # nothing removed before the yes
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert deleted == ["ev-train", "ev-test", "ev-call"]
+    assert "Deleted from your calendar" in result and "Test Event" in result
+
+
+async def test_cancel_by_title_targets_only_the_match(monkeypatch):
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel the test event")
+    deleted = _cancel_flow_fixtures(monkeypatch)
+
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel the test event")
+    assert "DELETE 1 event(s)" in ask and "Test Event" in ask
+    assert "Train to NJP" not in ask
+
+    await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert deleted == ["ev-test"]
+
+
+async def test_cancel_with_no_match_lists_and_asks_which(monkeypatch):
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel the dentist appointment")
+    deleted = _cancel_flow_fixtures(monkeypatch)
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="cancel the dentist appointment")
+    assert "couldn't match" in result and "Which one" in result
+    assert "Train to NJP" in result  # shows what IS there
+    assert deleted == []
+
+
+async def test_cancel_no_denies_without_deleting(monkeypatch):
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events today")
+    deleted = _cancel_flow_fixtures(monkeypatch)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="no")
+    assert "cancelled, nothing was done" in result
+    assert deleted == []

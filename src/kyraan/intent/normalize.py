@@ -13,6 +13,7 @@ KNOWN_INTENTS = [
     "reminders.cancel",
     "calendar.list",
     "calendar.create",
+    "calendar.cancel",
     "email.check",
     "home.query",
     "home.control",
@@ -49,6 +50,13 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   being asked for the event name) are also calendar.create — fold the
   context in. A calendar EVENT is not a reminder: only an explicit
   reminder request ("remind me...") is reminders.create.
+- calendar.cancel: removing/cancelling events FROM THE CALENDAR. E.g.
+  "cancel all events today", "delete the 3pm meeting", "remove the test
+  event from my calendar", "cancel the client call". A follow-up like
+  "yes right now" after the user asked to cancel events is STILL
+  calendar.cancel — never calendar.create (seen live: it created a junk
+  event literally titled "Cancel All Events"). Cancelling a REMINDER is
+  reminders.cancel; cancelling an EVENT/meeting is calendar.cancel.
 - email.check: asking about email/inbox. E.g. "any new emails?", "do I have
   unread mail?", "check my inbox", "who emailed me?".
 - home.query: asking about the home's smart devices or climate — state,

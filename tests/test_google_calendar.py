@@ -127,3 +127,50 @@ async def test_create_event_posts_the_right_payload(monkeypatch):
         "location": "Office",
     }
     assert result == {"id": "ev1", "link": "https://cal/ev1", "title": "Call Suman"}
+
+
+async def test_listing_exposes_api_event_ids(fixture_ics):
+    events = await google_calendar.call(
+        "calendar.list_events",
+        {"start": "2026-08-26T00:00:00+00:00", "end": "2026-08-26T23:59:59+00:00"},
+    )
+    for event in events:
+        assert event["id"] and "@" not in event["id"]  # api id, not the full ICS UID
+        assert "recurring" in event
+
+
+async def test_delete_event_calls_the_right_endpoint(monkeypatch):
+    import io
+    import urllib.request
+
+    monkeypatch.setattr(google_calendar, "_access_token", lambda: "tok123")
+    captured = {}
+
+    def fake_urlopen(request, timeout=None):
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["auth"] = request.headers.get("Authorization")
+        return io.BytesIO(b"")
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = await google_calendar.call("calendar.delete_event", {"event_id": "abc123", "title": "Test Event"})
+    assert captured["url"].endswith("/events/abc123")
+    assert captured["method"] == "DELETE"
+    assert captured["auth"] == "Bearer tok123"
+    assert result == {"id": "abc123", "deleted": True, "already_gone": False}
+
+
+async def test_delete_event_treats_gone_as_done(monkeypatch):
+    """A double-cancel (or an event removed in the Google UI meanwhile)
+    must read as 'already gone', not an error."""
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setattr(google_calendar, "_access_token", lambda: "tok123")
+
+    def fake_urlopen(request, timeout=None):
+        raise urllib.error.HTTPError(request.full_url, 410, "Gone", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    result = await google_calendar.call("calendar.delete_event", {"event_id": "abc123"})
+    assert result == {"id": "abc123", "deleted": False, "already_gone": True}

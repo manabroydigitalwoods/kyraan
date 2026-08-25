@@ -36,6 +36,7 @@ def capability_brief() -> str:
         not_connected.append("Calendar reading (needs the calendar's secret ICS URL)")
     if _has_env("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"):
         lines.append('- Create calendar events — each one needs the owner\'s explicit yes ("add lunch friday 1pm to my calendar").')
+        lines.append('- Cancel/delete calendar events — the exact events are named and need the owner\'s explicit yes ("cancel the 3pm meeting").')
         lines.append('- Check unread email: senders and subjects ONLY, never message bodies (a deliberate privacy boundary — say so if asked to open/summarize an email, and point to Gmail).')
     else:
         not_connected.append("Calendar event creation and email checking (needs the Google OAuth setup)")
@@ -95,7 +96,7 @@ def capability_brief() -> str:
     lines.append("")
     lines.append(
         "EVERYTHING ELSE — web browsing, bookings, calls, music, payments, "
-        "opening email bodies, editing/deleting calendar events, devices not "
+        "opening email bodies, editing/rescheduling calendar events, devices not "
         "listed above — you can NOT do yet. When asked, say so plainly in one "
         "short line, like a capable human assistant would (\"I can't book cabs "
         "yet\") — no apology spiral, no inventing abilities, and offer an "

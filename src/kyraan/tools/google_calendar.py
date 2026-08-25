@@ -80,12 +80,19 @@ def _list_events(start_iso: str, end_iso: str) -> list[dict]:
     for occ in occurrences:
         dtstart = _as_local_datetime(occ["DTSTART"].dt)
         dtend = _as_local_datetime(occ["DTEND"].dt) if "DTEND" in occ else dtstart
+        # Google's ICS UIDs are "<api event id>@google.com" — the id part
+        # is what the Calendar API's delete endpoint needs. Recurring
+        # occurrences share their series' UID: deleting by it removes the
+        # whole series, which the cancel flow must say out loud.
+        uid = str(occ.get("UID", ""))
         events.append({
             "title": str(occ.get("SUMMARY", "(no title)")),
             "start": dtstart.isoformat(),
             "end": dtend.isoformat(),
             "all_day": not isinstance(occ["DTSTART"].dt, datetime),
             "location": str(occ["LOCATION"]) if occ.get("LOCATION") else None,
+            "id": uid.split("@")[0] if uid else None,
+            "recurring": bool(occ.get("RRULE") or occ.get("RECURRENCE-ID")),
         })
     events.sort(key=lambda e: e["start"])
     return events
@@ -120,10 +127,35 @@ def _create_event(args: dict) -> dict:
     return {"id": created.get("id"), "link": created.get("htmlLink"), "title": args["title"]}
 
 
+def _delete_event(args: dict) -> dict:
+    event_id = args["event_id"]
+    request = urllib.request.Request(
+        f"{_EVENTS_URL}/{urllib.parse.quote(event_id)}",
+        headers={"Authorization": f"Bearer {_access_token()}"},
+        method="DELETE",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=12) as resp:
+            resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 410):
+            # Already gone — the outcome the user wanted; say so honestly
+            # rather than erroring on a double-cancel.
+            return {"id": event_id, "deleted": False, "already_gone": True}
+        if exc.code >= 500:
+            raise TransientToolError(f"Google Calendar returned {exc.code}") from exc
+        raise ToolError(f"Google Calendar refused the delete ({exc.code}): {exc.read().decode()[:200]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Google Calendar: {exc}") from exc
+    return {"id": event_id, "deleted": True, "already_gone": False}
+
+
 async def call(tool_name: str, args: dict) -> object:
     # urllib + ICS parsing are blocking — keep the event loop free.
     if tool_name == "calendar.list_events":
         return await asyncio.to_thread(_list_events, args["start"], args["end"])
     if tool_name == "calendar.create_event":
         return await asyncio.to_thread(_create_event, args)
+    if tool_name == "calendar.delete_event":
+        return await asyncio.to_thread(_delete_event, args)
     raise ToolError(f"google_calendar adapter does not provide {tool_name!r}")

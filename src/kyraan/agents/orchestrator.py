@@ -536,6 +536,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _list_calendar(chat_id, parsed.normalized_text)
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
+        if parsed.intent == "calendar.cancel":
+            return await _cancel_event(chat_id, parsed.normalized_text)
         if parsed.intent == "email.check":
             return await _check_email(chat_id, parsed.normalized_text)
         if parsed.intent == "home.query":
@@ -716,6 +718,79 @@ async def _list_calendar(chat_id: int, text: str) -> str:
         return f"Calendar {label}:\n" + "\n".join(lines)
 
     return await _gated(chat_id, SkillCall("calendar.list", {"text": text}), handler)
+
+
+async def _cancel_event(chat_id: int, text: str) -> str:
+    """Cancel calendar events. Targets are resolved BEFORE the confirm
+    gate so the ask names exactly what will be removed — born from a live
+    disaster: with no cancel capability, qa PROMISED cancellation twice
+    and the classifier then created a junk event titled 'Cancel All
+    Events' on the real calendar."""
+    from datetime import timedelta
+
+    window = _structured_call(text, _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
+    try:
+        data = json.loads(router.strip_code_fence(window.text))
+        start, end = data["start_iso"], data["end_iso"]
+        label = data.get("label") or "that period"
+    except (json.JSONDecodeError, KeyError, TypeError):
+        # No time phrase ("cancel the test event") is normal — search the
+        # coming week.
+        start = local_now().replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        end = (local_now() + timedelta(days=7)).isoformat()
+        label = "the next 7 days"
+
+    try:
+        events = await kernel.run_tool(kernel.ToolCall("calendar.list_events", {"start": start, "end": end}))
+    except kernel.ToolFailed as exc:
+        return f"Couldn't check the calendar: {exc}"
+    events = [e for e in events if e.get("id")]
+    if not events:
+        return f"Nothing on the calendar {label} to cancel."
+
+    stop = {"cancel", "cancle", "delete", "remove", "the", "a", "an", "event",
+            "events", "all", "my", "from", "calendar", "please", "meeting",
+            "meetings", "appointment", "today", "tomorrow", "this", "that",
+            "week", "yes", "right", "now", "it", "them", "and", "of", "for"}
+    content = {w.strip(".,!?\"'").lower() for w in text.split()} - stop - {""}
+    if content:
+        targets = [e for e in events
+                   if content & {w.strip(".,!?\"'").lower() for w in e["title"].split()}]
+        if not targets:
+            listing = "\n".join(f"- {humanize(e['start'])} — {e['title']}" for e in events[:8])
+            return (f"I couldn't match that to an event {label}. On the calendar:\n"
+                    f"{listing}\nWhich one should I cancel?")
+    else:
+        targets = list(events)  # "cancel all events today" — the window is the filter
+
+    # Recurring occurrences share their series id — deleting it removes
+    # the whole series, so collapse duplicates and say it out loud.
+    seen, unique = set(), []
+    for e in targets:
+        if e["id"] not in seen:
+            seen.add(e["id"])
+            unique.append(e)
+
+    async def handler(args: dict) -> str:
+        deleted, already_gone = [], []
+        for e in unique:
+            result = await kernel.run_tool(kernel.ToolCall(
+                "calendar.delete_event", {"event_id": e["id"], "title": e["title"]}))
+            (already_gone if result.get("already_gone") else deleted).append(e["title"])
+        parts = []
+        if deleted:
+            parts.append("Deleted from your calendar: " + ", ".join(f'"{t}"' for t in deleted))
+        if already_gone:
+            parts.append("Already gone: " + ", ".join(f'"{t}"' for t in already_gone))
+        return ". ".join(parts) if parts else "Nothing was deleted."
+
+    described = "\n".join(
+        f"- {humanize(e['start'])} — {e['title']}"
+        + (" (recurring — the WHOLE series will be removed)" if e.get("recurring") else "")
+        for e in unique)
+    describe = (f"About to DELETE {len(unique)} event(s) from your Google Calendar:\n"
+                f"{described}\nThis can't be undone from here")
+    return await _gated(chat_id, SkillCall("calendar.cancel", {"text": text}), handler, describe=describe)
 
 
 async def _create_event(chat_id: int, text: str) -> str:
