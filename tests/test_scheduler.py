@@ -145,3 +145,37 @@ def test_non_utc_offset_from_model_is_respected(monkeypatch):
     monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
     parsed = _parse_when("2026-08-25T19:00:00+02:00")
     assert parsed.utcoffset().total_seconds() == 2 * 3600
+
+
+async def test_withheld_delivery_is_logged_truthfully_not_as_sent(isolated_store):
+    """Found in a live audit: the owner-only guard retired a dev-harness
+    reminder but events.jsonl said reminder_sent. A send_fn returning
+    False now logs reminder_retired_undelivered; the record still retires
+    either way so it never fires again."""
+    from kyraan.control_plane import logging_setup
+
+    r = store.add(chat_id=0, text="dev record", when_iso="2099-01-01T10:00:00+00:00")
+
+    async def withholding_send_fn(chat_id, text):
+        return False  # owner-only guard path
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=withholding_send_fn)
+    await scheduler.fire(r.id, 0, r.text)
+
+    log = logging_setup.EVENT_LOG.read_text()
+    assert "reminder_retired_undelivered" in log
+    assert '"reminder_sent"' not in log
+    assert store.get(r.id).sent is True  # retired — will never fire again
+
+
+async def test_legacy_send_fn_returning_none_still_logs_sent(isolated_store):
+    from kyraan.control_plane import logging_setup
+
+    r = store.add(chat_id=0, text="real send", when_iso="2099-01-01T10:00:00+00:00")
+
+    async def legacy_send_fn(chat_id, text):
+        pass  # returns None, like the dev-harness send_fns
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=legacy_send_fn)
+    await scheduler.fire(r.id, 0, r.text)
+    assert '"reminder_sent"' in logging_setup.EVENT_LOG.read_text()

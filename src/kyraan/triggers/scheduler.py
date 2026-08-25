@@ -57,9 +57,17 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         )
         return
     assert _send_fn is not None, "scheduler.init() must be called before reminders can fire"
-    await _send_fn(chat_id, f"Reminder: {text}")
+    # send_fn reports delivery: False = deliberately withheld (e.g. the
+    # channel's owner-only guard retiring a dev-harness record). The audit
+    # log must say what actually happened — it previously logged
+    # reminder_sent for a message that was never sent. None (legacy
+    # send_fns) counts as delivered.
+    delivered = await _send_fn(chat_id, f"Reminder: {text}")
     store.mark_sent(reminder_id)
-    log_event("reminder_sent", reminder_id=reminder_id, chat_id=chat_id)
+    if delivered is False:
+        log_event("reminder_retired_undelivered", reminder_id=reminder_id, chat_id=chat_id)
+    else:
+        log_event("reminder_sent", reminder_id=reminder_id, chat_id=chat_id)
 
 
 def _parse_when(when_iso: str) -> datetime:

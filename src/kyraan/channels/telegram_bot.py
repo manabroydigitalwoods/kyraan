@@ -42,17 +42,19 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
         for job in job_queue.get_jobs_by_name(job_name):
             job.schedule_removal()
 
-    async def send_fn(chat_id: int, text: str) -> None:
+    async def send_fn(chat_id: int, text: str) -> bool:
         # The store is shared with the dev harnesses (chat.py uses chat 0,
         # walkthrough scripts use their own ids). A record like that would
         # make send_message error on a nonexistent chat and leave the
         # reminder pending forever, retried on every restart. The bot
-        # delivers to its owner only; anything else is retired silently
-        # (fire() marks it sent after this returns).
+        # delivers to its owner only; anything else is retired — and the
+        # False return makes fire() log it truthfully as
+        # reminder_retired_undelivered, not reminder_sent.
         if chat_id != _owner_id():
-            logger.warning("Skipping reminder for non-owner chat %s (dev-harness record)", chat_id)
-            return
+            logger.warning("Retiring reminder for non-owner chat %s (dev-harness record)", chat_id)
+            return False
         await bot.send_message(chat_id=chat_id, text=text)
+        return True
 
     scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)
 
