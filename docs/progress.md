@@ -51,8 +51,11 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
   (`RoutedResponse`) per call — provider SDKs disagree on field names, so
   any of these can come back `None`/`0` rather than raising
 - Cost tracking: a tier can declare `pricing` (USD per 1M tokens, tied to
-  the specific model); `router.session_cost_usd` accumulates spend,
-  checked against `cost_monitor.daily_budget_usd` in the TUI sidebar
+  the specific model); spend is persisted per-day to
+  `data/cost_ledger.json` and `router.call()` refuses to dispatch once
+  today's spend hits `cost_monitor.daily_budget_usd` — a restart can't
+  reset the cap (`session_cost_usd` remains the per-process number the
+  TUI sidebar shows)
 - Runtime tier overrides (`config.set_tier_override()`) — repoint a tier at
   a different provider/model for the rest of the process without editing
   `permissions.yaml` or restarting (exposed via the TUI's `/tier` command)
@@ -94,6 +97,10 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `src/kyraan/agents/orchestrator.py` — the single Phase 1 orchestrator
   (no agent router yet, that's Phase 3)
 - `src/kyraan/channels/telegram_bot.py` — the one channel, owner-only
+- Runs as a user launchd agent (`io.digitalwoods.kyraan`, plist in
+  `~/Library/LaunchAgents/`) — starts at login, restarts on crash,
+  logs to `logs/bot.log`; `logs/events.jsonl` rotates at 5MB into
+  timestamped archives (never deleted — it's the audit trail)
 
 **Dev tooling** (not part of the installed package)
 - `scripts/chat.py` — a local CLI exercising the real orchestrator without
@@ -108,7 +115,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 60 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 64 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
 math, orchestrator error handling (including a pin on the qa.answer
@@ -230,13 +237,9 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
   cancelled) — fine for dev, not for production
 - The confirm flow's pending state is in-memory only — a restart drops an
   unanswered confirmation (fails safe: the action just doesn't run)
-- No CI (tests only run when run by hand) and no rotation for
-  `logs/events.jsonl` (~180 KB after one dev day — and it's the audit
-  trail, so it shouldn't be cleaned up ad hoc)
-- Cost tracking (`router.session_cost_usd` vs. `cost_monitor.
-  daily_budget_usd`) is process-lifetime only — not persisted across
-  restarts, no alerting/hard-stop at the budget yet, just a visible number
-  in the TUI sidebar
+- No CI (tests only run when run by hand)
+- No budget *alert* yet at `alert_threshold_pct` (the hard stop exists;
+  a proactive "you're at 80%" Telegram message does not)
 - Section 3a governance gaps (family consent, work/personal data boundary,
   third-party data exposure policy) are **unresolved** and block Phase 3 —
   nothing here should be rolled out to family members yet
@@ -247,19 +250,14 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
   (non-dev-loop) usage, classification breaks even though qa.answer and
   reminders.create would keep working locally. Would need to be added
   deliberately, informed by what actually breaks first
-- JSON parsing (intent classification, reminder extraction) doesn't strip
-  a markdown code fence if the model wraps its JSON in one — seen live
-  from llama3.1:8b once; the intent was actually correct, just unparsed
-
 ## Next steps
 
 1. Revoke + reissue the bot token via BotFather (it passed through a chat
-   during setup), and `/setjoingroups` → Disable; also decide how the bot
-   should run long-term (launchd/systemd service vs. manual start)
+   during setup), and `/setjoingroups` → Disable
 2. Review pending memory proposals as they accumulate
    (`python scripts/review_memory.py`) — the manual-review weeks the plan
    calls for start now
-3. CI for the test suite + rotation for `logs/events.jsonl`
+3. CI for the test suite
 4. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
 5. Phase 2 groundwork: tool registry design, first MCP server (likely
