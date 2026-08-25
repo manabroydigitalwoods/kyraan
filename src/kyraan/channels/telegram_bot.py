@@ -7,8 +7,9 @@ from telegram import Update
 from telegram.ext import Application, ContextTypes, JobQueue, MessageHandler, filters
 
 from kyraan.agents import orchestrator
+from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import get_logger
-from kyraan.triggers import scheduler
+from kyraan.triggers import briefs, scheduler
 
 logger = get_logger("telegram_bot")
 
@@ -56,12 +57,30 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
     scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)
 
 
+def _wire_brief(job_queue: JobQueue, bot) -> None:
+    at = briefs.brief_time()
+    if at is None:
+        return
+
+    async def _brief_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+        async def send_fn(chat_id: int, text: str) -> None:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+
+        await briefs.fire(_owner_id(), send_fn)
+
+    # run_daily needs a tz-aware time or it fires in UTC — the whole point
+    # is 07:30 on the owner's clock.
+    job_queue.run_daily(_brief_job, time=at.replace(tzinfo=local_now().tzinfo), name="morning_brief")
+    logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
+
+
 def run() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
 
     _wire_scheduler(app.job_queue, app.bot)
+    _wire_brief(app.job_queue, app.bot)
 
     logger.info("Kyraan Telegram bot starting (owner-only, Phase 1)")
     app.run_polling()

@@ -166,6 +166,12 @@ dnd:
   # proactive messages queued during quiet hours are held until it ends;
   # user-initiated chat is never gated by DND.
 
+briefs:
+  morning:
+    enabled: true
+    time: "07:30"   # after quiet_hours end on purpose — a brief that lands
+                    # inside DND is skipped (logged), never held until noon
+
 curiosity_queue:
   max_per_day: 2
 

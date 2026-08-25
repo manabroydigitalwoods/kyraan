@@ -90,7 +90,11 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
   `../../.env` could have written outside the memory tree
 
 **Triggers** (`src/kyraan/triggers/`)
-- Reminders are the only proactive trigger so far
+- Two proactive triggers: reminders, and the **morning brief** (daily
+  07:30, `briefs:` in permissions.yaml) — today's calendar + today's
+  reminders, composed deterministically (no model call: a proactive
+  message must never hallucinate), kill-switch/DND-gated; blocked briefs
+  are skipped and logged, never delivered stale
 - Persisted to `data/reminders.json`, scheduled via the channel's own
   event loop (Telegram's JobQueue, or a Textual-app-safe equivalent in the
   dev tools) — gated by DND + kill switch on every fire
