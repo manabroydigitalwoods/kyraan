@@ -592,10 +592,15 @@ async def test_event_extraction_junk_is_cleaned_before_the_ask(monkeypatch):
 
 async def test_home_query_reports_state_and_power(monkeypatch):
     _mock_normalize(monkeypatch, "home.query")
+    from datetime import timedelta
+    from kyraan.control_plane.dnd import local_now
+    two_h_ago = (local_now() - timedelta(hours=2, minutes=5)).isoformat()
     readings = {
-        "switch.ac": {"entity": "switch.ac", "state": "on", "unit": None, "name": "AC"},
+        "switch.ac": {"entity": "switch.ac", "state": "on", "unit": None, "name": "AC", "last_changed": two_h_ago},
         "sensor.ac_current_consumption": {"entity": "sensor.ac_current_consumption", "state": "359.5", "unit": "W", "name": "AC power"},
         "sensor.ac_today_s_consumption": {"entity": "sensor.ac_today_s_consumption", "state": "2.098", "unit": "kWh", "name": "AC today"},
+        "sensor.bed_room_temp_temperature": {"entity": "sensor.bed_room_temp_temperature", "state": "27.4", "unit": "\u00b0C", "name": "Temp"},
+        "sensor.bed_room_temp_humidity": {"entity": "sensor.bed_room_temp_humidity", "state": "83", "unit": "%", "name": "Humidity"},
     }
 
     async def fake_run_tool(call, **kwargs):
@@ -603,7 +608,8 @@ async def test_home_query_reports_state_and_power(monkeypatch):
 
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
     result = await orchestrator.handle_message(chat_id=0, raw_text="is the AC on?")
-    assert "The AC is ON" in result and "359.5 W" in result and "2.098 kWh" in result
+    assert "The AC is ON for 2h 05m" in result and "359.5 W" in result and "2.098 kWh" in result
+    assert "Bedroom: 27.4\u00b0C / 83% humidity." in result
 
 
 async def test_home_control_asks_then_switches_with_readback(monkeypatch):

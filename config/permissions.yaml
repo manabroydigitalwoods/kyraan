@@ -147,6 +147,8 @@ tool_servers:
       - sensor.ac_voltage
       - binary_sensor.ac_overheated
       - binary_sensor.ac_overloaded
+      - sensor.bed_room_temp_temperature
+      - sensor.bed_room_temp_humidity
     write_entities:
       - switch.ac
 

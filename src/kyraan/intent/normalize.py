@@ -47,9 +47,10 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   being asked for the event name) are also calendar.create — fold the
   context in. A calendar EVENT is not a reminder: only an explicit
   reminder request ("remind me...") is reminders.create.
-- home.query: asking about the home's smart devices — state or power. E.g.
-  "is the AC on?", "did I leave the AC running?", "how much power is the AC
-  using?", "AC status", "how much electricity did the AC use today?".
+- home.query: asking about the home's smart devices or climate — state,
+  power, runtime, temperature. E.g. "is the AC on?", "did I leave the AC
+  running?", "how long has the AC been on?", "how much power is the AC
+  using?", "what's the bedroom temperature?", "how humid is it inside?".
 - home.control: switching a smart device. E.g. "turn off the AC", "switch
   the AC on", "AC off please". Only for device switching — "remind me to
   turn off the AC" is reminders.create.

@@ -67,6 +67,9 @@ def _get_state(entity: str) -> dict:
         "state": data["state"],
         "unit": data.get("attributes", {}).get("unit_of_measurement"),
         "name": data.get("attributes", {}).get("friendly_name", entity),
+        # ISO timestamp of the last state flip — lets callers answer
+        # "how long has it been on?" honestly from HA's own records.
+        "last_changed": data.get("last_changed"),
     }
 
 

@@ -33,7 +33,7 @@ def fake_api(monkeypatch, hass_env):
 
 async def test_get_state_reads_allowlisted_entity(fake_api):
     result = await home_assistant.call("home.get_state", {"entity": "switch.ac"})
-    assert result == {"entity": "switch.ac", "state": "off", "unit": None, "name": "AC"}
+    assert result == {"entity": "switch.ac", "state": "off", "unit": None, "name": "AC", "last_changed": None}
     assert fake_api[0]["url"].endswith("/api/states/switch.ac")
 
 

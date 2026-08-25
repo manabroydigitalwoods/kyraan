@@ -429,6 +429,26 @@ async def _create_event(chat_id: int, text: str) -> str:
 _AC_SWITCH = "switch.ac"
 _AC_POWER = "sensor.ac_current_consumption"
 _AC_TODAY = "sensor.ac_today_s_consumption"
+_TEMP = "sensor.bed_room_temp_temperature"
+_HUMIDITY = "sensor.bed_room_temp_humidity"
+
+
+def _since(last_changed: str | None) -> str:
+    """'for 2h 05m' from HA's last_changed — '' when unknown."""
+    if not last_changed:
+        return ""
+    try:
+        from datetime import datetime
+
+        delta = local_now() - datetime.fromisoformat(last_changed)
+    except ValueError:
+        return ""
+    minutes = int(delta.total_seconds() // 60)
+    if minutes < 1:
+        return " for under a minute"
+    if minutes < 60:
+        return f" for {minutes}m"
+    return f" for {minutes // 60}h {minutes % 60:02d}m"
 
 
 async def _home_query(chat_id: int) -> str:
@@ -437,16 +457,25 @@ async def _home_query(chat_id: int) -> str:
             state = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_SWITCH}))
         except kernel.ToolFailed as exc:
             return f"Couldn't check the AC: {exc}"
+        since = _since(state.get("last_changed"))
         if state["state"] != "on":
-            return "The AC is OFF."
-        detail = ""
+            lines = [f"The AC is OFF{since}."]
+        else:
+            detail = ""
+            try:
+                power = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_POWER}))
+                today = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_TODAY}))
+                detail = f" — drawing {power['state']} {power['unit'] or 'W'}, {today['state']} {today['unit'] or 'kWh'} today"
+            except kernel.ToolFailed:
+                pass  # the on/off answer stands even if the sensors hiccup
+            lines = [f"The AC is ON{since}{detail}."]
         try:
-            power = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_POWER}))
-            today = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _AC_TODAY}))
-            detail = f" — drawing {power['state']} {power['unit'] or 'W'}, {today['state']} {today['unit'] or 'kWh'} today"
+            temp = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _TEMP}))
+            humidity = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": _HUMIDITY}))
+            lines.append(f"Bedroom: {temp['state']}{temp['unit'] or '°C'} / {humidity['state']}{humidity['unit'] or '%'} humidity.")
         except kernel.ToolFailed:
-            pass  # the on/off answer stands even if the sensors hiccup
-        return f"The AC is ON{detail}."
+            pass  # sensor offline — the AC answer stands alone
+        return "\n".join(lines)
 
     return await _gated(chat_id, SkillCall("home.query", {}), handler)
 
