@@ -267,14 +267,32 @@ async def handle_burst(chat_id: int, texts: list) -> list:
         reply = await handle_message(chat_id, texts[0] if texts else "")
         return [(0, reply)]
 
-    plan = {"mode": "combined", "message": "\n".join(texts)}  # deterministic fallback
+    # Deterministic pre-verdict: several complete questions in one burst
+    # are independent requests — no model needed (and rate limits can't
+    # break it). Seen live twice: "is the AC on?" + "any new emails?"
+    # collapsed to one answer when the planner couldn't run.
+    if all(t.rstrip().endswith("?") for t in texts):
+        log_event("burst_plan", chat_id=chat_id, n=len(texts), mode="separate_heuristic")
+        results = []
+        for idx, message in enumerate(texts):
+            results.append((idx, await handle_message(chat_id, message)))
+        return results
+
+    plan = {"mode": "combined", "message": "\n".join(texts)}  # last-resort fallback
     try:
         numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
-        raw = router.call(
-            prompt="Plan the reply.",
-            system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
-            tier="frontier", force_json=True,
-        )
+        try:
+            raw = router.call(
+                prompt="Plan the reply.",
+                system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
+                tier="frontier", force_json=True,
+            )
+        except router.ModelProviderError:
+            raw = router.call(
+                prompt="Plan the reply.",
+                system=_BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered),
+                tier="cheap", force_json=True,
+            )
         candidate = json.loads(router.strip_code_fence(raw.text))
         if candidate.get("mode") == "combined" and candidate.get("message"):
             plan = {"mode": "combined", "message": str(candidate["message"])}

@@ -1133,3 +1133,22 @@ async def test_burst_planner_falls_back_to_plain_merge(monkeypatch):
     results = await orchestrator.handle_burst(1, ["a", "b"])
     assert handled == ["a\nb"]
     assert results == [(1, "fallback reply")]
+
+
+async def test_all_question_bursts_separate_deterministically(monkeypatch):
+    """Two complete questions in a burst are independent — decided without
+    any model, so rate limits can't collapse them (seen live twice)."""
+    def explode(**kwargs):
+        raise AssertionError("no planner model call for all-question bursts")
+
+    monkeypatch.setattr(orchestrator.router, "call", explode)
+    handled = []
+
+    async def fake_handle(chat_id, text):
+        handled.append(text)
+        return f"answer: {text}"
+
+    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    results = await orchestrator.handle_burst(1, ["is the AC on?", "any new emails?"])
+    assert handled == ["is the AC on?", "any new emails?"]
+    assert [i for i, _ in results] == [0, 1]
