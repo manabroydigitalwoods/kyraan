@@ -91,11 +91,29 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 33 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 39 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
-math, and headless Textual Pilot tests for the TUI (including retry, tier
-override, and transcript export).
+math, orchestrator error handling, and headless Textual Pilot tests for the
+TUI (including retry, tier override, and transcript export).
+
+**Robustness, from a full live walkthrough (2026-08-25):** every use case
+(greetings, identity, real-time-aware Q&A, code generation, reminder
+create/list/cancel/fire, kill switch, `/tier`, `/retry`, `/export`, garbled
+input) was driven end-to-end through the real TUI. Found and fixed a
+critical bug in the process: `orchestrator.handle_message` only caught
+three specific exception types, so a malformed reminder datetime from
+llama3.2 (a duplicated UTC offset) raised an uncaught exception that broke
+the app's ability to handle further input — and worse, the bad record had
+already been persisted to `data/reminders.json` before the crash, so every
+future startup would have hit it again immediately. Now: a final
+`except Exception` catch-all in `handle_message`, a specific clear message
+for malformed reminder extraction, validate-before-persist in
+`scheduler.create_reminder`, and `scheduler.init()` skips (rather than
+crashes on) any already-corrupted persisted record. Also hardened the
+qa.answer system prompt against two hallucination patterns caught live:
+inventing reminder status/countdown details, and falsely denying a
+capability (short-delay reminders) Kyraan actually has.
 
 ## Key decisions made
 
