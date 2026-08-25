@@ -734,3 +734,30 @@ async def test_proactive_sends_enter_history(monkeypatch):
     you any reminders' — fire() bypassed history entirely."""
     orchestrator.record_proactive(0, "Reminder: call Suman")
     assert "assistant: Reminder: call Suman" in orchestrator._history_block(0)
+
+
+async def test_open_email_request_states_the_body_boundary(monkeypatch):
+    """Seen live: "can you open email?" got the same unread list as if it
+    answered the question — it must state the metadata-only boundary."""
+    _mock_normalize(monkeypatch, "email.check", "can you open the email?")
+
+    async def fake_run_tool(call, **kwargs):
+        return {"unread_estimate": 1, "messages": [{"from": "a@b.c", "subject": "Hi", "date": "d"}]}
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="can you open the email?")
+    assert "can't open email contents" in result and "senders and" in result
+
+
+async def test_chat_transcript_logs_both_sides(monkeypatch):
+    from kyraan.control_plane import logging_setup
+
+    _mock_normalize(monkeypatch, "qa.answer")
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="hello back"))
+    await orchestrator.handle_message(chat_id=5, raw_text="hello there")
+
+    log = logging_setup.CHAT_LOG.read_text()
+    assert '"role": "user", "text": "hello there"' in log
+    assert '"role": "assistant", "text": "hello back"' in log
+    events = logging_setup.EVENT_LOG.read_text()
+    assert '"kind": "intent_classified"' in events

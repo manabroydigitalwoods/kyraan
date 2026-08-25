@@ -11,6 +11,13 @@ from pathlib import Path
 LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 EVENT_LOG = LOG_DIR / "events.jsonl"
+# Full chat transcript (user messages, replies, proactive sends) — the raw
+# material for debugging misroutes and, later, Phase 4's reflection loop
+# and eval harness. Local disk only, rotated like the event log. Replies
+# are logged in full here (including email summaries kept out of MODEL
+# context) — the boundary is about third-party models, not the owner's
+# own disk.
+CHAT_LOG = LOG_DIR / "chat.jsonl"
 
 # Rotate rather than truncate: this file is the audit trail ("trace why"
 # always means reading it), so old events are archived beside it, never
@@ -20,26 +27,33 @@ EVENT_LOG = LOG_DIR / "events.jsonl"
 _ROTATE_BYTES = 5 * 1024 * 1024
 
 
-def _rotate_if_large() -> None:
+def _rotate_if_large(path: Path) -> None:
     try:
-        if EVENT_LOG.stat().st_size < _ROTATE_BYTES:
+        if path.stat().st_size < _ROTATE_BYTES:
             return
     except FileNotFoundError:
         return
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    EVENT_LOG.rename(EVENT_LOG.with_name(f"events-{stamp}.jsonl"))
+    path.rename(path.with_name(f"{path.stem}-{stamp}.jsonl"))
+
+
+def _append(path: Path, record: dict) -> None:
+    _rotate_if_large(path)
+    with path.open("a") as f:
+        f.write(json.dumps(record, default=str) + "\n")
 
 
 def log_event(kind: str, **fields) -> None:
     """Append one structured event, e.g. kind='tool_call', kind='routing_decision'."""
-    _rotate_if_large()
-    record = {
+    _append(EVENT_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind, **fields})
+
+
+def log_chat(chat_id: int, role: str, text: str, **fields) -> None:
+    """One transcript line: role is 'user', 'assistant', or 'proactive'."""
+    _append(CHAT_LOG, {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "kind": kind,
-        **fields,
-    }
-    with EVENT_LOG.open("a") as f:
-        f.write(json.dumps(record, default=str) + "\n")
+        "chat_id": chat_id, "role": role, "text": text, **fields,
+    })
 
 
 def get_logger(name: str) -> logging.Logger:

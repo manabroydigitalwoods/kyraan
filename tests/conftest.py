@@ -14,3 +14,4 @@ from kyraan.control_plane import logging_setup
 @pytest.fixture(autouse=True)
 def _isolated_event_log(monkeypatch, tmp_path):
     monkeypatch.setattr(logging_setup, "EVENT_LOG", tmp_path / "events.jsonl")
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", tmp_path / "chat.jsonl")

@@ -10,7 +10,7 @@ from collections import defaultdict, deque
 from kyraan.control_plane import kernel
 from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
-from kyraan.control_plane.logging_setup import log_event
+from kyraan.control_plane.logging_setup import log_chat, log_event
 from kyraan.intent.normalize import normalize
 from kyraan.memory import extraction
 from kyraan.memory import store as memory_store
@@ -123,6 +123,7 @@ def record_proactive(chat_id: int, text: str) -> None:
     too — found live: \"Thanks for the reminder\" got \"I didn't actually
     send you any reminders\" because fire() bypassed _history entirely."""
     _history[chat_id].append(("assistant", text))
+    log_chat(chat_id, "proactive", text)
 
 
 def _history_block(chat_id: int) -> str:
@@ -169,6 +170,8 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     _history[chat_id].append(("user", raw_text))
     _history[chat_id].append(("assistant", _history_redaction.get() or reply))
     _history_redaction.reset(redaction_token)
+    log_chat(chat_id, "user", raw_text)
+    log_chat(chat_id, "assistant", reply)
     return reply
 
 
@@ -212,6 +215,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             log_event("intent_fallback_cheap", error=str(exc))
             parsed = normalize(raw_text, tier="cheap", history=context)
 
+        log_event("intent_classified", chat_id=chat_id, intent=parsed.intent,
+                  confidence=parsed.confidence, normalized=parsed.normalized_text)
         if parsed.confidence < 0.4:
             return "I'm not confident I understood that — could you rephrase?"
 
@@ -226,7 +231,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         if parsed.intent == "calendar.create":
             return await _create_event(chat_id, parsed.normalized_text)
         if parsed.intent == "email.check":
-            return await _check_email(chat_id)
+            return await _check_email(chat_id, parsed.normalized_text)
         if parsed.intent == "home.query":
             return await _home_query(chat_id, parsed.normalized_text)
         if parsed.intent == "home.control":
@@ -476,7 +481,13 @@ def _since(last_changed: str | None) -> str:
 _UNSENSORED_ROOMS = ("living", "kitchen", "hall", "bathroom", "balcony", "dining", "office")
 
 
-async def _check_email(chat_id: int) -> str:
+async def _check_email(chat_id: int, text: str = "") -> str:
+    # "Open"/"read the email" asks for the body — which Kyraan deliberately
+    # never fetches (§3a: metadata only). Say the boundary instead of
+    # dumping the same list again (seen live: "can you open email?" got an
+    # identical unread summary, as if it answered the question).
+    wants_body = any(w in text.lower() for w in ("open", "read", "body", "content", "full"))
+
     async def handler(_args: dict) -> str:
         # The reply the user sees carries senders/subjects; the history
         # records only a placeholder, so none of it reaches cloud models.
@@ -489,7 +500,15 @@ async def _check_email(chat_id: int) -> str:
         messages = result.get("messages", [])
         if not messages:
             return "No unread emails."
-        lines = [f"You have about {total} unread. Latest:"]
+        lines = []
+        if wants_body:
+            lines.append(
+                "I can't open email contents — by design I only see senders and "
+                "subjects, never bodies (your data boundary). Open Gmail for the "
+                "full message. Latest unread:"
+            )
+        else:
+            lines.append(f"You have about {total} unread. Latest:")
         for m in messages:
             sender = m["from"].split("<")[0].strip().strip('"') or m["from"]
             lines.append(f"- {sender}: {m['subject']}")
