@@ -91,11 +91,12 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `textual-dev` (dev extra) — `textual console` + `textual run --dev` give
   a debugging console and CSS hot-reload for TUI development
 
-**Tests**: 39 passing (`pytest -q`) — kernel gating, DND wraparound, memory
+**Tests**: 40 passing (`pytest -q`) — kernel gating, DND wraparound, memory
 propose/promote/reject, scheduler timezone handling, router provider
 dispatch, intent normalization against malformed output, cost-calculation
-math, orchestrator error handling, and headless Textual Pilot tests for the
-TUI (including retry, tier override, and transcript export).
+math, orchestrator error handling (including a pin on the qa.answer
+no-memory guard), and headless Textual Pilot tests for the TUI (including
+retry, tier override, and transcript export).
 
 **Robustness, from a full live walkthrough (2026-08-25):** every use case
 (greetings, identity, real-time-aware Q&A, code generation, reminder
@@ -135,6 +136,19 @@ proves reliable enough, or there's a specific reason (cost/offline/
 privacy) to prefer it over correctness. A full walkthrough rerun after
 this change: every response correct, zero crashes, $0.0000 cost.
 
+**Scored walkthrough evaluation (2026-08-25, later the same day):** a
+scripted 21-use-case run through the real orchestrator (real providers,
+real scheduler, live reminder fire, kill-switch engage/disengage, garbled
+input, impossible datetimes) scored **19/21 = 90.5%** — 100% within
+Phase 1's claimed scope, zero crashes. The only two failures were the
+memory gap: "remember that my wife's name is Mira" persisted nothing, and
+a follow-up recall had no context. Worse, qa.answer replied *"Got it—I've
+noted that"* while saving nothing — a false claim of a capability Kyraan
+doesn't have yet, the mirror image of the false-denial hallucination fixed
+earlier. Fixed with a third prompt guard: the system prompt now states
+Kyraan cannot store facts or remember across messages, and must never
+imply a fact was saved. Live-verified honest answers after the fix.
+
 ## Key decisions made
 
 - **Stack**: Python, self-hosted (not cloud VM) — see `pyproject.toml`
@@ -153,9 +167,31 @@ this change: every response correct, zero crashes, $0.0000 cost.
 - **Telegram bot token + owner ID**: still not set — the real bot has
   never been run end-to-end, only the CLI/TUI dev harnesses (which use the
   identical orchestrator code path)
+- **The memory subsystem is unwired**: `memory/store.py` (propose/promote/
+  reject) is built and tested, but nothing calls `propose_fact` — there is
+  no extraction pass in the orchestrator, nothing reads memory into
+  qa.answer's prompt, and the `memory/` tree is empty (Phase 0's manual
+  seeding was never done). Phase 1's "conservative extraction" item is
+  therefore not actually complete — the store exists, the pipeline doesn't
+- **No conversation context**: every message is handled statelessly;
+  follow-up questions ("what about tomorrow?") have nothing to refer to
+- **The confirm-permission flow is a dead end**: the kernel raises
+  `ConfirmationRequired`, but there's no path for the user to actually
+  confirm — fine while all active skills are `auto`, must be built before
+  Phase 2's tools
 - `cancel_reminder`'s cancel path is best-effort in both dev harnesses (an
   already-scheduled asyncio task still fires even if the record is
-  cancelled) — fine for dev, not for production
+  cancelled) — fine for dev, not for production. Also, when no id in the
+  message matches, it falls back to cancelling the *first* pending
+  reminder — the walkthrough's cancel-by-description passed only because
+  the intended reminder happened to be first
+- **Past-due reminders on restart are unhandled**: `scheduler.init()`
+  reschedules every pending reminder without checking whether its time
+  already passed during downtime — behavior then depends on the channel's
+  scheduler (JobQueue fires immediately), not on a deliberate choice
+- No CI (tests only run when run by hand) and no rotation for
+  `logs/events.jsonl` (~180 KB after one dev day — and it's the audit
+  trail, so it shouldn't be cleaned up ad hoc)
 - Cost tracking (`router.session_cost_usd` vs. `cost_monitor.
   daily_budget_usd`) is process-lifetime only — not persisted across
   restarts, no alerting/hard-stop at the budget yet, just a visible number
@@ -172,13 +208,20 @@ this change: every response correct, zero crashes, $0.0000 cost.
 
 ## Next steps
 
-1. Get `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`, run the real bot
+1. Small correctness fixes: cancel fallback (ask instead of cancelling the
+   first pending), past-due reminders on restart, a real confirm flow
+2. Get `TELEGRAM_BOT_TOKEN` + `TELEGRAM_OWNER_ID`, run the real bot
    end-to-end for the first time
-2. Consider whether `anthropic`/`openai` should become the default tiers
+3. **Wire the memory loop** — the missing half of Phase 1: extraction pass
+   after `handle_message` calling the existing `propose_fact()`, memory
+   reads feeding qa.answer's prompt, seed the empty `memory/` tree, and a
+   short rolling conversation history in the same change
+4. CI for the test suite + rotation for `logs/events.jsonl`
+5. Consider whether `anthropic`/`openai` should become the default tiers
    once real budget is allocated (currently free-tier providers only)
-3. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
+6. Worth trying: pull a bigger local model (`llama3.1:8b` or `qwen2.5:7b`
    — the dev machine, Apple M3 Pro/18GB, comfortably fits either) and
    re-run the same reliability comparison against frontier, to see whether
    local becomes viable again at that size
-4. Phase 2 groundwork: tool registry design, first MCP server (likely
+7. Phase 2 groundwork: tool registry design, first MCP server (likely
    Home Assistant or a calendar) — not started
