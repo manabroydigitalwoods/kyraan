@@ -422,3 +422,46 @@ def test_create_reminder_rejects_unknown_repeat(isolated_store):
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
     with pytest.raises(ValueError, match="repeat"):
         scheduler.create_reminder(0, "x", "2099-01-01T09:00:00+05:30", repeat="fortnightly")
+
+
+def test_interval_reminder_math_and_window_rollover(isolated_store):
+    """'Every hour, 10:00-21:00 daily': inside the window it steps by the
+    interval; past the window it jumps to tomorrow's window start."""
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    r = scheduler.create_reminder(0, "drink water", "2099-01-01T10:00:00+05:30",
+                                  repeat="interval", interval_minutes=60,
+                                  window_start="10:00", window_end="21:00")
+    record = store.get(r.id)
+    step = scheduler.advance_for(record)
+    assert step.isoformat().startswith("2099-01-01T11:00")
+
+    # 20:30 + 60min = 21:30 > window end -> tomorrow 10:00
+    store.roll_forward(r.id, "2099-01-01T20:30:00+05:30")
+    late = scheduler.advance_for(store.get(r.id))
+    assert late.isoformat().startswith("2099-01-02T10:00")
+
+
+def test_interval_floor_rejects_spam(isolated_store):
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    with pytest.raises(ValueError, match="smallest interval"):
+        scheduler.create_reminder(0, "drink water", "2099-01-01T10:00:00+05:30",
+                                  repeat="interval", interval_minutes=5)
+
+
+async def test_interval_reminder_fires_and_steps(isolated_store, monkeypatch):
+    from kyraan.control_plane import kernel
+
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+    sends = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+    r = scheduler.create_reminder(0, "drink water", "2099-01-01T10:00:00+05:30",
+                                  repeat="interval", interval_minutes=90,
+                                  window_start="10:00", window_end="21:00")
+    await scheduler.fire(r.id, 0, r.text)
+    assert sends == ["Reminder: drink water"]
+    assert store.get(r.id).when_iso.startswith("2099-01-01T11:30")
+    assert store.get(r.id).sent is False

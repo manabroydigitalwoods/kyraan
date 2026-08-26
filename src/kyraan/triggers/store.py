@@ -24,9 +24,12 @@ class Reminder:
                           # claim (>120s) is a crashed sender's lease
     takeover: bool = False  # this claim took over a stale lease — the
                             # send may be a repeat and must say so
-    repeat: str = ""        # "", daily, weekdays, weekly, monthly —
-                            # recurring reminders roll when_iso forward
-                            # after each delivery instead of retiring
+    repeat: str = ""        # "", daily, weekdays, weekly, monthly, or
+                            # "interval" — recurring reminders roll
+                            # when_iso forward after each delivery
+    interval_minutes: int = 0   # for repeat="interval" (floor 15)
+    window_start: str = ""      # "HH:MM" — interval reminders pause
+    window_end: str = ""        # outside this daily window
 
 
 def _load_all() -> list[dict]:

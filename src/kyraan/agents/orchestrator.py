@@ -135,6 +135,10 @@ _skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extracti
 # legitimate a place to review as the terminal, so the flow lives here
 # too: list the pending facts, take approve/reject deterministically.
 _pending_reviews: dict = {}
+# A dropped (unconfirmed) ask must not vanish silently — the next reply
+# says so (live: the owner got the ask, said "task list" instead of yes,
+# and then wondered why the list was empty).
+_dropped_ask_note: dict = {}
 
 # The model-driven loop is the primary path in production; the classifier
 # tests flip this off to exercise the fallback path in isolation.
@@ -479,6 +483,11 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             f"{router.budget_alert_threshold_pct():.0f}% of the ${router.daily_budget_usd():.2f} "
             "daily budget. Calls stop at the cap."
         )
+    dropped = _dropped_ask_note.pop(chat_id, None)
+    if dropped:
+        reply = (f'(The earlier "{dropped}" ask was never confirmed, so I '
+                 "dropped it — nothing was done. Ask again if you still want it.)"
+                 f"\n\n{reply}")
     redacted = _history_redaction.get()
     for entry in (("user", raw_text), ("assistant", redacted or reply)):
         if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
@@ -534,6 +543,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 # (fail safe, never run it implicitly) and handle the new
                 # message normally.
                 log_event("confirmation_dropped", skill=call.skill_name)
+                _dropped_ask_note[chat_id] = call.skill_name
 
         review = _pending_reviews.get(chat_id)
         if review:

@@ -237,7 +237,8 @@ async def test_confirm_flow_unrelated_message_drops_the_pending_action(monkeypat
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="It's 2pm."))
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="what time is it?")
-    assert result == "It's 2pm."
+    assert result.endswith("It's 2pm.")
+    assert "was never confirmed, so I dropped it" in result  # announced, not silent
     assert orchestrator._pending_confirmations == {}
     assert orchestrator.scheduler.store.list_pending(0) == []  # the reminder never ran
 
@@ -2129,3 +2130,31 @@ async def test_confirm_gated_commands_do_not_become_memory_proposals(monkeypatch
     assert 'reply "yes"' in reply
     assert calls == []                       # extraction never ran
     assert "Noted for review" not in reply
+
+
+async def test_dropped_ask_is_announced_in_the_next_reply(monkeypatch):
+    """Live: the owner got a confirm ask, said "task list" instead of yes,
+    and the ask vanished silently — the drop stays fail-safe but now says
+    so."""
+    _mock_normalize(monkeypatch, "home.control", "turn on the AC")
+
+    calls = {"n": 0}
+
+    async def gated_run_tool(call, **kwargs):
+        raise orchestrator.ConfirmationRequired(call.tool_name, call.args)
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    async def fake_answer(chat_id, text):
+        return "Here's your answer."
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", gated_run_tool)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    await orchestrator.handle_message(chat_id=0, raw_text="turn on the AC")
+
+    _mock_normalize(monkeypatch, "qa.answer", "what time is it")
+    reply = await orchestrator.handle_message(chat_id=0, raw_text="what time is it")
+    assert "was never confirmed, so I dropped it" in reply
+    assert "Here's your answer." in reply

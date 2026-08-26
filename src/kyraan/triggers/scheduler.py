@@ -114,7 +114,7 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         # Recurring: roll forward instead of retiring — the record IS the
         # series; when_iso always points at the next occurrence, so a
         # restart's init() reschedules the series naturally.
-        next_when = advance_occurrence(_parse_when(record.when_iso), record.repeat)
+        next_when = advance_for(record)
         store.roll_forward(reminder_id, next_when.isoformat())
         assert _schedule_fn is not None
         _schedule_fn(reminder_id, next_when,
@@ -196,7 +196,9 @@ def _schedule(reminder: store.Reminder) -> None:
     )
 
 
-REPEAT_CHOICES = ("daily", "weekdays", "weekly", "monthly")
+REPEAT_CHOICES = ("daily", "weekdays", "weekly", "monthly", "interval")
+_MIN_INTERVAL_MINUTES = 15  # "every 5 mins, 10AM-9PM" = 132 pings a day —
+                            # a floor keeps hydration helpful, not spam
 
 
 def advance_occurrence(when, repeat: str):
@@ -213,12 +215,35 @@ def advance_occurrence(when, repeat: str):
         while step.weekday() >= 5:  # Sat/Sun
             step += timedelta(days=1)
         return step
+    if repeat == "interval":
+        raise ValueError("interval repeats advance via advance_for(record)")
     if repeat == "monthly":
         year = when.year + (when.month // 12)
         month = when.month % 12 + 1
         day = min(when.day, _calendar.monthrange(year, month)[1])
         return when.replace(year=year, month=month, day=day)
     raise ValueError(f"unknown repeat rule {repeat!r}")
+
+
+def advance_for(record) -> "datetime":
+    """Next occurrence for a full record — handles interval-with-window
+    rules; simple rules delegate to advance_occurrence."""
+    from datetime import time as _time
+
+    when = _parse_when(record.when_iso)
+    if record.repeat != "interval":
+        return advance_occurrence(when, record.repeat)
+    nxt = when + timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
+    if record.window_start and record.window_end:
+        start_h, start_m = (int(x) for x in record.window_start.split(":"))
+        end_h, end_m = (int(x) for x in record.window_end.split(":"))
+        start_t, end_t = _time(start_h, start_m), _time(end_h, end_m)
+        if nxt.time() > end_t:
+            nxt = (nxt + timedelta(days=1)).replace(hour=start_h, minute=start_m,
+                                                    second=0, microsecond=0)
+        elif nxt.time() < start_t:
+            nxt = nxt.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+    return nxt
 
 
 def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | None:
@@ -237,18 +262,45 @@ def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | N
     return None
 
 
-def create_reminder(chat_id: int, text: str, when_iso: str, repeat: str = "") -> store.Reminder:
+def create_reminder(chat_id: int, text: str, when_iso: str, repeat: str = "",
+                    interval_minutes: int = 0, window_start: str = "",
+                    window_end: str = "") -> store.Reminder:
     # Validate before persisting — a bad when_iso (e.g. a model producing a
     # duplicated UTC offset, seen live) must never be written to disk, or
     # it becomes a landmine that re-crashes init() on every future startup.
     _parse_when(when_iso)
     if repeat and repeat not in REPEAT_CHOICES:
         raise ValueError(f"repeat must be one of {REPEAT_CHOICES} (or empty)")
+    if repeat == "interval":
+        if interval_minutes < _MIN_INTERVAL_MINUTES:
+            raise ValueError(f"the smallest interval is {_MIN_INTERVAL_MINUTES} minutes "
+                             "— more often than that is spam, not help")
+        for value in (window_start, window_end):
+            if value:
+                hh, mm = value.split(":")
+                if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+                    raise ValueError(f"bad window time {value!r}")
     reminder = store.add(chat_id=chat_id, text=text, when_iso=when_iso, repeat=repeat)
+    if repeat == "interval":
+        _apply_interval_fields(reminder.id, interval_minutes, window_start, window_end)
+        reminder = store.get(reminder.id)
     _schedule(reminder)
     log_event("reminder_created", reminder_id=reminder.id, chat_id=chat_id,
               when=when_iso, repeat=repeat or None)
     return reminder
+
+
+def _apply_interval_fields(reminder_id: str, interval_minutes: int,
+                           window_start: str, window_end: str) -> None:
+    from kyraan.control_plane.filelock import locked
+    with locked(store.REMINDERS_PATH):
+        records = store._load_all()
+        for record in records:
+            if record["id"] == reminder_id:
+                record["interval_minutes"] = interval_minutes
+                record["window_start"] = window_start
+                record["window_end"] = window_end
+        store._save_all(records)
 
 
 def cancel_reminder(reminder_id: str) -> bool:

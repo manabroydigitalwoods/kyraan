@@ -173,6 +173,9 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     if repeat and repeat not in scheduler.REPEAT_CHOICES:
         raise kernel.ToolFailed(
             f"repeat must be one of {scheduler.REPEAT_CHOICES} or omitted")
+    interval_minutes = int(args.get("interval_minutes", 0) or 0)
+    window_start = str(args.get("window_start", "") or "")
+    window_end = str(args.get("window_end", "") or "")
     existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
     if existing:
         return {"duplicate": True, "id": existing.id[:8], "text": existing.text,
@@ -180,10 +183,20 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
                 "note": ("this reminder ALREADY existed — tell the user it was "
                          "already set and nothing new was created; never say "
                          "'done' or imply you just created it")}
-    reminder = scheduler.create_reminder(chat_id, args["text"], when_iso, repeat=repeat)
+    try:
+        reminder = scheduler.create_reminder(
+            chat_id, args["text"], when_iso, repeat=repeat,
+            interval_minutes=interval_minutes,
+            window_start=window_start, window_end=window_end)
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
     result = {"created": True, "id": reminder.id[:8], "text": args["text"],
               "when": humanize(when_iso)}
-    if repeat:
+    if repeat == "interval":
+        result["repeats"] = (f"every {interval_minutes} min"
+                             + (f", {window_start}-{window_end} daily"
+                                if window_start and window_end else ""))
+    elif repeat:
         result["repeats"] = repeat
     return result
 
@@ -306,8 +319,8 @@ TOOLS = {
         "run": _home_get_state,
     },
     "reminders.create": {
-        "params": '{"text": "<what to remind>", "when_iso": "<ISO with the user\'s +05:30 offset>", "repeat": "<omit for one-shot; daily|weekdays|weekly|monthly ONLY when the user says every day/every monday/daily/each month...>"}',
-        "about": "Set a reminder delivered as a Telegram message (recurring supported). Only when the user asked to be reminded/woken/alerted. when_iso is the FIRST occurrence.",
+        "params": '{"text": "<what to remind>", "when_iso": "<first occurrence, ISO +05:30>", "repeat": "<omit|daily|weekdays|weekly|monthly|interval>", "interval_minutes": "<with repeat=interval; minimum 15>", "window_start": "<optional \'HH:MM\' daily window>", "window_end": "<optional \'HH:MM\'>"}',
+        "about": "Set a reminder delivered as a Telegram message. Recurring supported, including intervals with a daily window ('every hour from 10:00 to 21:00, drink water' -> repeat=interval, interval_minutes=60, window 10:00-21:00; minimum interval 15 min — offer the closest legal one if the user asks for less). Only when the user asked to be reminded.",
         "run": _reminders_create,
     },
     "reminders.list": {
