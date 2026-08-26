@@ -28,6 +28,7 @@ def capability_brief() -> str:
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
     lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
+    lines.append('- Scheduled tasks: run an instruction at a set time with read-only tools and message the result ("every evening at 8 check tomorrow\'s calendar and warn me about early meetings"). Creation needs the owner\'s yes.')
     try:
         from kyraan.channels import voice as _voice
         if _voice.available():

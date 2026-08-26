@@ -307,6 +307,36 @@ async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     await scheduler.fire(data["reminder_id"], data["chat_id"], data["text"])
 
 
+async def _agent_task_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from kyraan.triggers import agent_tasks
+    await agent_tasks.fire(context.job.data["task_id"])
+
+
+def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
+    from kyraan.agents import agent_loop
+    from kyraan.triggers import agent_tasks
+
+    def schedule_fn(job_name: str, run_at, payload: dict) -> None:
+        job_queue.run_once(_agent_task_job, when=run_at, data=payload, name=job_name)
+
+    async def run_fn(chat_id: int, instruction: str) -> str:
+        for tier in ("frontier", "cheap"):
+            try:
+                return await agent_loop.run(chat_id, instruction, tier=tier, read_only=True)
+            except agent_loop.AgentUnavailable:
+                continue
+        return ""
+
+    async def send_fn(chat_id: int, text: str) -> None:
+        if chat_id != _owner_id():
+            return
+        await bot.send_message(chat_id=chat_id, text=_plain(text))
+        orchestrator.record_proactive(chat_id, text)
+
+    agent_tasks.init(schedule_fn=schedule_fn, run_fn=run_fn, send_fn=send_fn,
+                     only_chat=_owner_id())
+
+
 def _wire_scheduler(job_queue: JobQueue, bot) -> None:
     def schedule_fn(job_name: str, run_at, payload: dict) -> None:
         job_queue.run_once(_reminder_job, when=run_at, data=payload, name=job_name)
@@ -357,6 +387,18 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                             time=evening_at.replace(tzinfo=local_now().tzinfo),
                             name="evening_brief")
         logger.info("Evening brief scheduled daily at %s", evening_at)
+
+    review_at = __import__("kyraan.triggers.self_review", fromlist=["x"]).review_time()
+    if review_at is not None:
+        from kyraan.triggers import self_review
+
+        async def _review_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await self_review.fire(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_review_job,
+                            time=review_at.replace(tzinfo=local_now().tzinfo),
+                            name="self_review")
+        logger.info("Nightly self-review scheduled at %s", review_at)
 
     from kyraan.triggers import home_alerts
     if home_alerts.enabled():
@@ -458,6 +500,7 @@ def run() -> None:
     app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)"))
 
     _wire_scheduler(app.job_queue, app.bot)
+    _wire_agent_tasks(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
     # A restart must be invisible to the owner: reload the conversation
     # from chat.jsonl so follow-ups ("are those the latest emails?") still

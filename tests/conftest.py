@@ -36,3 +36,11 @@ def _isolated_memory_tree(monkeypatch, tmp_path):
     (root / "pending_review").mkdir(parents=True)
     monkeypatch.setattr(memory_store, "MEMORY_ROOT", root)
     monkeypatch.setattr(memory_store, "PENDING_DIR", root / "pending_review")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session_summaries(monkeypatch, tmp_path):
+    """Summary rolls in tests must never write the real data/ file."""
+    from kyraan.agents import orchestrator
+    monkeypatch.setattr(orchestrator, "_summaries_path",
+                        lambda: tmp_path / "session_summaries.json")

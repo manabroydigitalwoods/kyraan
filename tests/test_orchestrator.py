@@ -2076,3 +2076,33 @@ def test_pre_fix_review_log_entries_are_redacted_at_seed(tmp_path, monkeypatch):
     assert "[applied the owner's review decisions]" in block
     assert "Hello! How can I assist" in block
     orchestrator._history.pop(83, None)
+
+
+async def test_history_overflow_rolls_into_a_session_summary(monkeypatch):
+    """Harness pack C: entries pushed off the 40-entry window condense
+    into a persistent rolling summary (LOCAL tier) that rides at the top
+    of the history block — mid-session context is never silently lost."""
+    _mock_normalize(monkeypatch, "qa.answer")
+
+    def fake_call(prompt, system="", **kwargs):
+        if "running summary" in system:
+            return _FakeRouted(text="The user planned a Nagpur trip and fixed the AC schedule.")
+        return _FakeRouted(text="ok")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.router, "call", fake_call)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    orchestrator._history.pop(85, None)
+    orchestrator._summary_backlog.pop(85, None)
+
+    for i in range(26):  # 52 entries -> overflow -> at least one rolled chunk
+        await orchestrator.handle_message(chat_id=85, raw_text=f"message number {i}")
+
+    block = orchestrator._history_block(85)
+    assert "Earlier in this conversation, summarized:" in block
+    assert "Nagpur trip" in block
+    assert orchestrator.session_summary(85)  # persisted, not just in-memory
+    orchestrator._history.pop(85, None)
+    orchestrator._summary_backlog.pop(85, None)

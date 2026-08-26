@@ -60,6 +60,62 @@ _HISTORY_MAX_ENTRIES = 40  # 20 exchanges — 20 rolled out mid-session live
                            # ("you never shared Fpol data" after 17 turns)
 _history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
 
+# C (harness pack): entries pushed off the history window collect here
+# until a chunk is worth condensing into the rolling session summary.
+_summary_backlog: dict = defaultdict(list)
+_SUMMARY_CHUNK = 10
+_SUMMARIES_PATH = None  # resolved lazily (test isolation patches the dir)
+
+
+def _summaries_path():
+    from pathlib import Path
+    return Path(__file__).resolve().parents[3] / "data" / "session_summaries.json"
+
+
+def _load_summaries() -> dict:
+    try:
+        return json.loads(_summaries_path().read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def session_summary(chat_id: int) -> str:
+    return _load_summaries().get(str(chat_id), "")
+
+
+async def _roll_summary(chat_id: int) -> None:
+    """Condense the backlog chunk into the running summary — LOCAL tier
+    only (free, and the summary may contain anything the conversation
+    did). Best-effort: a failure drops nothing user-visible."""
+    backlog = _summary_backlog.get(chat_id) or []
+    if len(backlog) < _SUMMARY_CHUNK:
+        return
+    chunk, _summary_backlog[chat_id] = backlog[:_SUMMARY_CHUNK], backlog[_SUMMARY_CHUNK:]
+    rendered = "\n".join(f"{role}: {text[:300]}" for role, text in chunk)
+    previous = session_summary(chat_id)
+    try:
+        response = await router.acall(
+            prompt=(f"Existing summary:\n{previous or '(none)'}\n\n"
+                    f"Older messages leaving the window:\n{rendered}"),
+            system=("Maintain ONE running summary of this conversation's older "
+                    "context for a personal assistant: decisions, ongoing topics, "
+                    "user statements that may matter later. Merge the new "
+                    "messages into the existing summary. Max 120 words, plain "
+                    "text, no preamble."),
+            tier="cheap", max_tokens=400)
+        summary = response.text.strip()[:1200]
+        if summary:
+            from kyraan.control_plane.filelock import atomic_write_text, locked
+            with locked(_summaries_path()):
+                summaries = _load_summaries()
+                summaries[str(chat_id)] = summary
+                _summaries_path().parent.mkdir(exist_ok=True)
+                atomic_write_text(_summaries_path(), json.dumps(summaries, ensure_ascii=False, indent=1))
+            log_event("session_summary_rolled", chat_id=chat_id, chars=len(summary))
+    except Exception as exc:
+        _summary_backlog[chat_id] = chunk + _summary_backlog[chat_id]  # retry later
+        log_event("session_summary_error", error=str(exc)[:150])
+
 # Below this length a message can't state a durable fact ("yes", "hi",
 # "thanks") — skip the extraction model call entirely.
 _EXTRACTION_MIN_CHARS = 8
@@ -248,6 +304,9 @@ def _history_block(chat_id: int, clip: int = 600, older_clip: int | None = None)
     their gist. Token thrift without dropping what's actually used."""
     entries = list(_history[chat_id])
     lines = []
+    summary = session_summary(chat_id)
+    if summary:
+        lines.append(f"[Earlier in this conversation, summarized: {summary}]")
     for i, (role, text) in enumerate(entries):
         cap = clip
         if older_clip is not None and i < len(entries) - 8:
@@ -421,8 +480,13 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             "daily budget. Calls stop at the cap."
         )
     redacted = _history_redaction.get()
-    _history[chat_id].append(("user", raw_text))
-    _history[chat_id].append(("assistant", redacted or reply))
+    for entry in (("user", raw_text), ("assistant", redacted or reply)):
+        if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
+            # the oldest entry is about to fall off the window — keep it
+            # for the rolling summary instead of losing it (harness C)
+            _summary_backlog[chat_id].append(_history[chat_id][0])
+        _history[chat_id].append(entry)
+    await _roll_summary(chat_id)
     _history_redaction.reset(redaction_token)
     _last_sent_reply[chat_id] = reply
     _last_reply_at[chat_id] = time.monotonic()

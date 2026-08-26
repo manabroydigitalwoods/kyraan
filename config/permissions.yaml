@@ -314,6 +314,11 @@ dnd:
   # proactive messages queued during quiet hours are held until it ends;
   # user-initiated chat is never gated by DND.
 
+self_review:
+  enabled: true
+  time: "21:45"   # before quiet hours; Kyraan critiques its own day —
+                  # proposes only, never self-modifies
+
 voice:
   enabled: true
   model: mlx-community/whisper-large-v3-turbo   # local, Apple-MLX GPU;

@@ -223,6 +223,41 @@ async def _usage_report(chat_id: int, args: dict, raw_text: str):
     return usage_report.usage_summary(days=days)
 
 
+async def _task_schedule(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import agent_tasks
+    instruction = str(args.get("instruction", "")).strip()
+    if len(instruction) < 8:
+        raise kernel.ToolFailed("give the full instruction the task should run")
+    when_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["when_iso"]))).isoformat()
+    repeat = str(args.get("repeat", "") or "")
+    if repeat and repeat not in scheduler.REPEAT_CHOICES:
+        raise kernel.ToolFailed(f"repeat must be one of {scheduler.REPEAT_CHOICES} or omitted")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("tasks.schedule",
+                                          {"instruction": instruction, "when_iso": when_iso,
+                                           "repeat": repeat})
+    task = agent_tasks.create(chat_id, instruction, when_iso, repeat=repeat)
+    return {"scheduled": True, "id": task.id, "when": humanize(when_iso),
+            **({"repeats": repeat} if repeat else {})}
+
+
+async def _task_list(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import agent_tasks
+    return [{"id": t.id, "instruction": t.instruction, "when": humanize(t.when_iso),
+             **({"repeats": t.repeat} if t.repeat else {})}
+            for t in agent_tasks.list_active(chat_id)]
+
+
+async def _task_cancel(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import agent_tasks
+    wanted = str(args.get("task_id", "")).strip()
+    mine = {t.id for t in agent_tasks.list_active(chat_id)}
+    if not any(t.startswith(wanted) for t in mine) or not wanted:
+        raise kernel.ToolFailed("no scheduled task with that id — list tasks first")
+    agent_tasks.cancel(wanted)
+    return {"cancelled": True}
+
+
 async def _memory_forget(chat_id: int, args: dict, raw_text: str):
     from kyraan.memory import engine
     wanted = str(args.get("fact", "")).strip()
@@ -289,6 +324,21 @@ TOOLS = {
         "params": '{"days": 7}',
         "about": "Kyraan's own AI usage: per-day model calls, input/output/cached tokens, cost in USD, and the live daily budget picture. For 'how much did we spend', 'token usage this week', 'are we near the budget'. days is a NUMBER (vague ranges: use 7) — call directly, never ask which.",
         "run": _usage_report,
+    },
+    "tasks.schedule": {
+        "params": '{"instruction": "<what to DO at that time, self-contained>", "when_iso": "<first run, ISO +05:30>", "repeat": "<omit|daily|weekdays|weekly|monthly>"}',
+        "about": "Schedule an instruction the assistant RUNS at that time with read-only tools (check calendar/email/home and report). Owner confirms creation. Use for 'every evening check X and tell me' — NOT for plain reminders.",
+        "run": _task_schedule,
+    },
+    "tasks.list": {
+        "params": "{}",
+        "about": "The owner's scheduled agent tasks (id, instruction, when).",
+        "run": _task_list,
+    },
+    "tasks.cancel": {
+        "params": '{"task_id": "<id from tasks.list>"}',
+        "about": "Cancel a scheduled agent task by id.",
+        "run": _task_cancel,
     },
     "memory.forget": {
         "params": '{"fact": "<roughly the fact to forget, e.g. \'father Deven Rao\'>"}',
@@ -400,9 +450,11 @@ def _home_entity_roster() -> str:
         else "No home entities configured."
 
 
-def _tools_block() -> str:
+def _tools_block(read_only: bool = False) -> str:
     lines = []
     for name, spec in TOOLS.items():
+        if read_only and name not in _READ_ONLY_TOOLS:
+            continue
         about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
         lines.append(f"- {name} {spec['params']}\n    {about}")
     return "\n".join(lines)
@@ -420,6 +472,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
                 f"{humanize(start_iso)} → {humanize(end_iso)}")
     if tool == "calendar.delete_event":
         return f"About to DELETE \"{args.get('title') or args.get('event_id')}\" from your Google Calendar"
+    if tool == "tasks.schedule":
+        rep = f", repeating {args.get('repeat')}" if args.get("repeat") else ""
+        return (f"Schedule this task: at {humanize(str(args.get('when_iso')))}"
+                f"{rep}, I will run: \"{args.get('instruction')}\" (read-only "
+                "tools; results arrive as messages)")
     if tool == "memory.forget":
         from kyraan.memory import engine
         matched = engine.find_matches(str(args.get("fact", "")))
@@ -454,7 +511,12 @@ def _memory_block(message: str) -> str:
     return engine.memory_context(message)
 
 
-async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
+_READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
+                    "reminders.list", "usage.report", "memory.pending_list"}
+
+
+async def run(chat_id: int, raw_text: str, tier: str = "frontier",
+              read_only: bool = False) -> str:
     """One agentic exchange on the given model tier. Returns the reply;
     raises AgentUnavailable to hand the message down the fallback chain
     (frontier loop -> cheap loop -> legacy classifier). One brain, two
@@ -467,8 +529,13 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
 
     system = _AGENT_SYSTEM.format(
         capabilities=capability_brief(),
-        tools=_tools_block(),
+        tools=_tools_block(read_only=read_only),
     )
+    if read_only:
+        system += ("\n\nSCHEDULED RUN: you are executing a scheduled task, "
+                   "not chatting. Only READ tools exist here — any action "
+                   "needing a write must be suggested for the owner to do "
+                   "live. Reply with the task's RESULT, concise, no greeting.")
     if tier == "cheap":
         # Degraded-mode self-awareness, carried over from the classifier
         # era's live lesson: the local backup model must keep replies
@@ -532,6 +599,10 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
 
         tool = decision["tool"]
         args = decision.get("args") or {}
+        if read_only and tool not in _READ_ONLY_TOOLS:
+            transcript += (f"\nSYSTEM: {tool} is not available in a scheduled "
+                           "run — reads only; suggest it to the owner instead.")
+            continue
         signature = f"{tool}:{json.dumps(args, sort_keys=True)}"
         repeats = calls_seen.get(signature, 0)
         if repeats >= 2:
@@ -602,6 +673,9 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         if isinstance(outcome, dict) and outcome.get("already_gone"):
             return f"\"{args.get('title') or args.get('event_id')}\" was already gone."
         return f"Deleted from your calendar: \"{args.get('title') or args.get('event_id')}\""
+    if tool == "tasks.schedule" and isinstance(outcome, dict):
+        rep = f" (repeats {outcome['repeats']})" if outcome.get("repeats") else ""
+        return f"Task scheduled — first run {outcome.get('when')}{rep}. Say \"list tasks\" anytime."
     if tool == "memory.forget" and isinstance(outcome, dict):
         gone = outcome.get("forgotten") or []
         return "Forgotten: " + "; ".join(gone) if gone else "Nothing matched — nothing forgotten."
