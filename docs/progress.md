@@ -428,6 +428,14 @@ or history, and the executor refuses outright if the cheap tier isn't
 local. (c) CI: .github/workflows/tests.yml runs the full suite on every
 push/PR — no secrets in CI by design (tests fake all providers).
 
+**§3a draft (2026-08-26, session close):** docs/governance.md — proposed
+answers for every §3a gap (consent, work boundary, third-party exposure,
+voice, maintenance, review scaling, undo, staged rollout), grounded in a
+what-leaves-the-machine table of the live system. Roles only, no names
+(the doc is tracked; the PII scrub stands). Each section ends in a
+Decide: line — the owner's red pen makes it ACCEPTED, which unblocks
+Phase 3.
+
 ## Next steps
 
 1. Revoke + reissue the bot token via BotFather (it passed through a chat
