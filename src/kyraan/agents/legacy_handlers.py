@@ -13,15 +13,10 @@ on orchestrator keep applying.
 import json
 import time
 
-from kyraan.agents.guards import _is_greeting
-from kyraan.agents.prompts import (
-    _ANSWER_SYSTEM, _EXTRACT_EVENT_SYSTEM, _EXTRACT_WHEN_SYSTEM,
-    _EXTRACT_WINDOW_SYSTEM,
-)
 from kyraan.control_plane import kernel
-from kyraan.memory import store as memory_store
 from kyraan.control_plane.dnd import humanize, local_now
-from kyraan.control_plane.kernel import ConfirmationRequired, SkillCall
+from kyraan.control_plane.kernel import SkillCall
+from kyraan.memory import store as memory_store
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
@@ -52,7 +47,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         # tier (frontier, or if this ever points at one again) spends
         # hidden tokens before the visible JSON, and a 200-token cap
         # truncated the output mid-string live (2026-08-25).
-        extracted = await orch._structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
+        extracted = await orch._structured_call(text, orch._EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
             if orch.is_time_fragment(str(data.get("text", ""))):
@@ -134,7 +129,7 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _list_calendar(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
-        window = await orch._structured_call(args["text"], _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
+        window = await orch._structured_call(args["text"], orch._EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(window.text))
             start, end = data["start_iso"], data["end_iso"]
@@ -169,7 +164,7 @@ async def _cancel_event(chat_id: int, text: str) -> str:
     Events' on the real calendar."""
     from datetime import timedelta
 
-    window = await orch._structured_call(text, _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
+    window = await orch._structured_call(text, orch._EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
     try:
         data = json.loads(router.strip_code_fence(window.text))
         start, end = data["start_iso"], data["end_iso"]
@@ -305,7 +300,7 @@ async def _create_event(chat_id: int, text: str) -> str:
     # into the stashed SkillCall args — so what the user confirms is
     # byte-identical to what runs. Re-extracting on "yes" could produce a
     # different time than the one shown (model nondeterminism).
-    extracted = await orch._structured_call(text, _EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()))
+    extracted = await orch._structured_call(text, orch._EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()))
     def clean_iso(value: str) -> str:
         # _parse_when gives the same protections events as reminders get
         # (naive -> local tz, model's spurious Z -> local wall time), and
@@ -541,7 +536,7 @@ async def _answer(chat_id: int, text: str) -> str:
         # truncates big prompts silently).
         tier = kernel.config.skill_config("qa.answer")["model_tier"]
         from kyraan.memory import engine
-        system = _ANSWER_SYSTEM.format(
+        system = orch._ANSWER_SYSTEM.format(
             now=local_now().isoformat(),
             capabilities=orch.capability_brief(),
             facts=engine.memory_context(args["text"]),
@@ -580,7 +575,7 @@ async def _answer(chat_id: int, text: str) -> str:
         # this process (< 15 min) and never fires on a greeting.
         recently_active = time.monotonic() - orch._last_reply_at.get(chat_id, float("-inf")) < 900
         if (reply.strip() and reply.strip() in recent and recently_active
-                and not _is_greeting(args["text"])):
+                and not orch._is_greeting(args["text"])):
             # A human never sends the same sentence twice in a row —
             # verbatim repetition is a small-model failure mode (seen
             # live 2026-08-26: "I can't book cabs yet." to three

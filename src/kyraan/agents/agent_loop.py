@@ -24,11 +24,10 @@ import re
 
 from kyraan.agents.capabilities import capability_brief
 from kyraan.control_plane import kernel, kill_switch
-from kyraan.control_plane.dnd import humanize, local_now
+from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store as memory_store
 from kyraan.model_router import router
-from kyraan.triggers import scheduler
 
 # A reply that asks permission to do the thing the user just asked for.
 # Matched case-insensitively against the model's DRAFT reply; one forced
@@ -189,6 +188,7 @@ Style rules:
 
 
 def _tools_block(read_only: bool = False) -> str:
+    from kyraan.tools import gmail as _gmail
     from kyraan.tools import routes as _routes
     from kyraan.tools import web_search as _web
     lines = []
@@ -201,11 +201,8 @@ def _tools_block(read_only: bool = False) -> str:
             continue
         if name == "routes.eta" and not _routes.configured():
             continue  # same rule: no key, no menu entry, no false ability
-        if name == "email.read":
-            from kyraan.tools import gmail as _gmail
-            if not _gmail.bodies_enabled():
-                continue  # owner hasn't opted into local body reading
-        from kyraan.tools import gmail as _gmail
+        if name == "email.read" and not _gmail.bodies_enabled():
+            continue  # owner hasn't opted into local body reading
         about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
         about = about.replace(
             "PLACEHOLDER_EMAIL_BODIES",
