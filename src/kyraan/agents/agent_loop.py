@@ -41,19 +41,22 @@ class AgentUnavailable(Exception):
 # Each returns a JSON-serializable result for the model to read, or raises
 # kernel.ConfirmationRequired (writes) / kernel.ToolFailed (surfaced).
 
-# id -> title from each chat's most recent listing: deletion must prove
-# the confirmed title and the executed id are the SAME event (security
-# round P1 — a drifting model could show one title and delete another).
+# The LATEST listing per chat (replaced wholesale, 10-minute lifetime):
+# deletion must prove the confirmed title and executed id are the same
+# event IN THE CURRENT LISTING — an append-only cache let stale or
+# cross-conversation pairs through (security round 2, P1).
 _listing_cache: dict = {}
+_LISTING_TTL_S = 600
 
 
 async def _calendar_list(chat_id: int, args: dict, raw_text: str):
+    import time as _time
     events = await kernel.run_tool(kernel.ToolCall(
         "calendar.list_events", {"start": args["start"], "end": args["end"]}))
-    cache = _listing_cache.setdefault(chat_id, {})
-    for event in events:
-        if event.get("id"):
-            cache[event["id"]] = str(event.get("title", ""))
+    _listing_cache[chat_id] = {
+        "at": _time.monotonic(),
+        "items": {e["id"]: str(e.get("title", "")) for e in events if e.get("id")},
+    }
     return events[:20]
 
 
@@ -74,13 +77,20 @@ async def _calendar_create(chat_id: int, args: dict, raw_text: str):
 
 
 async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
-    known_title = _listing_cache.get(chat_id, {}).get(str(args["event_id"]))
+    import time as _time
+    listing = _listing_cache.get(chat_id) or {}
+    fresh = listing and (_time.monotonic() - listing.get("at", 0)) < _LISTING_TTL_S
+    known_title = (listing.get("items") or {}).get(str(args["event_id"])) if fresh else None
     if known_title is None:
         raise kernel.ToolFailed(
-            "that event id is not from a listing in this conversation — call "
+            "that event id is not from a CURRENT listing — call "
             "calendar.list_events first, then delete by the listed id")
     claimed = str(args.get("title", "")).strip().casefold()
-    if claimed and claimed != known_title.strip().casefold():
+    if not claimed:
+        raise kernel.ToolFailed(
+            "provide the event's title exactly as listed — the confirmation "
+            "must name what is being deleted")
+    if claimed != known_title.strip().casefold():
         raise kernel.ToolFailed(
             f"id/title mismatch: that id belongs to {known_title!r}, not "
             f"{args.get('title')!r} — the confirmation must name the real event")
@@ -430,7 +440,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
         "Known facts (owner-reviewed; [FLAGS] mark safety-relevant ones):\n"
         f"{_memory_block(raw_text)}\n"
         "Awaiting owner review:\n"
-        f"{memory_store.load_pending_facts() or '(none)'}\n"
+        f"{memory_store.load_pending_facts_filtered() or '(none)'}\n"
         "Conversation so far:\n"
         f"{orchestrator._history_block(chat_id, older_clip=250)}\n\n"
         f"USER: {raw_text}"

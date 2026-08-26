@@ -109,21 +109,12 @@ async def _review_memory(chat_id: int, text: str) -> str:
 
 
 def _cloud_tier_in_use() -> bool:
-    """A tier is local only if its ENDPOINT is local — trusting the
-    provider name let a remote Ollama server receive data treated as
-    machine-local (security round P2)."""
-    import os as _os
+    """A tier is local only if its ENDPOINT is local — judged by
+    router.provider_is_local, the same resolution routing itself uses
+    (security round 2, P2)."""
     cfg = kernel.config.load()
-    providers = cfg.get("providers", {})
-    for tier in cfg.get("model_tiers", {}).values():
-        provider = providers.get(tier.get("provider"), {})
-        base = provider.get("base_url") or ""
-        if provider.get("kind") == "ollama_native":
-            base = _os.environ.get("OLLAMA_BASE_URL") or base or "http://localhost:11434"
-        host = base.split("//")[-1].split("/")[0].split(":")[0]
-        if not (host == "localhost" or host == "127.0.0.1" or host.endswith(".localhost")):
-            return True
-    return False
+    return any(not router.provider_is_local(t.get("provider", ""))
+               for t in cfg.get("model_tiers", {}).values())
 
 
 # The exact last reply each chat received (unredacted — _history may hold
@@ -442,6 +433,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)
         if pending:
+            _confirmation_nonce.pop(chat_id, None)
             call, handler, stashed_at = pending
             word = raw_text.strip().lower().rstrip(".!")
             if time.monotonic() - stashed_at > _CONFIRMATION_TTL_S:

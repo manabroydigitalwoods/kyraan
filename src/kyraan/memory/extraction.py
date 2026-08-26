@@ -101,7 +101,7 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
         # local code guard above.
         from kyraan.memory import engine
         known_text = (engine.memory_context(args["text"]) + "\n"
-                      + store.load_pending_facts(800)).strip()
+                      + store.load_pending_facts_filtered(800)).strip()
         if known_text and "(no facts stored yet)" not in known_text.split("\n")[0]:
             system += ("\n\nAlready known facts (for the duplicate rule and "
                        "the supersedes field):\n" + known_text)

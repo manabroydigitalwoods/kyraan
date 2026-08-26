@@ -158,7 +158,8 @@ async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, m
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
     # deletion requires an id from THIS conversation's listing (security
     # round P1) — seed it as a prior calendar.list_events would have
-    agent_loop._listing_cache[90] = {"ev9": "Test Event"}
+    import time as _time
+    agent_loop._listing_cache[90] = {"at": _time.monotonic(), "items": {"ev9": "Test Event"}}
     scripted_model([
         '{"action": "call", "tool": "calendar.delete_event", '
         '"args": {"event_id": "ev9", "title": "Test Event"}}',
@@ -669,10 +670,11 @@ async def test_delete_refuses_unlisted_ids_and_mismatched_titles(scripted_model,
     ])
     await agent_loop.run(90, "delete it")
     assert dispatched == []
-    assert "not from a listing" in prompts[1]
+    assert "not from a CURRENT listing" in prompts[1]
 
     # listed id but WRONG title -> refused with the real title named
-    agent_loop._listing_cache[90] = {"ev1": "Board meeting"}
+    import time as _time
+    agent_loop._listing_cache[90] = {"at": _time.monotonic(), "items": {"ev1": "Board meeting"}}
     prompts = scripted_model([
         '{"action": "call", "tool": "calendar.delete_event", '
         '"args": {"event_id": "ev1", "title": "Yoga class"}}',
@@ -682,3 +684,43 @@ async def test_delete_refuses_unlisted_ids_and_mismatched_titles(scripted_model,
     await agent_loop.run(90, "delete the yoga class")
     assert dispatched == []
     assert "id/title mismatch" in prompts[base + 1] and "Board meeting" in prompts[base + 1]
+
+
+async def test_stale_listing_and_missing_title_are_refused(scripted_model, monkeypatch):
+    """Security round 2, P1: the binding is MANDATORY (no title, no
+    delete) and bound to the CURRENT listing (a 10-minute-old one has
+    expired)."""
+    import time as _time
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append(args)
+        return {"id": args.get("event_id"), "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    # stale listing -> refused
+    agent_loop._listing_cache[90] = {"at": _time.monotonic() - 700,
+                                     "items": {"ev1": "Board meeting"}}
+    prompts = scripted_model([
+        '{"action": "call", "tool": "calendar.delete_event", '
+        '"args": {"event_id": "ev1", "title": "Board meeting"}}',
+        '{"action": "reply", "text": "Let me refresh the listing."}',
+    ])
+    base = len(prompts)
+    await agent_loop.run(90, "delete the board meeting")
+    assert dispatched == []
+    assert "CURRENT listing" in prompts[base + 1]
+
+    # fresh listing but EMPTY title -> refused (binding is mandatory)
+    agent_loop._listing_cache[90] = {"at": _time.monotonic(),
+                                     "items": {"ev1": "Board meeting"}}
+    prompts = scripted_model([
+        '{"action": "call", "tool": "calendar.delete_event", '
+        '"args": {"event_id": "ev1", "title": ""}}',
+        '{"action": "reply", "text": "I need the exact title."}',
+    ])
+    base = len(prompts)
+    await agent_loop.run(90, "delete it")
+    assert dispatched == []
+    assert "exactly as listed" in prompts[base + 1]

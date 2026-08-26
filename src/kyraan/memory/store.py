@@ -13,9 +13,16 @@ from kyraan.control_plane.filelock import locked
 from datetime import datetime, timezone
 from pathlib import Path
 
+import os as _os
+
 MEMORY_ROOT = Path(__file__).resolve().parents[3] / "memory"
 PENDING_DIR = MEMORY_ROOT / "pending_review"
 PENDING_DIR.mkdir(exist_ok=True)
+for _d in (MEMORY_ROOT, PENDING_DIR):
+    try:
+        _os.chmod(_d, 0o700)
+    except OSError:
+        pass
 
 # Fact paths are constrained to a small shape on purpose: extraction output
 # is model-generated, and an unvalidated target like "../../.env" would let
@@ -69,6 +76,7 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
         handle.write(
             f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n{meta_line}---\n\n{content}\n"
         )
+    _os.chmod(proposal_path, 0o600)
     return proposal_path
 
 
@@ -123,6 +131,11 @@ def promote(proposal_path: Path) -> Path:
         if not all(l in existing_lines for l in body_lines):
             with target_path.open("a") as f:
                 f.write(body.strip() + "\n\n")
+            _os.chmod(target_path, 0o600)
+            try:
+                _os.chmod(target_path.parent, 0o700)
+            except OSError:
+                pass
 
     proposal_path.unlink()
     return target_path
@@ -165,6 +178,29 @@ def is_known_fact(content: str, known: list) -> bool:
     if len(words) < 2:
         return False
     return any(words <= existing or existing <= words for existing in known)
+
+
+def load_pending_facts_filtered(max_chars: int = 1500) -> str:
+    """Pending facts SAFE for a cloud prompt (security round 2, P1): a
+    proposal rides along only when its extraction meta exists and carries
+    no discretion flags — unclassified or sensitive/emotional proposals
+    stay machine-local until the owner reviews them."""
+    lines = []
+    for proposal in sorted(PENDING_DIR.glob("*.md")):
+        text = proposal.read_text()
+        _, _, rest = text.partition("---\n")
+        frontmatter, _, body = rest.partition("---\n")
+        meta_line = next((l for l in frontmatter.splitlines() if l.startswith("meta:")), "")
+        if not meta_line:
+            continue  # pre-classification proposal: conservative exclusion
+        try:
+            meta = json.loads(meta_line.split("meta:", 1)[1].strip())
+        except json.JSONDecodeError:
+            continue
+        if set(meta.get("flags") or []) & {"sensitive", "emotional"}:
+            continue
+        lines.extend(l for l in body.splitlines() if l.strip().startswith("-"))
+    return "\n".join(lines)[:max_chars]
 
 
 def load_pending_facts(max_chars: int = 1500) -> str:

@@ -175,6 +175,25 @@ def _get_openai_compatible_client(provider: str, provider_cfg: dict):
     return _openai_compatible_clients[provider]
 
 
+def provider_is_local(provider_name: str) -> bool:
+    """Locality of a provider's ENDPOINT, resolved exactly as routing
+    resolves it (security round 2, P2: a separate hand-rolled resolution
+    could disagree with the client's, and naive string parsing was
+    foolable by crafted URLs). urlsplit handles userinfo/ports/brackets."""
+    from urllib.parse import urlsplit
+
+    cfg = _provider_cfg(provider_name)
+    base = cfg.get("base_url") or ""
+    if cfg.get("kind") == "ollama_native":
+        base = os.environ.get("OLLAMA_BASE_URL") or base or "http://localhost:11434"
+    elif provider_name == "ollama":
+        base = os.environ.get("OLLAMA_BASE_URL") or base
+    if not base:
+        return False  # keyed cloud endpoint (no base_url = provider default host)
+    host = (urlsplit(base if "//" in base else f"//{base}").hostname or "").lower()
+    return host in ("localhost", "127.0.0.1", "::1") or host.endswith(".localhost")
+
+
 class ModelProviderError(Exception):
     """Wraps any provider SDK error (rate limit, outage, bad key, ...) into
     one type so callers can distinguish "the provider failed" from "the

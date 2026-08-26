@@ -38,6 +38,10 @@ def atomic_write_text(path: Path, text: str) -> None:
     try:
         handle.write(text)
         handle.close()
+        os.chmod(handle.name, 0o600)  # personal data is owner-only from
+                                      # birth at EVERY write site, not
+                                      # just under the bot's startup
+                                      # sweep (security round 2, P2)
         os.replace(handle.name, path)
     except BaseException:
         handle.close()
