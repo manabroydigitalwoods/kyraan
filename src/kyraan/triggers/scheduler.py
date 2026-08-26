@@ -248,9 +248,23 @@ def advance_past_now(record) -> "datetime":
     are skipped, not replayed; the one late send already happened."""
     next_when = advance_for(record)
     skipped = 0
-    while next_when <= local_now() and skipped < 100000:
+    if record.repeat == "interval" and next_when <= local_now():
+        # Arithmetic jump: a 5-minute series stale for a year would need
+        # ~100k loop steps (audit round 2 — the cap could exit still in
+        # the past AND stall the event loop); integer math does it in one.
+        step = timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
+        k = (local_now() - next_when) // step + 1
+        next_when += step * k
+        skipped += k
+    while next_when <= local_now() and skipped < 5000:
+        # remaining steps are calendar-sized (window realignment, daily/
+        # weekly/monthly) — a handful in practice
         next_when = advance_for(record, from_when=next_when)
         skipped += 1
+    if next_when <= local_now():
+        # Absolute guarantee, every rule type: one advance FROM now is
+        # always in the future.
+        next_when = advance_for(record, from_when=local_now())
     if skipped:
         log_event("reminder_catchup_skipped", reminder_id=record.id,
                   skipped=skipped, resumed=next_when.isoformat())

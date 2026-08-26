@@ -555,6 +555,17 @@ async def _answer(chat_id: int, text: str) -> str:
             if tier == "cheap":
                 raise
             log_event("qa_fallback_cheap", error=str(exc))
+            # REBUILT for the local tier, not reused: the cloud-built
+            # prompt carries the pending-facts placeholder, silently
+            # denying the local model facts it is allowed to see
+            # (audit round 2, P2).
+            system = orch._ANSWER_SYSTEM.format(
+                now=local_now().isoformat(),
+                capabilities=orch.capability_brief(),
+                facts=engine.memory_context(args["text"]),
+                pending_facts=agent_loop._pending_block("cheap"),
+                history=orch._history_block(chat_id),
+            )
             # Degraded-mode self-awareness — live transcript: the user said
             # "you are confused / randomly answering" while the fallback
             # model spiraled, and Kyraan never admitted its state.

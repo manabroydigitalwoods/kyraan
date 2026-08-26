@@ -23,6 +23,12 @@ from kyraan.control_plane.filelock import atomic_write_text, locked
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.triggers.scheduler import REPEAT_CHOICES, _parse_when, advance_occurrence
 
+# Tasks advance via advance_occurrence, which rejects "interval" — the
+# API refuses it up front so no confirmed record can crash later
+# (audit round 2, P2; the loop_tools validator remains as the user-facing
+# message, this is the belt under it).
+TASK_REPEATS = tuple(r for r in REPEAT_CHOICES if r != "interval")
+
 TASKS_PATH = Path(__file__).resolve().parents[3] / "data" / "agent_tasks.json"
 
 _schedule_fn = None
@@ -61,8 +67,9 @@ def list_active(chat_id: int | None = None) -> list:
 
 def create(chat_id: int, instruction: str, when_iso: str, repeat: str = "") -> AgentTask:
     _parse_when(when_iso)  # validate before persisting
-    if repeat and repeat not in REPEAT_CHOICES:
-        raise ValueError(f"repeat must be one of {REPEAT_CHOICES} or empty")
+    if repeat and repeat not in TASK_REPEATS:
+        raise ValueError(f"repeat must be one of {TASK_REPEATS} or empty — "
+                         "interval recurrence is a reminder feature")
     task = AgentTask(id=uuid.uuid4().hex[:8], chat_id=chat_id,
                      instruction=instruction, when_iso=when_iso, repeat=repeat)
     with locked(TASKS_PATH):
@@ -150,14 +157,31 @@ async def fire(task_id: str) -> None:
         return
     try:
         result = await _run_fn(task.chat_id, task.instruction)
-        if result:
-            await _send_fn(task.chat_id, f"⏱ {result}")
-        log_event("agent_task_ran", task_id=task_id)
     except Exception as exc:
         log_event("agent_task_failed", task_id=task_id, error=str(exc)[:200])
         if not task.repeat:
             _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=15),
                          {"task_id": task.id})  # transient failure: retry, don't discard
         return
+    if not result or not str(result).strip():
+        # Both model tiers down surfaces as an EMPTY result, not an
+        # exception — treating it as success cancelled the one-shot
+        # (audit round 2, P1). Same retry path as a raise.
+        log_event("agent_task_empty_result", task_id=task_id)
+        if not task.repeat:
+            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=15),
+                         {"task_id": task.id})
+        return
+    try:
+        await _send_fn(task.chat_id, f"⏱ {result}")
+    except Exception as exc:
+        # A send failure is AMBIGUOUS — Telegram may have delivered before
+        # the connection died. Re-running the whole task to retry delivery
+        # is the duplication path (audit round 2, P2): the run DID happen,
+        # so a one-shot retires with the loss logged rather than executing
+        # twice.
+        log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
+    else:
+        log_event("agent_task_ran", task_id=task_id)
     if not task.repeat:
         cancel(task.id)

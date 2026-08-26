@@ -189,3 +189,126 @@ def test_voice_available_uses_find_spec(monkeypatch):
     monkeypatch.setattr(importlib.util, "find_spec", spy)
     voice.available()
     assert "mlx_whisper" in calls   # located, never imported here
+
+
+# --- Audit round 2 ---------------------------------------------------------
+
+async def test_empty_result_is_failure_not_success(task_env, monkeypatch):
+    """Both tiers down surfaces as an empty result — the one-shot must
+    survive it, not retire as if it ran."""
+    from kyraan.control_plane import kernel
+    scheduled, sent = task_env
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda force=False: True)
+    task = agent_tasks.create(1, "summarize something once",
+                              (local_now() + timedelta(minutes=5)).isoformat())
+
+    async def empty(chat_id, instruction):
+        return ""
+
+    agent_tasks._run_fn = empty
+    scheduled.clear()
+    await agent_tasks.fire(task.id)
+    assert any(t.id == task.id for t in agent_tasks.list_active())  # survived
+    assert scheduled                                                # retry queued
+    agent_tasks.cancel(task.id)
+
+
+async def test_send_failure_never_reruns_the_model(task_env, monkeypatch):
+    """Ambiguous Telegram send failure: the run happened, delivery is
+    unknown — retire the one-shot rather than executing twice."""
+    from kyraan.control_plane import kernel
+    scheduled, sent = task_env
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda force=False: True)
+    task = agent_tasks.create(1, "summarize something once more",
+                              (local_now() + timedelta(minutes=5)).isoformat())
+    runs = []
+
+    async def counted(chat_id, instruction):
+        runs.append(1)
+        return "the result"
+
+    async def broken_send(chat_id, text):
+        raise RuntimeError("connection reset mid-send")
+
+    agent_tasks._run_fn = counted
+    agent_tasks._send_fn = broken_send
+    scheduled.clear()
+    await agent_tasks.fire(task.id)
+    assert runs == [1]                                             # ran once
+    assert not any(t.id == task.id for t in agent_tasks.list_active())  # retired
+    assert not scheduled                                           # no re-run queued
+
+
+def test_create_refuses_interval():
+    with pytest.raises(ValueError, match="reminder feature"):
+        agent_tasks.create(1, "poll this", (local_now() + timedelta(hours=1)).isoformat(),
+                           repeat="interval")
+
+
+def test_very_stale_interval_catchup_is_fast_and_future():
+    from kyraan.triggers.store import Reminder
+    import time as _time
+    stale = Reminder(id="r3", chat_id=1, text="water",
+                     when_iso=(local_now() - timedelta(days=400)).isoformat(),
+                     repeat="interval", interval_minutes=5,
+                     window_start="10:00", window_end="21:00")
+    t0 = _time.monotonic()
+    nxt = scheduler.advance_past_now(stale)
+    assert _time.monotonic() - t0 < 0.5   # arithmetic, not 115k loop steps
+    assert nxt > local_now()
+
+
+async def test_local_fallback_rebuilds_prompt_with_pending_facts(monkeypatch):
+    """The cheap-tier fallback must not inherit the cloud prompt's
+    pending-facts placeholder — locally the facts are allowed."""
+    from kyraan.agents import legacy_handlers
+    from kyraan.memory import store as memory_store
+
+    monkeypatch.setattr(memory_store, "load_pending_facts",
+                        lambda: "PENDING-FACT: gift idea")
+    monkeypatch.setattr(legacy_handlers.router, "provider_is_local",
+                        lambda p: p == "ollama")
+    systems = []
+
+    call_count = {"n": 0}
+
+    async def flaky_acall(prompt="", system="", tier="", **kw):
+        systems.append((tier, system))
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            raise legacy_handlers.router.ModelProviderError("frontier down")
+
+        class _R:
+            text = "ok"
+        return _R()
+
+    monkeypatch.setattr(legacy_handlers.router, "acall", flaky_acall)
+    await legacy_handlers._answer(90, "any gift ideas?")
+    cloud_sys = systems[0][1]
+    local_sys = systems[1][1]
+    assert "PENDING-FACT" not in cloud_sys and "held locally" in cloud_sys
+    assert "PENDING-FACT" in local_sys                 # rebuilt for local
+    assert "LOCAL backup model" in local_sys           # degraded note intact
+
+
+def test_voice_probe_runs_in_a_subprocess(monkeypatch):
+    from kyraan.channels import voice
+    voice._native_probe = None
+    calls = {}
+
+    class _Proc:
+        returncode = 0
+
+    def fake_run(cmd, **kw):
+        calls["cmd"] = cmd
+        return _Proc()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    import importlib.util
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n: object())
+    assert voice.available() is True
+    assert "import mlx_whisper" in " ".join(calls["cmd"])   # child, not us
+    calls.clear()
+    assert voice.available() is True and not calls          # cached
+    voice._native_probe = None
