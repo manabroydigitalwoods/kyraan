@@ -60,11 +60,14 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   reminders.cancel; cancelling an EVENT/meeting is calendar.cancel.
 - email.check: asking about email/inbox. E.g. "any new emails?", "do I have
   unread mail?", "check my inbox", "who emailed me?".
-- memory.review: the user wants to see or act on the facts awaiting the
+- memory.review: the user wants to see or act on the facts AWAITING the
   owner's review — listing them, approving, confirming, or rejecting.
   E.g. "review memory", "review the pending facts", "what review you need
   still?", "reviewed and confirmed", "approve the pending facts", "confirm
   the facts you noted". Saving facts happens ONLY through this flow.
+  Asking what is ALREADY known/saved is different: "show me kiaan
+  memories", "what do you know about my son?", "what have you saved about
+  me?" are qa.answer — the saved facts are available to it directly.
 - home.query: asking about the home's smart devices or climate — state,
   power, runtime, temperature. E.g. "is the AC on?", "did I leave the AC
   running?", "how long has the AC been on?", "how much power is the AC

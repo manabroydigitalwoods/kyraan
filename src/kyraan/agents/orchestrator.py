@@ -248,11 +248,18 @@ def _parse_review_decision(text: str, count: int):
 
 
 async def _review_memory(chat_id: int, text: str) -> str:
+    # A queue command states no facts — running extraction on "yes save
+    # it" appended a bogus couldn't-distill warning under the review list
+    # itself (live).
+    _skip_extraction.set(True)
+
     async def handler(args: dict) -> str:
         proposals = _load_review_proposals()
         if not proposals:
             _pending_reviews.pop(chat_id, None)
-            return "Nothing is pending review — every fact you've approved is already saved."
+            return ("Nothing is pending review — every fact you've approved is "
+                    "already saved. To hear what I know, just ask — e.g. "
+                    "\"what do you know about Aarav?\"")
         _pending_reviews[chat_id] = (proposals, time.monotonic())
         lines = [f"{i + 1}. {fact}  ({target})"
                  for i, (_, target, fact) in enumerate(proposals)]
@@ -497,6 +504,20 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
         return ""
     if not queued:
         if explicit_save:
+            # An empty result may mean DEDUP, not failure — live: "i said
+            # the age of kiaan, you shoul save" warned 'couldn't distill'
+            # while the fact was sitting in the queue already. Check both
+            # stores before claiming failure.
+            content = {w.strip(".,!?'\"").lower() for w in raw_text.split() if len(w) > 3}
+            content -= {"save", "remember", "note", "that", "this", "should",
+                        "shoul", "said", "please", "want", "need"}
+            pending = memory_store.load_pending_facts().lower()
+            live = memory_store.load_all_facts().lower()
+            if content and any(w in pending for w in content):
+                return ("\n\n📝 That's already in the review queue — say "
+                        "\"review memory\" to approve it.")
+            if content and any(w in live for w in content):
+                return "\n\n📝 I already have that saved in memory."
             log_event("explicit_save_extracted_nothing", chat_id=chat_id, text=raw_text)
             return ("\n\n⚠️ I couldn't distill a durable fact from that to queue "
                     "for review — state it directly, like \"remember that Aarav "

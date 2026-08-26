@@ -1540,9 +1540,9 @@ def _seed_review_queue(monkeypatch, tmp_path):
     monkeypatch.setattr(mstore, "MEMORY_ROOT", memory_root)
     monkeypatch.setattr(mstore, "PENDING_DIR", pending)
     (pending / "a__people__father.md").write_text(
-        "---\ntarget: people/father.md\nsource_statement: 'x'\n---\n\nFather's name is Tarun Roy\n")
+        "---\ntarget: people/father.md\nsource_statement: 'x'\n---\n\n- Father's name is Tarun Roy\n")
     (pending / "b__people__reminder.md").write_text(
-        "---\ntarget: people/reminder.md\nsource_statement: 'y'\n---\n\nUser asked to call the plumber\n")
+        "---\ntarget: people/reminder.md\nsource_statement: 'y'\n---\n\n- User asked to call the plumber\n")
     return memory_root, pending
 
 
@@ -1605,10 +1605,16 @@ def test_review_decision_parser_boundaries():
     assert parse("what about 2?", 3) is None  # not a decision at all
 
 
-async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch):
+async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch, tmp_path):
     """Seen live: 'save the kiaan age' produced no proposal and no
     acknowledgement of the failure. An explicit save must either queue a
     fact (📝 line) or admit it couldn't."""
+    from kyraan.memory import store as mstore
+
+    memory_root = tmp_path / "memory"
+    (memory_root / "pending_review").mkdir(parents=True)
+    monkeypatch.setattr(mstore, "MEMORY_ROOT", memory_root)
+    monkeypatch.setattr(mstore, "PENDING_DIR", memory_root / "pending_review")
     _mock_normalize(monkeypatch, "qa.answer", "save the kiaan age")
 
     async def fake_answer(chat_id, text):
@@ -1630,4 +1636,46 @@ async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch):
     _mock_normalize(monkeypatch, "qa.answer", "nice weather today")
     result = await orchestrator.handle_message(chat_id=0, raw_text="nice weather today")
     assert calls == [True, False]
+    assert "couldn't distill" not in result
+
+
+async def test_review_command_never_runs_extraction(monkeypatch, tmp_path):
+    """'yes save it' (a queue command) got the couldn't-distill warning
+    glued under the review list — extraction must not run on
+    memory.review messages at all."""
+    _seed_review_queue(monkeypatch, tmp_path)
+    _mock_normalize(monkeypatch, "memory.review", "yes save it")
+    calls = []
+
+    async def counting(raw_text, context="", insist=False):
+        calls.append(1)
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", counting)
+    orchestrator._pending_reviews.pop(0, None)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes save it")
+    assert "Facts awaiting your review" in result
+    assert "couldn't distill" not in result
+    assert calls == []
+    orchestrator._pending_reviews.pop(0, None)
+
+
+async def test_explicit_save_of_an_already_queued_fact_points_to_review(monkeypatch, tmp_path):
+    """Dedup is not failure: when the fact is already pending, the note
+    must say so instead of 'couldn't distill' (seen live)."""
+    from kyraan.memory import store as mstore
+
+    _seed_review_queue(monkeypatch, tmp_path)  # queue holds the Tarun fact
+    _mock_normalize(monkeypatch, "qa.answer", "you should save ganak name")
+
+    async def fake_answer(chat_id, text):
+        return "Okay."
+
+    async def empty_extraction(raw_text, context="", insist=False):
+        return []  # dedup ate it
+
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", empty_extraction)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="you should save ganak name")
+    assert "already in the review queue" in result
     assert "couldn't distill" not in result
