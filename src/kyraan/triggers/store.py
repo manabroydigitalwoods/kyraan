@@ -24,6 +24,9 @@ class Reminder:
                           # claim (>120s) is a crashed sender's lease
     takeover: bool = False  # this claim took over a stale lease — the
                             # send may be a repeat and must say so
+    repeat: str = ""        # "", daily, weekdays, weekly, monthly —
+                            # recurring reminders roll when_iso forward
+                            # after each delivery instead of retiring
 
 
 def _load_all() -> list[dict]:
@@ -36,13 +39,14 @@ def _save_all(records: list[dict]) -> None:
     atomic_write_text(REMINDERS_PATH, json.dumps(records, indent=2))
 
 
-def add(chat_id: int, text: str, when_iso: str) -> Reminder:
+def add(chat_id: int, text: str, when_iso: str, repeat: str = "") -> Reminder:
     with locked(REMINDERS_PATH):
-        return _add_locked(chat_id, text, when_iso)
+        return _add_locked(chat_id, text, when_iso, repeat)
 
 
-def _add_locked(chat_id: int, text: str, when_iso: str) -> Reminder:
-    reminder = Reminder(id=str(uuid.uuid4()), chat_id=chat_id, text=text, when_iso=when_iso)
+def _add_locked(chat_id: int, text: str, when_iso: str, repeat: str = "") -> Reminder:
+    reminder = Reminder(id=str(uuid.uuid4()), chat_id=chat_id, text=text,
+                        when_iso=when_iso, repeat=repeat)
     records = _load_all()
     records.append(asdict(reminder))
     _save_all(records)
@@ -129,3 +133,17 @@ def _cancel_locked(reminder_id: str) -> bool:
     changed = len(remaining) != len(records)
     _save_all(remaining)
     return changed
+
+
+def roll_forward(reminder_id: str, next_when_iso: str) -> None:
+    """A recurring reminder just delivered: advance to its next
+    occurrence, release the claim, and keep it un-retired — sent stays
+    False so init() reschedules the NEXT instance after any restart."""
+    with locked(REMINDERS_PATH):
+        records = _load_all()
+        for record in records:
+            if record["id"] == reminder_id:
+                record["when_iso"] = next_when_iso
+                record["claimed_at"] = ""
+                record["takeover"] = False
+        _save_all(records)

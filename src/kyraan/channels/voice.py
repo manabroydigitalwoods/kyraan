@@ -32,6 +32,21 @@ def available() -> bool:
 
 
 def _transcribe_sync(path: str) -> str:
+    import os
+    import shutil
+
+    # launchd services get a bare PATH without /opt/homebrew/bin — the
+    # first three live voice notes all failed with "ffmpeg not found"
+    # while shell-run tests passed. Make the dependency explicit.
+    if shutil.which("ffmpeg") is None:
+        extras = ("/opt/homebrew/bin", "/usr/local/bin")
+        os.environ["PATH"] = os.pathsep.join(
+            [*extras, os.environ.get("PATH", "")])
+        if shutil.which("ffmpeg") is None:
+            raise RuntimeError(
+                "ffmpeg not found — install it (brew install ffmpeg); voice "
+                "notes need it to decode Telegram's audio")
+
     import mlx_whisper
 
     result = mlx_whisper.transcribe(

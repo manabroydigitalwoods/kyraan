@@ -169,6 +169,10 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     when_iso = orchestrator._anchor_clock_time(raw_text, when_iso)
     if orchestrator.is_time_fragment(str(args["text"])):
         raise kernel.ToolFailed("the reminder text is just a time phrase — ask the user what the reminder is FOR")
+    repeat = str(args.get("repeat", "") or "")
+    if repeat and repeat not in scheduler.REPEAT_CHOICES:
+        raise kernel.ToolFailed(
+            f"repeat must be one of {scheduler.REPEAT_CHOICES} or omitted")
     existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
     if existing:
         return {"duplicate": True, "id": existing.id[:8], "text": existing.text,
@@ -176,13 +180,17 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
                 "note": ("this reminder ALREADY existed — tell the user it was "
                          "already set and nothing new was created; never say "
                          "'done' or imply you just created it")}
-    reminder = scheduler.create_reminder(chat_id, args["text"], when_iso)
-    return {"created": True, "id": reminder.id[:8], "text": args["text"],
-            "when": humanize(when_iso)}
+    reminder = scheduler.create_reminder(chat_id, args["text"], when_iso, repeat=repeat)
+    result = {"created": True, "id": reminder.id[:8], "text": args["text"],
+              "when": humanize(when_iso)}
+    if repeat:
+        result["repeats"] = repeat
+    return result
 
 
 async def _reminders_list(chat_id: int, args: dict, raw_text: str):
-    return [{"id": r.id[:8], "text": r.text, "when": humanize(r.when_iso)}
+    return [{"id": r.id[:8], "text": r.text, "when": humanize(r.when_iso),
+             **({"repeats": r.repeat} if r.repeat else {})}
             for r in scheduler.store.list_pending(chat_id)]
 
 
@@ -263,8 +271,8 @@ TOOLS = {
         "run": _home_get_state,
     },
     "reminders.create": {
-        "params": '{"text": "<what to remind>", "when_iso": "<ISO with the user\'s +05:30 offset>"}',
-        "about": "Set a reminder delivered as a Telegram message. Only when the user asked to be reminded/woken/alerted.",
+        "params": '{"text": "<what to remind>", "when_iso": "<ISO with the user\'s +05:30 offset>", "repeat": "<omit for one-shot; daily|weekdays|weekly|monthly ONLY when the user says every day/every monday/daily/each month...>"}',
+        "about": "Set a reminder delivered as a Telegram message (recurring supported). Only when the user asked to be reminded/woken/alerted. when_iso is the FIRST occurrence.",
         "run": _reminders_create,
     },
     "reminders.list": {

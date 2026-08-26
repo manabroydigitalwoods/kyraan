@@ -367,3 +367,58 @@ async def test_dnd_release_never_launders_delivery_uncertainty(isolated_store, m
     monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
     await scheduler.fire(r.id, 0, r.text)
     assert len(sends) == 1 and "may be a repeat" in sends[0]
+
+
+def test_advance_occurrence_math():
+    """Recurrence rules: daily, weekly, weekdays skip weekends, monthly
+    clamps to short months instead of skipping."""
+    from datetime import datetime
+
+    fri = datetime.fromisoformat("2026-08-28T09:00:00+05:30")   # Friday
+    assert scheduler.advance_occurrence(fri, "daily").day == 29
+    assert scheduler.advance_occurrence(fri, "weekly").day == 4  # next Fri
+    assert scheduler.advance_occurrence(fri, "weekdays").day == 31  # Monday
+
+    jan31 = datetime.fromisoformat("2026-01-31T09:00:00+05:30")
+    feb = scheduler.advance_occurrence(jan31, "monthly")
+    assert (feb.month, feb.day) == (2, 28)  # clamped, not skipped
+
+
+async def test_recurring_reminder_rolls_forward_instead_of_retiring(isolated_store):
+    """'Every day at 9' fires today, then points at tomorrow — the record
+    IS the series: never retired, claim released, restart-safe."""
+    r = store.add(chat_id=0, text="take medicine",
+                  when_iso="2099-01-01T09:00:00+05:30", repeat="daily")
+    sends = []
+    scheduled = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda name, run_at, payload: scheduled.append(run_at),
+                   cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+    scheduled.clear()
+    await scheduler.fire(r.id, 0, r.text)
+
+    assert sends == ["Reminder: take medicine"]
+    record = store.get(r.id)
+    assert record.sent is False                      # the series lives on
+    assert record.when_iso.startswith("2099-01-02")  # advanced one day
+    assert record.claimed_at == ""                   # claim released
+    assert len(scheduled) == 1                       # next occurrence armed
+
+    # the next fire delivers again — no once-only retirement
+    await scheduler.fire(r.id, 0, r.text)
+    assert len(sends) == 2
+    assert store.get(r.id).when_iso.startswith("2099-01-03")
+
+    # and cancel ends the series
+    assert store.cancel(r.id) is True
+    await scheduler.fire(r.id, 0, r.text)
+    assert len(sends) == 2
+
+
+def test_create_reminder_rejects_unknown_repeat(isolated_store):
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    with pytest.raises(ValueError, match="repeat"):
+        scheduler.create_reminder(0, "x", "2099-01-01T09:00:00+05:30", repeat="fortnightly")

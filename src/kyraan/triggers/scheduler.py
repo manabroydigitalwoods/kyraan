@@ -110,6 +110,18 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         _schedule_fn(reminder_id, local_now() + timedelta(seconds=150),
                      {"chat_id": chat_id, "text": text, "reminder_id": reminder_id})
         return
+    if record.repeat:
+        # Recurring: roll forward instead of retiring — the record IS the
+        # series; when_iso always points at the next occurrence, so a
+        # restart's init() reschedules the series naturally.
+        next_when = advance_occurrence(_parse_when(record.when_iso), record.repeat)
+        store.roll_forward(reminder_id, next_when.isoformat())
+        assert _schedule_fn is not None
+        _schedule_fn(reminder_id, next_when,
+                     {"chat_id": chat_id, "text": record.text, "reminder_id": reminder_id})
+        log_event("reminder_recurred", reminder_id=reminder_id,
+                  next=next_when.isoformat(), repeat=record.repeat)
+        return
     store.mark_sent(reminder_id)
     if delivered is False:
         log_event("reminder_retired_undelivered", reminder_id=reminder_id, chat_id=chat_id)
@@ -184,6 +196,31 @@ def _schedule(reminder: store.Reminder) -> None:
     )
 
 
+REPEAT_CHOICES = ("daily", "weekdays", "weekly", "monthly")
+
+
+def advance_occurrence(when, repeat: str):
+    """The next occurrence after `when` for a repeat rule. Monthly clamps
+    to the shortest month (Jan 31 -> Feb 28) rather than skipping."""
+    import calendar as _calendar
+
+    if repeat == "daily":
+        return when + timedelta(days=1)
+    if repeat == "weekly":
+        return when + timedelta(days=7)
+    if repeat == "weekdays":
+        step = when + timedelta(days=1)
+        while step.weekday() >= 5:  # Sat/Sun
+            step += timedelta(days=1)
+        return step
+    if repeat == "monthly":
+        year = when.year + (when.month // 12)
+        month = when.month % 12 + 1
+        day = min(when.day, _calendar.monthrange(year, month)[1])
+        return when.replace(year=year, month=month, day=day)
+    raise ValueError(f"unknown repeat rule {repeat!r}")
+
+
 def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | None:
     """An existing pending reminder with the same text (case-insensitive)
     at the same moment. Found live: "ok then set a reminder for it" after
@@ -200,14 +237,17 @@ def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | N
     return None
 
 
-def create_reminder(chat_id: int, text: str, when_iso: str) -> store.Reminder:
+def create_reminder(chat_id: int, text: str, when_iso: str, repeat: str = "") -> store.Reminder:
     # Validate before persisting — a bad when_iso (e.g. a model producing a
     # duplicated UTC offset, seen live) must never be written to disk, or
     # it becomes a landmine that re-crashes init() on every future startup.
     _parse_when(when_iso)
-    reminder = store.add(chat_id=chat_id, text=text, when_iso=when_iso)
+    if repeat and repeat not in REPEAT_CHOICES:
+        raise ValueError(f"repeat must be one of {REPEAT_CHOICES} (or empty)")
+    reminder = store.add(chat_id=chat_id, text=text, when_iso=when_iso, repeat=repeat)
     _schedule(reminder)
-    log_event("reminder_created", reminder_id=reminder.id, chat_id=chat_id, when=when_iso)
+    log_event("reminder_created", reminder_id=reminder.id, chat_id=chat_id,
+              when=when_iso, repeat=repeat or None)
     return reminder
 
 

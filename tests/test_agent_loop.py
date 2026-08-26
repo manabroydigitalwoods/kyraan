@@ -768,3 +768,23 @@ async def test_home_state_timestamps_are_humanized(monkeypatch):
     result = await agent_loop._home_get_state(90, {"entity": "switch.ac"}, "is ac on")
     assert "Z" not in result["last_changed"]
     assert "4:12 PM" in result["last_changed"]
+
+
+async def test_agent_creates_a_recurring_reminder(scripted_model, monkeypatch, tmp_path):
+    from kyraan.triggers import scheduler as sched, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sched.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None,
+               send_fn=None, only_chat=90)
+    monkeypatch.setattr(kernel.config, "skill_config",
+                        lambda name: {"permission": "auto", "model_tier": "cheap"})
+    scripted_model([
+        '{"action": "call", "tool": "reminders.create", '
+        '"args": {"text": "take medicine", "when_iso": "2099-01-01T09:00:00+05:30", "repeat": "daily"}}',
+        '{"action": "reply", "text": "Daily medicine reminder set for 9 AM."}',
+    ])
+
+    reply = await agent_loop.run(90, "remind me every day at 9am to take medicine")
+    assert "Daily" in reply
+    records = rstore.list_pending(90)
+    assert len(records) == 1 and records[0].repeat == "daily"

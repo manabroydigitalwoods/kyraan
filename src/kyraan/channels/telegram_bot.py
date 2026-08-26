@@ -9,6 +9,7 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
+    CommandHandler,
     ContextTypes,
     JobQueue,
     MessageHandler,
@@ -214,6 +215,30 @@ async def _ingest(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str)
         _burst_superseded.pop(chat_id, None)
         if typing is not None:
             typing.cancel()
+
+
+_HELP_TEXT = """Hi — I'm Kyraan, your personal assistant. Talk to me like a person (voice notes work too). Things I do:
+
+⏰ Reminders — "remind me to call mom at 7pm", "every day at 9 take medicine", "any reminders?", "cancel the call-mom one"
+📅 Calendar — "what's on tomorrow?", "add lunch with Mira friday 1pm", "cancel the 3pm meeting" (I always ask before changing anything)
+📬 Email — "any new emails?" (senders & subjects only — I never read bodies)
+🏠 Home — "is the AC on?", "check energy", "bedroom temp", "turn off the AC"
+🧠 Memory — tell me facts and I'll remember after you approve ("review memory"); "forget X" removes one
+📊 Usage — "how much did we spend on AI this week?"
+🌅 Briefs — mornings 7:30 and evenings 9:30, plus AC/energy heads-ups
+
+Everything runs on your own computer; nothing is shared."""
+
+
+async def _on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start and /help — a bot whose very first expected message gets
+    silence feels broken (completion pack)."""
+    if update.effective_user is None or update.effective_chat is None:
+        return
+    if not _owner_private(update):
+        await update.message.reply_text("I'm a private personal assistant — not open for general use.")
+        return
+    await update.message.reply_text(_HELP_TEXT)
 
 
 async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -422,6 +447,7 @@ def run() -> None:
     _harden_data_permissions()
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
+    app.add_handler(CommandHandler(["start", "help"], _on_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(

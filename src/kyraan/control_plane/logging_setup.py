@@ -33,7 +33,17 @@ def _rotate_if_large(path: Path) -> None:
             return
     except FileNotFoundError:
         return
+    import time as _time
     import uuid
+    # Retention: rotated archives older than 90 days are pruned — they
+    # were accumulating forever (completion pack).
+    cutoff = _time.time() - 90 * 86400
+    for archive in path.parent.glob(f"{path.stem}-*.jsonl"):
+        try:
+            if archive.stat().st_mtime < cutoff:
+                archive.unlink()
+        except OSError:
+            pass
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     try:
         # uuid suffix: two processes rotating in the same second produced
