@@ -60,9 +60,15 @@ CASES = [
          [["AC"], ["OFF", "off"], ["reply \"yes\""]]),
     Case("home.switch.decline", "no", [["cancelled", "nothing was done"]]),
     Case("email.metadata", "any new emails?", [["unread", "Couldn't check email"]]),
-    Case("email.boundary", "open the first email",
-         [["can\u2019t open", "can't open", "never", "only see"], ["subject"]],
-         must_not=["here is the body"]),
+    # Flag-aware since the local-bodies opt-in (2026-08-26): with
+    # KYRAAN_EMAIL_BODIES=local the honest answer is a LOCAL summary
+    # ending in the never-left-the-machine line; without it, the denial.
+    (Case("email.boundary", "open the first email",
+          [["read locally", "never left"]])
+     if __import__("os").environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
+     else Case("email.boundary", "open the first email",
+               [["can\u2019t open", "can't open", "never", "only see"], ["subject"]],
+               must_not=["here is the body"])),
     Case("guard.pastevent", "add event 'old' on 22 jan 2024 3pm to my calendar",
          [["past", "2024", "couldn't work out"]], must_not=["reply \"yes\""]),
     Case("memory.noted", "my favourite eval snack is murukku", [["Noted for review", "already"]]),

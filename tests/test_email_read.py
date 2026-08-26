@@ -92,6 +92,36 @@ async def test_executor_refuses_when_cheap_tier_is_cloud(monkeypatch):
     assert "LOCAL model" in result["__direct_reply__"]
 
 
+async def test_unread_executor_delegates_body_questions_when_enabled(monkeypatch):
+    """Live 2026-08-26: after the opt-in, 'what does my latest email say?'
+    was still denied — the model called email.unread first and its
+    hardcoded metadata denial short-circuited the turn. A body question
+    with bodies enabled must delegate to email.read, whichever tool the
+    model picked."""
+    monkeypatch.setenv("KYRAAN_EMAIL_BODIES", "local")
+
+    async def fake_run_tool(call):
+        if call.tool_name == "email.unread":
+            raise AssertionError("should have delegated before fetching metadata")
+        return [{"from": "Axis <x@a.com>", "subject": "S", "date": "d",
+                 "body": "the actual content"}]
+
+    class _R:
+        text = "summary of the actual content"
+
+    async def fake_acall(prompt="", system="", tier="", **kw):
+        return _R()
+
+    monkeypatch.setattr(agent_loop.kernel, "run_tool", fake_run_tool)
+    monkeypatch.setattr(agent_loop.router, "acall", fake_acall)
+    monkeypatch.setattr(agent_loop.router, "provider_is_local", lambda p: True)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+
+    result = await agent_loop._email_unread(9, {"limit": 5}, "what does my latest email say?")
+    assert "summary of the actual content" in result["__direct_reply__"]
+    assert "never left" in result["__direct_reply__"]
+
+
 def test_menu_gated_on_the_flag(monkeypatch):
     monkeypatch.delenv("KYRAAN_EMAIL_BODIES", raising=False)
     assert "- email.read {" not in agent_loop._tools_block()

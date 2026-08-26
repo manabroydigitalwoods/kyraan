@@ -133,6 +133,17 @@ async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
 
 
 async def _email_unread(chat_id: int, args: dict, raw_text: str):
+    from kyraan.agents.guards import wants_email_body
+    from kyraan.tools import gmail as _gmail
+    body_wanted = wants_email_body(raw_text)
+    if body_wanted and _gmail.bodies_enabled():
+        # The owner opted into local-only bodies — a body question must
+        # never dead-end in the metadata denial just because the model
+        # picked the listing tool first (seen live 2026-08-26: "what does
+        # my latest email say?" denied twice AFTER the opt-in). Delegate
+        # BEFORE fetching metadata; email.read does its own fetch.
+        return await _email_read(chat_id, {"limit": min(int(args.get("limit", 2) or 2), 3)},
+                                 raw_text)
     result = await kernel.run_tool(kernel.ToolCall(
         "email.unread", {"limit": min(int(args.get("limit", 5)), 10)}))
     from kyraan.agents import orchestrator
@@ -144,8 +155,6 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     # email but never sees what's in it.
     total = result.get("unread_estimate", 0)
     messages = result.get("messages", [])
-    from kyraan.agents.guards import wants_email_body
-    body_wanted = wants_email_body(raw_text)
     if not messages:
         # The boundary leads even with an empty inbox (round-10: "read
         # this email" answered "No unread emails." as if opening were
@@ -484,7 +493,7 @@ TOOLS = {
     },
     "email.unread": {
         "params": '{"limit": 5}',
-        "about": "Unread email senders and subjects ONLY — bodies are never available, by design.",
+        "about": "Unread email senders and subjects. PLACEHOLDER_EMAIL_BODIES",
         "run": _email_unread,
     },
     "email.read": {
@@ -758,7 +767,13 @@ def _tools_block(read_only: bool = False) -> str:
             from kyraan.tools import gmail as _gmail
             if not _gmail.bodies_enabled():
                 continue  # owner hasn't opted into local body reading
+        from kyraan.tools import gmail as _gmail
         about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
+        about = about.replace(
+            "PLACEHOLDER_EMAIL_BODIES",
+            "For CONTENT questions call email.read instead."
+            if _gmail.bodies_enabled()
+            else "Bodies are never available, by design.")
         lines.append(f"- {name} {spec['params']}\n    {about}")
     return "\n".join(lines)
 
