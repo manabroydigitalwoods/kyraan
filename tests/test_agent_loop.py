@@ -908,3 +908,26 @@ async def test_homework_reply_counts_as_deflection(scripted_model, monkeypatch):
     reply = await agent_loop.run(90, "we have setup some tasks but you said empty task")
     assert "1 reminder" in reply
     assert "homework" in prompts[1]
+
+
+async def test_menu_question_opening_counts_as_deflection(scripted_model, monkeypatch):
+    """'task list' -> 'What would you like to do next—see your water
+    reminders, or...' answered nothing (live 2026-08-26 18:40). A reply
+    that OPENS with a menu question gets the forced re-decide; a real
+    answer with a trailing question is untouched."""
+    async def no_dispatch(spec, args):
+        raise AssertionError("no adapter call expected")
+
+    monkeypatch.setattr(reg, "dispatch", no_dispatch)
+    prompts = scripted_model([
+        '{"action": "reply", "text": "What would you like to do next—see your reminders, or cancel one?"}',
+        '{"action": "call", "tool": "tasks.list", "args": {}}',
+        '{"action": "reply", "text": "No scheduled tasks and no reminders."}',
+    ])
+
+    reply = await agent_loop.run(90, "task list")
+    assert reply == "No scheduled tasks and no reminders."
+    assert "homework" in prompts[1]
+    # trailing question after real content does NOT match the guard
+    assert agent_loop._DEFLECTION_RE.search(
+        "Your task: 8 PM daily calendar check. What would you like to do next?") is None

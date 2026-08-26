@@ -41,7 +41,12 @@ _DEFLECTION_RE = re.compile(
     # the user to issue another command for something a tool does right
     # now is homework, not help (seen live 2026-08-26 18:30).
     r"|if you want,? i can"
-    r"|just say [\"'“‘])",
+    r"|just say [\"'“‘]"
+    # A reply that OPENS with a menu question answered nothing — seen
+    # live 2026-08-26 18:40: "task list" -> "What would you like to do
+    # next—see your water reminders, or update/cancel...". Anchored to
+    # the start so a real answer with a trailing question still passes.
+    r"|\A(?:what|which) would you like)",
     re.IGNORECASE)
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
@@ -198,13 +203,23 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     interval_minutes = int(args.get("interval_minutes", 0) or 0)
     window_start = str(args.get("window_start", "") or "")
     window_end = str(args.get("window_end", "") or "")
-    existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
+    existing = scheduler.find_duplicate(chat_id, args["text"], when_iso,
+                                        repeat=repeat)
     if existing:
         # Deterministic honesty: an advisory note asking the model to say
         # "already set" was ignored under nondeterminism ("Done — I'll
         # remind you...") — the direct reply leaves it no discretion.
+        if existing.repeat == "interval":
+            win = (f" from {existing.window_start} to {existing.window_end}"
+                   if existing.window_start else "")
+            series = f"every {existing.interval_minutes} min{win}, next at "
+        elif existing.repeat:
+            series = f"{existing.repeat}, next at "
+        else:
+            series = "at "
         return {"__direct_reply__": (
-            f'Already set: "{existing.text}" at {humanize(existing.when_iso)} '
+            f'Already set: "{existing.text}" {series}'
+            f"{humanize(existing.when_iso)} "
             f"(id {existing.id[:8]}) — I didn't add a duplicate.")}
     try:
         reminder = scheduler.create_reminder(

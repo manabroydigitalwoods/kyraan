@@ -259,25 +259,33 @@ def _text_essence(text: str) -> frozenset:
     return frozenset(w for w in words if w not in _FILLER_WORDS)
 
 
-def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | None:
-    """An existing pending reminder for the same intent at the same
-    moment. Found live: "ok then set a reminder for it" after the reminder
-    already existed silently created a second identical one — two pings
-    for one intent. Texts match when either's content words contain the
-    other's (phrasing varies; the moment plus overlapping content words is
-    the identity). Same text at a *different* time is not a duplicate
-    (call mom at 8 and again at 9 is legitimate)."""
+def find_duplicate(chat_id: int, text: str, when_iso: str,
+                   repeat: str = "") -> store.Reminder | None:
+    """An existing pending reminder for the same intent. Found live: "ok
+    then set a reminder for it" after the reminder already existed
+    silently created a second identical one — two pings for one intent.
+    Texts match when either's content words contain the other's (phrasing
+    varies). One-shots are duplicates only at the SAME moment (call mom
+    at 8 and again at 9 is legitimate); recurring reminders are a SERIES
+    — same intent recurring twice is one intent regardless of the next
+    occurrence's clock time (live 2026-08-26: a re-request of the hourly
+    water series passed the moment check via a different when_iso and
+    would have double-pinged every hour)."""
     when = _parse_when(when_iso)
     essence = _text_essence(text)
+    if not essence:
+        return None
     for r in store.list_pending(chat_id):
+        other = _text_essence(r.text)
+        if not other or not (essence <= other or other <= essence):
+            continue
+        if repeat and r.repeat:
+            return r
         try:
-            if _parse_when(r.when_iso) != when:
-                continue
+            if _parse_when(r.when_iso) == when:
+                return r
         except ValueError:
             continue
-        other = _text_essence(r.text)
-        if essence and other and (essence <= other or other <= essence):
-            return r
     return None
 
 
