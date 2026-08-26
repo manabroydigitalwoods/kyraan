@@ -426,3 +426,34 @@ async def test_confirm_ask_and_execution_use_the_same_anchored_time(scripted_mod
     assert "T20:00:00" in dispatched["start"]            # and that is what executed
     assert dispatched["start"].endswith("+05:30")
     assert "T21:00:00" in dispatched["end"]              # duration preserved
+
+
+async def test_time_range_anchors_both_ends_and_the_receipt_matches(scripted_model, monkeypatch):
+    """Review P1+P2: "8pm to 9pm" gave TWO clock matches and zero
+    anchoring; now both ends anchor, and the success receipt shows the
+    EXECUTED time, not the raw model timestamp."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    dispatched = {}
+
+    async def fake_dispatch(spec, args):
+        dispatched.update(args)
+        return {"id": "ev1", "link": "l", "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(kernel.config, "skill_config",
+                        lambda name: {"permission": "auto", "model_tier": "cheap"})
+    scripted_model([
+        '{"action": "call", "tool": "calendar.create_event", '
+        '"args": {"title": "Dinner", "start": "2099-01-02T19:49:00Z", "end": "2099-01-02T21:12:00Z"}}',
+    ])
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await agent_loop.run(90, "add dinner from 8pm to 9pm on jan 2 2099")
+    assert "8:00 PM" in ask and "9:00 PM" in ask
+    receipt = await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    assert "T20:00:00" in dispatched["start"] and "T21:00:00" in dispatched["end"]
+    assert "8:00 PM" in receipt            # the receipt shows what executed
+    assert "7:49" not in receipt

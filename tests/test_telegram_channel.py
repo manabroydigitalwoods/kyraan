@@ -266,6 +266,7 @@ def test_startup_validation_catches_a_broken_tool_config(monkeypatch):
     broken = {**base, "tools": {"t.x": {"description": "t", "server": "nope",
                                         "permission": "auto", "side_effects": "read",
                                         "params": {}, "failure": {"on_failure": "surface"}}}}
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "1")
     monkeypatch.setattr(config, "load", lambda: broken)
     from kyraan.tools import registry
     registry._adapter_module.cache_clear()

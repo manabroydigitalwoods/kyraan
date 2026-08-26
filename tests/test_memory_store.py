@@ -31,3 +31,15 @@ def test_same_second_same_target_proposals_do_not_collide():
     b = store.propose_fact("people/kiaan.md", "- Fact two", source="s")
     assert a != b
     assert a.exists() and b.exists()
+
+
+def test_promote_retry_does_not_duplicate_the_markdown_fact():
+    """Review P2: a crash between the tree append and the proposal unlink
+    meant a retried promote appended the same fact line twice."""
+    proposal = store.propose_fact("people/wife.md", "- Wife's name is Mira", source="s")
+    saved_text = proposal.read_text()
+    target = store.promote(proposal)
+    # simulate the crash-retry: the proposal file reappears, promote reruns
+    proposal.write_text(saved_text)
+    store.promote(proposal)
+    assert target.read_text().count("Wife's name is Mira") == 1

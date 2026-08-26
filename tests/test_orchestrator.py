@@ -1796,3 +1796,28 @@ async def test_cancel_all_ask_is_capped_at_the_kernel_batch_budget(monkeypatch, 
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert result.count("Event ") == 8  # exactly the confirmed batch ran
+
+
+def test_pre_upgrade_email_logs_are_redacted_at_seed_time(tmp_path, monkeypatch):
+    """Review P1: chat.jsonl entries written BEFORE the cloud_text twin
+    existed carry full listings — seeding must recognize the legacy
+    templates and substitute the placeholder."""
+    import json as j
+    from kyraan.control_plane import logging_setup
+
+    log = tmp_path / "chat.jsonl"
+    log.write_text("\n".join([
+        j.dumps({"ts": "t", "chat_id": 81, "role": "user", "text": "check emails"}),
+        j.dumps({"ts": "t", "chat_id": 81, "role": "assistant",
+                 "text": "You have about 201 unread. Latest:\n- Suman Das: Invoice pending"}),
+        j.dumps({"ts": "t", "chat_id": 81, "role": "assistant",
+                 "text": "Hello! How can I assist you today?"}),
+    ]))
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    orchestrator._history.pop(81, None)
+    orchestrator.seed_history_from_log()
+    block = orchestrator._history_block(81)
+    assert "Invoice pending" not in block and "Suman Das" not in block
+    assert "[showed the unread email summary]" in block
+    assert "Hello! How can I assist" in block   # ordinary replies untouched
+    orchestrator._history.pop(81, None)

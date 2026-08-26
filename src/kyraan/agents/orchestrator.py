@@ -161,6 +161,14 @@ def _anchor_clock_time(raw_text: str, when_iso: str) -> str:
     return corrected.isoformat()
 
 
+def _is_email_listing(text: str) -> bool:
+    """The two legacy email-reply templates (metadata listings written to
+    chat.jsonl before the cloud_text twin existed)."""
+    import re
+    return bool(re.search(r"You have about \d+ unread", text)
+                or "Latest unread:" in text)
+
+
 def seed_history_from_log(max_per_chat: int = 40) -> None:
     """Rebuild in-memory conversation history from chat.jsonl at startup.
 
@@ -189,8 +197,13 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
         if role == "proactive":
             role = "assistant"
         if role in ("user", "assistant") and entry.get("text"):
-            per_chat[entry["chat_id"]].append(
-                (role, entry.get("cloud_text") or entry["text"]))
+            text = entry.get("cloud_text") or entry["text"]
+            if role == "assistant" and "cloud_text" not in entry and _is_email_listing(text):
+                # Pre-upgrade log entries carry the full listing with no
+                # cloud twin (review P1) — the templates are fixed, so
+                # legacy listings are recognized and redacted here.
+                text = "[showed the unread email summary]"
+            per_chat[entry["chat_id"]].append((role, text))
     for chat_id, entries in per_chat.items():
         if not _history[chat_id]:  # never clobber a live conversation
             _history[chat_id].extend(entries[-max_per_chat:])

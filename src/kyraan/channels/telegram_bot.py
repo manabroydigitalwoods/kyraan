@@ -279,13 +279,30 @@ def _validate_startup() -> None:
     from kyraan.control_plane import config
     from kyraan.tools import registry
 
+    int(os.environ["TELEGRAM_OWNER_ID"])  # KeyError/ValueError = boot failure
+
     tools = registry.load()
-    tiers = config.load()["model_tiers"]
-    providers = config.load()["providers"]
+    cfg = config.load()
+    tiers = cfg["model_tiers"]
+    providers = cfg["providers"]
     for name, tier in tiers.items():
-        if tier["provider"] not in providers:
-            raise ValueError(f"model tier {name!r} names unknown provider {tier['provider']!r}")
-    logger.info("Startup validation: %d tools, %d model tiers OK", len(tools), len(tiers))
+        provider = providers.get(tier.get("provider"))
+        if provider is None:
+            raise ValueError(f"model tier {name!r} names unknown provider {tier.get('provider')!r}")
+        if not tier.get("model"):
+            raise ValueError(f"model tier {name!r} has no model")
+        key_env = provider.get("api_key_env")
+        if key_env and not os.environ.get(key_env, "").strip():
+            raise ValueError(
+                f"model tier {name!r} needs {key_env} in .env (provider {tier['provider']!r})")
+
+    import importlib
+    for server_name, server in (cfg.get("tool_servers") or {}).items():
+        if server.get("transport") == "builtin" and server.get("module"):
+            importlib.import_module(server["module"])  # ImportError = boot failure
+
+    logger.info("Startup validation: %d tools, %d model tiers, owner id OK",
+                len(tools), len(tiers))
 
 
 def run() -> None:

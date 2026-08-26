@@ -53,17 +53,30 @@ def _normalized_event_times(args: dict, raw_text: str) -> tuple:
     offset-dropping (a bare Z in a non-UTC home is wall-clock intent) and
     anchors to the user's explicitly stated clock time ("8pm" beats the
     model's 19:49), exactly like reminders."""
-    from kyraan.agents import orchestrator
-    start_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"]))).isoformat()
-    end_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"]))).isoformat()
-    anchored = orchestrator._anchor_clock_time(raw_text, start_iso)
-    if anchored != start_iso:
-        # keep the event's duration when the start moves
-        from datetime import timedelta
-        duration = scheduler._parse_when(end_iso) - scheduler._parse_when(start_iso)
-        end_iso = (scheduler._parse_when(anchored) + duration).isoformat()
-        start_iso = anchored
-    return start_iso, end_iso
+    import re
+    start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
+    end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
+    matches = re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I)
+
+    def _apply(dt, match):
+        hh, mm, ap = match
+        hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+        return dt.replace(hour=hour, minute=int(mm) if mm else 0, second=0, microsecond=0)
+
+    if len(matches) == 1:
+        # one stated time anchors the start; the duration rides along
+        duration = end_dt - start_dt
+        anchored = _apply(start_dt, matches[0])
+        if anchored != start_dt:
+            end_dt = anchored + duration
+            start_dt = anchored
+    elif len(matches) == 2:
+        # "8pm to 9pm": both ends stated — anchor both (review P1: two
+        # matches used to mean NO anchoring, letting drifted intervals
+        # through unchecked)
+        start_dt = _apply(start_dt, matches[0])
+        end_dt = _apply(end_dt, matches[1])
+    return start_dt.isoformat(), end_dt.isoformat()
 
 
 async def _calendar_create(chat_id: int, args: dict, raw_text: str):
@@ -73,7 +86,10 @@ async def _calendar_create(chat_id: int, args: dict, raw_text: str):
     call_args = {"title": args["title"], "start": start_iso, "end": end_iso}
     if args.get("location"):
         call_args["location"] = args["location"]
-    return await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
+    result = await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
+    if isinstance(result, dict):
+        result = {**result, "start": start_iso}  # the receipt shows what EXECUTED
+    return result
 
 
 async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
@@ -512,7 +528,9 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         return f"That failed: {outcome['error']}"
     if tool == "calendar.create_event":
         link = outcome.get("link", "") if isinstance(outcome, dict) else ""
-        return f"Event created on your calendar: \"{args.get('title')}\" at {humanize(str(args.get('start')))}\n{link}".strip()
+        executed = outcome.get("start") if isinstance(outcome, dict) else None
+        shown = humanize(str(executed)) if executed else humanize(str(args.get("start")))
+        return f"Event created on your calendar: \"{args.get('title')}\" at {shown}\n{link}".strip()
     if tool == "calendar.delete_event":
         if isinstance(outcome, dict) and outcome.get("already_gone"):
             return f"\"{args.get('title') or args.get('event_id')}\" was already gone."

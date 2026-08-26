@@ -110,8 +110,12 @@ def promote(proposal_path: Path) -> Path:
 
     target_path = MEMORY_ROOT / target_rel
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    with target_path.open("a") as f:
-        f.write(body.strip() + "\n\n")
+    existing = target_path.read_text() if target_path.exists() else ""
+    if body.strip() not in existing:
+        # idempotent for retries (review P2): a crash after this append
+        # and before the unlink must not duplicate the fact next time
+        with target_path.open("a") as f:
+            f.write(body.strip() + "\n\n")
 
     proposal_path.unlink()
     return target_path

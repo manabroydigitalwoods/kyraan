@@ -59,7 +59,18 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
     # jobs could both pass the sent-check above (P1, and the double-send
     # was observed live once before the check existed at all).
     if not store.claim_for_send(reminder_id):
-        log_event("reminder_fire_skipped", reminder_id=reminder_id, reason="claimed by another sender")
+        record = store.get(reminder_id)
+        if record is not None and not record.sent:
+            # A live lease with an unsent record is either a concurrent
+            # sender (its success will mark sent, making our retry a
+            # no-op) or a crashed one (review P1: the lease had no
+            # watcher and the reminder stranded) — watch it either way.
+            log_event("reminder_fire_deferred", reminder_id=reminder_id, reason="live claim lease")
+            assert _schedule_fn is not None
+            _schedule_fn(reminder_id, local_now() + timedelta(seconds=130),
+                         {"chat_id": chat_id, "text": text, "reminder_id": reminder_id})
+        else:
+            log_event("reminder_fire_skipped", reminder_id=reminder_id, reason="already sent")
         return
     if not kernel.can_send_proactively():
         store.release_claim(reminder_id)

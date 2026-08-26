@@ -262,3 +262,23 @@ async def test_failed_send_releases_the_claim_and_reschedules(isolated_store):
     assert store.get(r.id).sent is False
     assert store.get(r.id).claimed_at == ""     # claim released
     assert len(rescheduled) == 1                # retry scheduled
+
+
+async def test_live_claim_defers_instead_of_stranding(isolated_store):
+    """Review P1: a refused claim with the record still unsent (crashed or
+    concurrent sender) must self-reschedule at lease expiry — the lease
+    previously had no watcher and the reminder stranded."""
+    r = store.add(chat_id=0, text="crashy", when_iso="2099-01-01T10:00:00+00:00")
+    assert store.claim_for_send(r.id)      # someone else holds a live lease
+    rescheduled = []
+    sends = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda name, run_at, payload: rescheduled.append(run_at),
+                   cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+    rescheduled.clear()
+    await scheduler.fire(r.id, 0, r.text)
+    assert sends == []                     # the lease holder owns the send
+    assert len(rescheduled) == 1           # but the record is watched, not stranded
