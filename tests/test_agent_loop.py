@@ -931,3 +931,78 @@ async def test_menu_question_opening_counts_as_deflection(scripted_model, monkey
     # trailing question after real content does NOT match the guard
     assert agent_loop._DEFLECTION_RE.search(
         "Your task: 8 PM daily calendar check. What would you like to do next?") is None
+
+
+async def test_short_interval_asks_with_the_volume_math_then_creates(
+        scripted_model, monkeypatch, tmp_path):
+    """Owner's 2026-08-26 choice: sub-15-minute series are allowed but
+    gated — the ask shows pings/day; the yes creates the exact series.
+    5 minutes over 10:00-21:00 is the live request that set the policy."""
+    from kyraan.triggers import scheduler as sch, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sch.init(schedule_fn=lambda *a, **k: None,
+             cancel_fn=lambda *a, **k: None, send_fn=None)
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    scripted_model([
+        '{"action": "call", "tool": "reminders.create", "args": {'
+        '"text": "Drink water", "when_iso": "2099-01-01T10:00:00+05:30", '
+        '"repeat": "interval", "interval_minutes": 5, '
+        '"window_start": "10:00", "window_end": "21:00"}}',
+    ])
+
+    ask = await agent_loop.run(90, "remind me every 5 mins to drink water from 10am to 9pm")
+    assert "every 5 minutes" in ask and "133 messages a day" in ask
+    assert rstore.list_pending(90) == []  # nothing created before the yes
+
+    reply = await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    records = rstore.list_pending(90)
+    assert len(records) == 1 and records[0].interval_minutes == 5
+    assert "Reminder set" in reply
+
+
+async def test_normal_interval_still_creates_without_a_confirm(
+        scripted_model, monkeypatch, tmp_path):
+    """>=15-minute series keep the instant path — no gate regression."""
+    from kyraan.triggers import scheduler as sch, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sch.init(schedule_fn=lambda *a, **k: None,
+             cancel_fn=lambda *a, **k: None, send_fn=None)
+    scripted_model([
+        '{"action": "call", "tool": "reminders.create", "args": {'
+        '"text": "Drink water", "when_iso": "2099-01-01T10:00:00+05:30", '
+        '"repeat": "interval", "interval_minutes": 60, '
+        '"window_start": "10:00", "window_end": "21:00"}}',
+        '{"action": "reply", "text": "Done — hourly water reminders are set."}',
+    ])
+
+    reply = await agent_loop.run(90, "remind me every hour to drink water")
+    assert "Done" in reply
+    assert len(rstore.list_pending(90)) == 1
+
+
+async def test_interval_under_five_minutes_is_refused(
+        scripted_model, monkeypatch, tmp_path):
+    """The hard floor: below 5 minutes never even reaches a confirm —
+    the model gets the refusal to relay."""
+    from kyraan.triggers import scheduler as sch, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sch.init(schedule_fn=lambda *a, **k: None,
+             cancel_fn=lambda *a, **k: None, send_fn=None)
+    prompts = scripted_model([
+        '{"action": "call", "tool": "reminders.create", "args": {'
+        '"text": "check oven", "when_iso": "2099-01-01T10:00:00+05:30", '
+        '"repeat": "interval", "interval_minutes": 2}}',
+        '{"action": "reply", "text": "The smallest interval is 5 minutes — want that?"}',
+    ])
+
+    reply = await agent_loop.run(90, "remind me every 2 minutes to check the oven")
+    assert "5 minutes" in reply
+    assert rstore.list_pending(90) == []
+    assert "smallest interval" in prompts[1]

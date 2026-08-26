@@ -442,10 +442,22 @@ def test_interval_reminder_math_and_window_rollover(isolated_store):
 
 
 def test_interval_floor_rejects_spam(isolated_store):
+    """The hard floor is 5 minutes (below is a runaway pager); 5-14 min
+    is legal at this layer — the loop gates it behind a confirm."""
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
     with pytest.raises(ValueError, match="smallest interval"):
         scheduler.create_reminder(0, "drink water", "2099-01-01T10:00:00+05:30",
+                                  repeat="interval", interval_minutes=3)
+    r = scheduler.create_reminder(0, "drink water", "2099-01-01T10:00:00+05:30",
                                   repeat="interval", interval_minutes=5)
+    assert r.interval_minutes == 5
+
+
+def test_pings_per_day_math():
+    # "every 5 mins, 10AM-9PM" — the live request that set the floor
+    assert scheduler.pings_per_day(5, "10:00", "21:00") == 133
+    assert scheduler.pings_per_day(60, "10:00", "21:00") == 12
+    assert scheduler.pings_per_day(30) == 49  # all day
 
 
 async def test_interval_reminder_fires_and_steps(isolated_store, monkeypatch):

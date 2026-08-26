@@ -178,8 +178,12 @@ async def _home_get_state(chat_id: int, args: dict, raw_text: str):
 async def _reminders_create(chat_id: int, args: dict, raw_text: str):
     async def handler(_a: dict):
         return await _reminders_create_gated(chat_id, args, raw_text)
+    # The inner run_skill would reset the confirmed flag — a confirmed
+    # replay (sub-15-min interval gate) must carry its yes through, or
+    # the gate re-raises forever.
     return await kernel.run_skill(
-        kernel.SkillCall("reminders.create", {"text": str(args.get("text", ""))}), handler)
+        kernel.SkillCall("reminders.create", {"text": str(args.get("text", ""))},
+                         confirmed=kernel.confirmed_context()), handler)
 
 
 async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
@@ -221,6 +225,20 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
             f'Already set: "{existing.text}" {series}'
             f"{humanize(existing.when_iso)} "
             f"(id {existing.id[:8]}) — I didn't add a duplicate.")}
+    if repeat == "interval" and interval_minutes < scheduler._MIN_INTERVAL_MINUTES:
+        # The hard floor refuses BEFORE the confirm gate — never ask the
+        # owner to approve a series that would be rejected anyway.
+        raise kernel.ToolFailed(
+            f"the smallest interval is {scheduler._MIN_INTERVAL_MINUTES} minutes "
+            f"— offer the user {scheduler._MIN_INTERVAL_MINUTES} min instead")
+    if (repeat == "interval"
+            and interval_minutes < scheduler.CONFIRM_INTERVAL_MINUTES
+            and not kernel.confirmed_context()):
+        # High-volume series need the owner's eyes on the math first —
+        # the owner chose "allow >=5 min, confirm-gated" over a hard
+        # 15-minute floor (2026-08-26). The ask shows pings/day; the
+        # yes replays this exact call inside confirmed_context.
+        raise kernel.ConfirmationRequired("reminders.create", dict(args))
     try:
         reminder = scheduler.create_reminder(
             chat_id, args["text"], when_iso, repeat=repeat,
@@ -369,7 +387,7 @@ TOOLS = {
     },
     "reminders.create": {
         "params": '{"text": "...", "when_iso": "<first occurrence, ISO +05:30>"} — plus ONLY for recurring requests: "repeat" (daily|weekdays|weekly|monthly|interval), and for interval: "interval_minutes" (min 15) with optional "window_start"/"window_end" ("HH:MM"). One-shot reminders: text and when_iso ONLY.',
-        "about": "Set a reminder delivered as a Telegram message. Recurring supported, including intervals with a daily window ('every hour from 10:00 to 21:00, drink water' -> repeat=interval, interval_minutes=60, window 10:00-21:00; minimum interval 15 min — offer the closest legal one if the user asks for less). Only when the user asked to be reminded.",
+        "about": "Set a reminder delivered as a Telegram message. Recurring supported, including intervals with a daily window ('every hour from 10:00 to 21:00, drink water' -> repeat=interval, interval_minutes=60, window 10:00-21:00; minimum interval 5 min; intervals under 15 min are allowed but will ask the owner to confirm the message volume first). Only when the user asked to be reminded.",
         "run": _reminders_create,
     },
     "reminders.list": {
@@ -544,6 +562,14 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
         return (f"Schedule this task: at {humanize(str(args.get('when_iso')))}"
                 f"{rep}, I will run: \"{args.get('instruction')}\" (read-only "
                 "tools; results arrive as messages)")
+    if tool == "reminders.create":
+        n = int(args.get("interval_minutes", 0) or 0)
+        ws = str(args.get("window_start", "") or "")
+        we = str(args.get("window_end", "") or "")
+        window = f" from {ws} to {we}" if ws and we else ", all day"
+        count = scheduler.pings_per_day(n, ws, we)
+        return (f"Set \"{args.get('text')}\" every {n} minutes{window} — "
+                f"that's about {count} messages a day, every day")
     if tool == "memory.forget":
         from kyraan.memory import engine
         matched = engine.find_matches(str(args.get("fact", "")))
@@ -777,6 +803,10 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         if isinstance(outcome, dict) and outcome.get("already_gone"):
             return f"\"{args.get('title') or args.get('event_id')}\" was already gone."
         return f"Deleted from your calendar: \"{args.get('title') or args.get('event_id')}\""
+    if tool == "reminders.create" and isinstance(outcome, dict):
+        rep = f" ({outcome['repeats']})" if outcome.get("repeats") else ""
+        return (f"Reminder set: \"{outcome.get('text')}\" — first one at "
+                f"{outcome.get('when')}{rep}.")
     if tool == "tasks.schedule" and isinstance(outcome, dict):
         rep = f" (repeats {outcome['repeats']})" if outcome.get("repeats") else ""
         return f"Task scheduled — first run {outcome.get('when')}{rep}. Say \"list tasks\" anytime."

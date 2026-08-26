@@ -197,8 +197,24 @@ def _schedule(reminder: store.Reminder) -> None:
 
 
 REPEAT_CHOICES = ("daily", "weekdays", "weekly", "monthly", "interval")
-_MIN_INTERVAL_MINUTES = 15  # "every 5 mins, 10AM-9PM" = 132 pings a day —
-                            # a floor keeps hydration helpful, not spam
+_MIN_INTERVAL_MINUTES = 5    # hard floor — below this is a runaway pager
+CONFIRM_INTERVAL_MINUTES = 15  # under this, creation shows the owner the
+                               # pings-per-day math and needs a yes:
+                               # "every 5 mins, 10AM-9PM" = 133 pings a day
+                               # (owner's 2026-08-26 choice: allow, gated)
+
+
+def pings_per_day(interval_minutes: int, window_start: str = "",
+                  window_end: str = "") -> int:
+    """How many messages a day an interval series produces — the number
+    the owner sees in the sub-15-minute confirm ask."""
+    if window_start and window_end:
+        sh, sm = (int(x) for x in window_start.split(":"))
+        eh, em = (int(x) for x in window_end.split(":"))
+        minutes = (eh * 60 + em) - (sh * 60 + sm)
+    else:
+        minutes = 24 * 60
+    return max(minutes // max(interval_minutes, 1) + 1, 1)
 
 
 def advance_occurrence(when, repeat: str):

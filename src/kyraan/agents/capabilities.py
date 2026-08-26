@@ -24,7 +24,7 @@ def _friendly_entity(entity: str) -> str:
 
 def capability_brief() -> str:
     lines = ["THINGS YOU CAN DO (live right now):"]
-    lines.append('- Reminders: create, list, cancel — one-shot or recurring (daily/weekdays/weekly/monthly, or intervals with a daily window: "every hour from 10am to 9pm remind me to drink water"; smallest interval 15 min); they arrive as Telegram messages.')
+    lines.append('- Reminders: create, list, cancel — one-shot or recurring (daily/weekdays/weekly/monthly, or intervals with a daily window: "every hour from 10am to 9pm remind me to drink water"; smallest interval 5 min — under 15 min needs the owner\'s yes on the message volume); they arrive as Telegram messages.')
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
     lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
