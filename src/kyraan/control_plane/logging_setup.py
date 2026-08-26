@@ -2,15 +2,41 @@
 
 One JSON line per event so the log is greppable and reconstructable later —
 "trace why" should always mean "read this file," never "inspect the model."
+
+Turn correlation (2026-08-26): every user message opens a TURN — a
+contextvar id stamped onto every event and trace record produced while
+handling it, so the complete flow (user text → each model decision →
+each tool call → final reply) reconstructs with one grep. Full prompt
+and response TEXT goes to traces.jsonl (big records, same rotation, same
+local-disk-only boundary as everything else); events.jsonl stays the
+compact audit trail.
 """
+import contextvars
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 EVENT_LOG = LOG_DIR / "events.jsonl"
+# Full-text flow traces: assembled prompts, raw model responses, turn
+# start/end. Separate file because one turn can be tens of KB.
+TRACE_LOG = LOG_DIR / "traces.jsonl"
+
+_turn_id: contextvars.ContextVar = contextvars.ContextVar("turn_id", default=None)
+
+
+def new_turn() -> str:
+    """Open a turn: returns the id now stamped on this task's events."""
+    tid = uuid.uuid4().hex[:12]
+    _turn_id.set(tid)
+    return tid
+
+
+def turn_id():
+    return _turn_id.get()
 # Full chat transcript (user messages, replies, proactive sends) — the raw
 # material for debugging misroutes and, later, Phase 4's reflection loop
 # and eval harness. Local disk only, rotated like the event log. Replies
@@ -73,7 +99,17 @@ def _append(path: Path, record: dict) -> None:
 
 def log_event(kind: str, **fields) -> None:
     """Append one structured event, e.g. kind='tool_call', kind='routing_decision'."""
-    _append(EVENT_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind, **fields})
+    tid = _turn_id.get()
+    _append(EVENT_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind,
+                        **({"turn_id": tid} if tid else {}), **fields})
+
+
+def log_trace(kind: str, **fields) -> None:
+    """Append one full-text trace record (prompts, responses, turn
+    boundaries) — traces.jsonl, correlated to events by turn_id."""
+    tid = _turn_id.get()
+    _append(TRACE_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind,
+                        **({"turn_id": tid} if tid else {}), **fields})
 
 
 def log_chat(chat_id: int, role: str, text: str, **fields) -> None:

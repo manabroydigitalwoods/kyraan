@@ -15,6 +15,7 @@ from kyraan.control_plane import logging_setup
 def _isolated_event_log(monkeypatch, tmp_path):
     monkeypatch.setattr(logging_setup, "EVENT_LOG", tmp_path / "events.jsonl")
     monkeypatch.setattr(logging_setup, "CHAT_LOG", tmp_path / "chat.jsonl")
+    monkeypatch.setattr(logging_setup, "TRACE_LOG", tmp_path / "traces.jsonl")
 
 
 @pytest.fixture(autouse=True)
@@ -44,3 +45,18 @@ def _isolated_session_summaries(monkeypatch, tmp_path):
     from kyraan.agents import orchestrator
     monkeypatch.setattr(orchestrator, "_summaries_path",
                         lambda: tmp_path / "session_summaries.json")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_stores(monkeypatch, tmp_path):
+    """No test may write the production data/ stores. Found live
+    (2026-08-26): ~20 chat-0/91/92 reminder records from past test runs
+    sat in the real reminders.json, and the bot logged "Retiring reminder
+    for non-owner chat" at every boot. Tests that need their own paths
+    still re-patch on top of this."""
+    from kyraan.model_router import router
+    from kyraan.triggers import agent_tasks
+    from kyraan.triggers import store as reminder_store
+    monkeypatch.setattr(reminder_store, "REMINDERS_PATH", tmp_path / "reminders.json")
+    monkeypatch.setattr(agent_tasks, "TASKS_PATH", tmp_path / "agent_tasks.json")
+    monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")

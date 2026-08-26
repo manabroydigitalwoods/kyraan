@@ -468,6 +468,10 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
+    from kyraan.control_plane.logging_setup import log_trace, new_turn
+    new_turn()  # correlates every event/trace of this flow under one id
+    turn_started = time.monotonic()
+    log_trace("turn_start", chat_id=chat_id, user_text=raw_text)
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
@@ -505,6 +509,8 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     # without it, the redaction died at the first restart (review P1).
     log_chat(chat_id, "assistant", reply,
              **({"cloud_text": redacted} if redacted else {}))
+    log_trace("turn_end", chat_id=chat_id, reply=reply,
+              total_ms=round((time.monotonic() - turn_started) * 1000))
     return reply
 
 
@@ -534,7 +540,19 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 call.confirmed = True
                 # Re-runs the full gate: the kill switch is re-checked at
                 # confirmation time, not just at the original request.
-                return str(await kernel.run_skill(call, handler))
+                try:
+                    return str(await kernel.run_skill(call, handler))
+                except ConfirmationRequired:
+                    # A confirmed replay that re-raises the gate (a nested
+                    # action wanting its own yes, or pre-fix code that
+                    # dropped the flag — seen live 2026-08-26 as a generic
+                    # "Something went wrong" on a gated reminder) must
+                    # never fall to the catch-all: re-stash and ask
+                    # honestly instead of reporting a phantom failure.
+                    log_event("confirmation_replay_regated", skill=call.skill_name)
+                    _pending_confirmations[chat_id] = (call, handler, time.monotonic())
+                    return (f"'{call.skill_name}' still needs a confirmation "
+                            'step — reply "yes" again to proceed, or "no" to cancel.')
             elif word in _DENY_WORDS:
                 log_event("confirmation_denied", skill=call.skill_name)
                 return f"Okay — '{call.skill_name}' cancelled, nothing was done."

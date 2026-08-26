@@ -159,11 +159,14 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
     _validate_args(spec, call.args)
     log_event("tool_call", tool=spec.name, args=call.args, permission=spec.permission)
 
+    import time as _time
+    started = _time.monotonic()
     last_exc: Exception | None = None
     for attempt in range(spec.retries + 1):
         try:
             result = await asyncio.wait_for(registry.dispatch(spec, call.args), timeout=spec.timeout_s)
-            log_event("tool_result", tool=spec.name, ok=True, attempt=attempt)
+            log_event("tool_result", tool=spec.name, ok=True, attempt=attempt,
+                      duration_ms=round((_time.monotonic() - started) * 1000))
             return result
         except asyncio.TimeoutError as exc:
             if spec.side_effects == "write":
@@ -186,7 +189,8 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
             last_exc = exc
             break
 
-    log_event("tool_result", tool=spec.name, ok=False, error=str(last_exc))
+    log_event("tool_result", tool=spec.name, ok=False, error=str(last_exc),
+              duration_ms=round((_time.monotonic() - started) * 1000))
     if spec.on_failure.startswith("fallback:") and _allow_fallback:
         # One fallback hop only — a fallback's own fallback never runs, so
         # a config cycle (A -> B -> A) can't loop.

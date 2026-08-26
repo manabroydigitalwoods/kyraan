@@ -554,6 +554,15 @@ def call(
                 had_reasoning=raw.reasoning is not None,
                 cost_usd=cost_usd,
             )
+            from kyraan.control_plane.logging_setup import log_trace
+            log_trace(
+                "model_io",
+                tier=tier, provider=provider, model=model,
+                latency_ms=round(latency_ms),
+                input_tokens=raw.usage.input_tokens,
+                cached_tokens=raw.usage.cached_tokens,
+                system=system, prompt=prompt, response=raw.text,
+            )
             response = RoutedResponse(
                 text=raw.text,
                 tier_used=tier,
