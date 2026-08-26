@@ -83,7 +83,10 @@ async def _reminders_create(chat_id: int, args: dict, raw_text: str):
     existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
     if existing:
         return {"duplicate": True, "id": existing.id[:8], "text": existing.text,
-                "when": humanize(existing.when_iso)}
+                "when": humanize(existing.when_iso),
+                "note": ("this reminder ALREADY existed — tell the user it was "
+                         "already set and nothing new was created; never say "
+                         "'done' or imply you just created it")}
     reminder = scheduler.create_reminder(chat_id, args["text"], when_iso)
     return {"created": True, "id": reminder.id[:8], "text": args["text"],
             "when": humanize(when_iso)}

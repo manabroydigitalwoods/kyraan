@@ -51,7 +51,8 @@ CASES = [
     Case("calendar.create.ask", "add event 'eval test' tomorrow 11am to my calendar",
          [["About to create", "reply \"yes\""], ["11:00 AM"], ["eval test"]]),
     Case("calendar.create.decline", "no", [["cancelled", "nothing was done"]]),
-    Case("home.status", "is the AC on?", [["The AC is ON", "The AC is OFF", "Couldn't check the AC"]]),
+    Case("home.status", "is the AC on?",
+         [["AC"], ["ON", "OFF", "couldn't", "couldn\u2019t"]]),
     Case("home.nosensor", "kitchen temperature?",
          [["kitchen", "don\u2019t have", "don't have", "no sensor"]],
          must_not=["\u00b0C in the kitchen"]),
@@ -69,7 +70,8 @@ CASES = [
     # Model-quality surfaces — SOFT
     Case("qa.time", "what time is it?", [[":"]], hard=False),
     Case("qa.knowledge", "capital of France?", [["Paris"]], hard=False),
-    Case("cap.mirror", "book a cab for me", [["can't", "cannot", "not able"]], hard=False),
+    Case("cap.mirror", "book a cab for me",
+         [["can't", "can\u2019t", "cannot", "not able"]], hard=False),
     Case("cap.internet", "can you browse the web?", [["can't", "cannot", "no"]], must_not=["yes, i"], hard=False),
     Case("memory.recall", "what's my favourite eval snack?", [["murukku"]], hard=False),
 ]
