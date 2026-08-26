@@ -7,12 +7,14 @@ day-to-day commits speak for themselves in `git log`.
 
 ## Where we are
 
-**Phase 0 and Phase 1 are complete; Phase 2 (Tool Integrations) has begun** — built,
-iterated, and live-verified on 2026-08-25, including the first real
-end-to-end Telegram session and the full memory loop (extraction →
-human review → recall) the same day. Phase 2's tool
-registry is designed (docs/design/tool_registry.md), built, and carrying
-its first tool — read-only Google Calendar. Phases 3–5 are not started.
+**Phases 0–2 are complete; the system is in live soak** (as of
+2026-08-26). The model-driven agent loop is the primary brain; the tool
+registry (docs/design/tool_registry.md) carries six tools — Google
+Calendar (reads + confirm-gated writes), Gmail metadata, Home Assistant,
+web search (self-hosted SearXNG), weather (Open-Meteo), and nearby
+places (OSM/Google) — plus voice notes and location pins in the channel
+layer. Phase 3 is next and remains blocked on the §3a governance
+decisions. Phases 4–5 are not started.
 
 ## Goal, restated
 
@@ -103,7 +105,7 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 - `src/kyraan/agents/orchestrator.py` — the single Phase 1 orchestrator
   (no agent router yet, that's Phase 3)
 - `src/kyraan/channels/telegram_bot.py` — the one channel, owner-only
-- Runs as a user launchd agent (`io.digitalwoods.kyraan`, plist in
+- Runs as a user launchd agent (`ai.kyraan`, plist in
   `~/Library/LaunchAgents/`) — starts at login, restarts on crash,
   logs to `logs/bot.log`; `logs/events.jsonl` rotates at 5MB into
   timestamped archives (never deleted — it's the audit trail)
@@ -256,8 +258,12 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
   on/off confirm-gated per action, hard entity allowlist in
   permissions.yaml (unlisted entities don't exist for Kyraan; heater/
   geyser/vacuum join later deliberately). Morning brief notes when the AC
-  is running. HA migration path to the Intel MacBook: copy
-  ~/homeassistant, same container command, update HASS_URL
+  is running. All containers are compose-managed from `docker/` in this
+  repo (2026-08-26): HA's /config lives at `docker/homeassistant` (YAML
+  tracked, state gitignored — never `git clean -fdx`), SearXNG's config
+  at `docker/searxng` (fully tracked, secret via `docker/.env`). HA
+  migration path to the Intel MacBook: copy the repo directory including
+  untracked state, `docker compose up -d`, update HASS_URL
 - Calendar writes are LIVE (2026-08-25 16:33 IST): OAuth ceremony done,
   first real event created over Telegram through the full confirm gate —
   ask named the exact event, "yes" wrote it, audit log clean at both the
@@ -276,6 +282,136 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
 - Intent classification prefers Groq but degrades automatically to the
   local cheap tier on a provider failure (measured 12-13/14 there) —
   the single-point dependency is closed
+**Tool #4: web search (2026-08-26):** `web.search` via a self-hosted
+SearXNG container (open source, Docker on this Mac like HA, port 8888,
+localhost-bound; config in `~/searxng/settings.yml` with the JSON API
+enabled) — no API key, no per-query cost, and only the query itself
+leaves the machine (Brave's API was considered first but its "free" tier
+wants a card). Titles/URLs/snippets only, never full pages; read-only in
+the registry, exposed in the agent loop's menu, `SEARXNG_URL` in `.env`.
+Injection safety is deterministic, not prompt-hoped: once any web text
+enters a turn, the loop's new taint rail locks every non-read tool for the
+rest of that turn (logged as `web_taint_blocked_tool`) — a snippet crafted
+to say "remind the owner..." cannot reach even an auto-permission write.
+The capability brief is conditional now: without `SEARXNG_URL` the hard
+"NO INTERNET ACCESS" truth stands verbatim; with it, internet access is
+described as exactly search snippets (no pages, no links), so the honesty
+guard survives the new ability.
+
+**First web-search soak review (2026-08-26 evening), from the live chat
+log:** weather/PM/person-search answers all searched, cited, and read
+well. Four fixes out of it: (1) tests were leaking into production state —
+26 chat-0/91/92 reminder records purged from `data/reminders.json`
+(backup kept), and conftest now isolates the reminder/task/cost stores so
+no test can write them again (verified by checksum across a suite run);
+(2) a confirmed replay that re-raises ConfirmationRequired now re-asks
+honestly instead of falling to the catch-all's "Something went wrong"
+about an action that may have run (the live chat-90 failure was pre-fix
+code; the guard + regression test close the hole for good); (3) the tool
+spec now demands a search for any public figure's CURRENT role ("who is
+Mamata?" was answered from stale training data while the PM question
+searched); (4) style rule: web answers lead with the answer in metric/
+local units then one Source line — an AccuWeather snippet had been
+relayed as °F links-first.
+
+**Location pins (2026-08-26 night):** a shared Telegram location matched
+no handler and was silently dropped (live: the model kept asking "which
+area are you in?" while the pin sat unread). Now `filters.LOCATION` →
+reverse geocode via OSM Nominatim (`channels/location.py`, no key; the
+coordinates go out only for a pin the owner chose to share, and any
+geocoder failure falls back to raw coordinates) → the pin enters the
+normal pipeline as "[I'm sharing my current location: <place> (lat,
+lon)]", bursting with any caption into one thought. The capability brief
+now tells the model to USE an arrived pin and that it can never request
+or track location. Live-verified against real Nominatim (Kolkata and
+Gajoldoba pins resolve correctly).
+
+**Tool #5: weather (2026-08-26 night):** `weather.get` via Open-Meteo
+(free, keyless) — current conditions + 3-day forecast, structured, by
+place name (their geocoder) or exact lat/lon from a shared pin. Built
+because the soak showed weather-by-web-search failing structurally: five
+coordinate-stuffed queries in a row (search engines match none), the
+step cap burned, the fallback tier rescuing the turn, and a 10-day
+forecast snippet glossed as "currently sunny" at 8 PM. The search-query
+doctrine also hardened in the agent prompt: no coordinates in queries,
+broaden to the next-larger place yourself instead of asking the user,
+one broadened retry then answer honestly; forecast data is labeled
+forecast. Live-verified end-to-end: the model picks weather.get for a
+pin, keeps now/forecast straight, °C. Open-Meteo's real answer for the
+pin (27°C, thunderstorms coming) contradicted the earlier snippet answer
+("sunny 32°C") — the structural fix earned its keep on day one.
+
+**Tool #6: nearby places (2026-08-26 night):** `places.nearby` — hospital/
+pharmacy/atm/bank/restaurant/cafe/hotel/sightseeing/fuel/police/grocery
+around a shared pin or named place, distance-sorted, each result with a
+keyless Google Maps link that opens navigation on tap. Two backends in
+one adapter: OpenStreetMap Overpass (free, keyless, the default — needs
+the identifying UA + form Content-Type or the public instance answers
+406, and stalls transiently under load, which the registry's retries
+absorb) and Google Places API (New), auto-selected when
+GOOGLE_MAPS_API_KEY is set — the quality upgrade (ratings, open-now) the
+owner can opt into later since it needs GCP billing/card. Empty results
+at the default 3 km auto-widen once to 10 km (rural reality: zero
+hospitals mapped within 3 km of the owner's pin) before an honest
+sparse-data note. Coordinates normalize to 4 decimals in the executor,
+same as weather. Live-verified end-to-end: real hospitals near the
+owner's pin with distances and map links, ATMs by place name.
+
+**Tool #7: travel times / traffic (2026-08-26 night):** `routes.eta` via
+the Google Routes API (same GOOGLE_MAPS_API_KEY, Routes API enabled on
+the project) — distance + duration with live traffic vs free-flow
+between any two endpoints, each a place name (Google geocodes it) or the
+pin's lat/lon; drive/two_wheeler/walk. The traffic report IS the
+duration delta ("52 min right now, ~49 usual, delay ~3 — light"). No
+keyless fallback by design: live traffic exists only at
+Google/TomTom/HERE, and a silently traffic-blind ETA would be a lie —
+the tool spec orders the model to say so rather than estimate.
+Menu-gated + brief-gated on the key like web.search. Also covers plain
+"distance from X to Y" questions. Live-verified end-to-end (model probe:
+correct now-vs-usual phrasing on the real Radhabari→Jalpaiguri route).
+
+**Place resolution + TomTom fallback (2026-08-26 late night):** the live
+log showed "from siliguri, city center" answered with a request for
+lat/lon — twice. Root cause turned out to be the tool spec's params
+example LEADING with the lat/lon form (a small model imitates the first
+form shown; three prompt-rule escalations failed before this was
+spotted): the example now leads with free-text names ("City Center Mall,
+Siliguri") and states coordinates are never required. The deflection
+guard grew coordinate-homework patterns (pin/lat-lon asks, "do you
+mean...?" echoes, "exact spot/landmark") and now corrects up to TWO
+drafts per turn — the third stands as genuine. Probes: slangy endpoints
+("city center mall") now resolve and answer in one call, with the
+interpretation stated. routes.eta also gained a TomTom fallback (owner's
+key, free tier, no card): Google fails → TomTom answers, both with real
+live traffic, `source` marks the degradation; TomTom alone can serve as
+primary. The no-traffic-blind-ETA rule is unchanged — both backends
+carry live traffic, and if every backend fails the model must say so,
+never estimate. Live-verifying TomTom took three rounds: its /geocode
+endpoint is addresses-only and resolved "City Center Mall, Siliguri" to
+Ohio, USA (then, country-biased, to a same-named mall 1671 km away) —
+the fix is the /search fuzzy endpoint (POIs included) plus a
+KYRAAN_HOME_COUNTRY=IN bias and pin-coordinate bias when available; a
+routing 400 now reads "no drivable route — an endpoint may have resolved
+to the wrong place". Verified: the real 51.6 km route.
+
+**Flow tracing + prompt report (2026-08-26 night):** every user message
+now opens a TURN — a contextvar id stamped on every event, so the whole
+flow (user text → each model decision → each tool call → reply)
+reconstructs with one grep. Full prompt/response text goes to
+`logs/traces.jsonl` (same rotation/permissions as events; local-disk
+§3a boundary), tool results carry `duration_ms`, turns log
+`turn_start`/`turn_end` with total wall time. `scripts/trace.py`
+pretty-prints one turn; `scripts/prompt_report.py` measures the real
+assembled prompt (section sizes), cache health from the day's calls,
+dead tool references, and near-duplicate rules — REPORT ONLY, per §6:
+prompt edits stay human and gate on scripts/eval.py. The deliberate
+non-build: an automatic prompt rewriter — nearly every prompt line is a
+cited live failure, the static prefix's byte-stability is worth ~90% on
+input cost, and today's coordinate bug came from example ORDER, which no
+linter measures. First report immediately found: 981/1483 frontier calls
+today were full cache misses (expected on a day with ~15 prompt-editing
+deploys — recheck on a quiet day), and one duplicated usage-report rule.
+
 ## Next steps
 
 1. Revoke + reissue the bot token via BotFather (it passed through a chat

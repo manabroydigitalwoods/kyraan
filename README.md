@@ -1,14 +1,73 @@
 # Kyraan
 
-Personal multi-agent assistant. This is the Phase 1 skeleton: one Telegram
-channel, one orchestrator, two model tiers, MD-file memory with
-check-before-write, and a Control Plane that gates everything through a
-kill switch, permission config, and DND rules.
+Personal AI assistant, self-hosted on a Mac, talked to over Telegram
+(owner-only). Phases 1 and 2 are complete: a model-driven agent loop is
+the brain, every tool call runs through a kernel with a kill switch,
+per-tool permission levels, and an audit log, and every write needs an
+explicit yes in chat.
 
 - [docs/plan.md](docs/plan.md) — the full vision, architecture, and phase
   roadmap (Phase 0 through Phase 5)
-- [docs/progress.md](docs/progress.md) — what's actually been built so
-  far, key decisions made, and what's next
+- [docs/progress.md](docs/progress.md) — what's actually been built,
+  key decisions with their evidence, and what's next
+- [docs/design/tool_registry.md](docs/design/tool_registry.md) — how
+  tools are declared, gated, and executed
+
+## What it can do
+
+- **Conversation, Q&A, writing, code** — frontier model with owner-reviewed
+  memory and rolling conversation context; voice notes transcribed locally
+  (Whisper on Apple MLX — audio never leaves the machine)
+- **Reminders** — one-shot or recurring (daily/weekdays/weekly/monthly, or
+  intervals with a daily window: "every hour from 10am to 9pm remind me to
+  drink water"); sub-15-minute intervals show the message-volume math and
+  need a yes
+- **Google Calendar** — reads via the calendar's secret ICS URL; creates and
+  deletes events via OAuth, each write confirm-gated with the concrete event
+  named in the ask
+- **Email** — unread senders + subjects only, never bodies (deliberate
+  privacy boundary, enforced at the Gmail scope *and* kept out of cloud
+  prompts)
+- **Smart home** — Home Assistant (Tapo): AC plug state, live power/energy,
+  bedroom temperature/humidity; switching is confirm-gated; entity allowlist
+  in config — unlisted entities don't exist for Kyraan
+- **Web search** — self-hosted SearXNG in Docker (free, keyless); snippets
+  only, with a deterministic taint rail: once web text enters a turn, every
+  non-read tool is locked for the rest of it
+- **Weather** — Open-Meteo (free, keyless): current conditions + 3-day
+  forecast by place name or shared location pin
+- **Nearby places** — hospitals, pharmacies, ATMs, restaurants, hotels,
+  sightseeing, fuel, police, groceries around a pin or named place;
+  OpenStreetMap by default, Google Places automatically when
+  `GOOGLE_MAPS_API_KEY` is set; results carry distances + map links
+- **Location pins** — share a Telegram location and it's reverse-geocoded
+  (OSM Nominatim) into the conversation; "weather here" / "hospital near me"
+  just work
+- **Scheduled agent tasks** — "every evening at 8 check tomorrow's calendar
+  and warn me about early meetings": an instruction run at a set time with
+  read-only tools, results delivered as messages
+- **Proactive briefs** — morning (07:30) and evening (21:30): calendar,
+  reminders, home status — composed deterministically, no model call, so a
+  proactive message can never hallucinate
+- **Memory** — facts you state are extracted conservatively, queued for
+  your review ("review memory" in chat, or `scripts/review_memory.py`), and
+  only then go live; "forget that" is confirm-gated; nothing trains anything
+- **Self-accounting** — "how much did we spend this week?" reports its own
+  model calls, tokens, and cost; a daily budget cap hard-stops spending
+
+## Architecture in one paragraph
+
+`telegram_bot.py` (the one channel) → `agents/orchestrator.py` →
+`agents/agent_loop.py`: a frontier model reads the conversation, memory,
+and a tool menu, then decides — call a tool (and see its result) or reply.
+Every tool call goes through `control_plane/kernel.py`: kill switch,
+permission gate (`auto`/`confirm`), param validation, loop rails (step cap
++ repeat detection), audit log (`logs/events.jsonl`). A confirm-gated
+action stashes the exact call; your "yes" replays it byte-identical. If the
+cloud is down, the same loop runs on the local model; if that fails too, a
+classifier fallback still handles the basics. Tools are declared in
+`config/permissions.yaml` and served by adapters in `src/kyraan/tools/`
+(builtin or MCP-stdio transport — moving a tool is a config change).
 
 ## Setup
 
@@ -16,135 +75,99 @@ kill switch, permission config, and DND rules.
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env   # fill in TELEGRAM_BOT_TOKEN, TELEGRAM_OWNER_ID, and whichever
-                        # model provider key(s) config/permissions.yaml's tiers use
+cp .env.example .env   # fill in what you use — each capability lights up
+                       # automatically when its env var is present
 ```
 
-Get `TELEGRAM_OWNER_ID` by messaging [@userinfobot](https://t.me/userinfobot)
-on Telegram. Create the bot itself via [@BotFather](https://t.me/BotFather).
+Get `TELEGRAM_OWNER_ID` by messaging [@userinfobot](https://t.me/userinfobot);
+create the bot via [@BotFather](https://t.me/BotFather). The capability
+brief the model sees is generated from config + environment, so a missing
+credential means Kyraan honestly says that feature isn't connected — nothing
+else breaks.
+
+### Supporting containers (Docker)
+
+All container config lives in [docker/](docker/) — see the comments in
+[docker-compose.yml](docker/docker-compose.yml):
+
+```bash
+cd docker
+cp .env.example .env    # SearXNG secret (openssl rand -hex 32)
+docker compose up -d    # SearXNG (web search) + Home Assistant
+```
+
+Home Assistant's `/config` under `docker/homeassistant` is mostly runtime
+state — only its declarative YAML is git-tracked. **Never run
+`git clean -fdx` in this repo**; it would delete that untracked state.
 
 ## Run
 
+Development, in the foreground:
+
 ```bash
-source .venv/bin/activate
 python -m kyraan.main
 ```
 
-The bot only responds to `TELEGRAM_OWNER_ID` — everyone else is ignored and
-logged. Try: "remind me to call the plumber tomorrow at 5pm", "what
-reminders do I have", or any general question.
+Production, as a launchd agent (starts at login, restarts on crash, a
+watchdog sweeps every 5 minutes; plists in `~/Library/LaunchAgents/`):
 
-## Dev tools: chat.py and tui.py
+```bash
+launchctl kickstart -k gui/$(id -u)/ai.kyraan   # restart after code/.env changes
+```
+
+Logs: `logs/bot.log` (process), `logs/events.jsonl` (the audit trail —
+every model call, tool call, and gate decision; rotated, never deleted).
+
+## Model tiers
+
+`config/permissions.yaml` declares a provider registry and two tiers.
+Currently: **cheap → local Ollama `qwen3:8b`** (degraded-mode brain and
+extraction), **frontier → OpenAI `gpt-5.4-nano`** (the agent loop —
+benchmarked head-to-head against alternatives on the production prompts;
+~$0.10/day at real usage, hard daily budget cap at $5). Anthropic, Gemini,
+Groq, OpenRouter, and OpenCode are configured and one config edit away.
+Cost notes and free-tier landmines are documented inline in the YAML.
+
+## Dev tools
 
 `scripts/chat.py` (CLI) and `scripts/tui.py` (full-screen Textual
-dashboard) both exercise the real `orchestrator.handle_message` path
-without needing Telegram credentials — see each file's docstring for what
-they support (slash commands, session stats, collapsible reasoning, etc).
-
-```bash
-source .venv/bin/activate
-python scripts/chat.py   # or: python scripts/tui.py
-```
-
-For TUI development specifically, `textual-dev` (in the `dev` extra) adds
-a debugging console — normally you can't `print()`/`log()` anything since
-the TUI owns the whole screen:
-
-```bash
-# terminal 1
-textual console
-
-# terminal 2
-textual run --dev scripts/tui.py
-```
-
-`--dev` also hot-reloads CSS changes live, no restart needed.
-
-## Model providers
-
-`config/permissions.yaml` has a `providers` registry — every provider
-Kyraan knows how to call, each just a `kind` (`anthropic` | `gemini` |
-`openai_compatible`) plus connection info. `model_tiers` then picks a
-`provider` + `model` per tier:
-
-```yaml
-model_tiers:
-  cheap:
-    provider: ollama
-    model: llama3.2
-  frontier:
-    provider: groq
-    model: openai/gpt-oss-120b
-```
-
-Currently: `cheap` runs on local Ollama (no key, no rate limit — good for
-intent normalization and everyday replies), `frontier` runs on Groq (still
-free, but a real ~120B-class model for harder escalations, served fast).
-`anthropic`, `gemini`, `openai`, `opencode`, and `openrouter` are all
-already configured in the registry and ready to assign to a tier — swapping
-either field, or adding a third tier, is a config-only change; no code in
-`src/kyraan/model_router/router.py` needs to change. Adding a brand new
-`openai_compatible` gateway later (another base_url/key pair) is the same:
-add an entry under `providers`, nothing else.
-
-Live-tested findings worth knowing before picking a provider:
-- **OpenCode Zen**'s free models share one account-wide rate limit that
-  trips fast — fine for a quick check, not for real dev iteration
-- **Gemini**'s free tier caps `gemini-3.7-flash` at 20 requests/day — too
-  little for anything but the lightest testing
-- **Groq** and **OpenRouter**'s free models are "reasoning" models that
-  spend tokens on hidden reasoning before the visible answer — give them
-  real `max_tokens` headroom (the router defaults to 1024) or the visible
-  text comes back empty
-- **local Ollama** has no rate limit at all; pull whatever fits your
-  hardware (`ollama pull llama3.2`) and reference that tag as the model id
+dashboard) exercise the real orchestrator without Telegram. The TUI shows
+per-turn provider/model/latency/tokens, cost vs. budget, collapsible
+reasoning, `/tier` runtime overrides, and `/export`.
 
 ## Test
 
 ```bash
-pytest -q
+pytest -q   # 370+ tests; production data stores are isolated by fixture
 ```
 
 ## Kill switch
 
 ```bash
 touch KILL_SWITCH   # halts all skill execution and proactive sends immediately
-rm KILL_SWITCH       # resumes
+rm KILL_SWITCH      # resumes
 ```
+
+Re-checked before every action, including at confirmation time — a "yes"
+after the switch is engaged does nothing.
 
 ## Layout
 
-- `src/kyraan/control_plane/` — kernel (permission + kill-switch gate), config
-  loader, DND rules, structured event logging (`logs/events.jsonl`)
-- `src/kyraan/model_router/` — cheap/frontier tier routing against the
-  provider registry in `config/permissions.yaml`
-- `src/kyraan/memory/` — Markdown fact store; writes land in
-  `memory/pending_review/` for manual approval, never live directly
-- `src/kyraan/intent/` — cheap-model typo/slang normalization + confidence
-- `src/kyraan/triggers/` — reminder persistence + scheduling (via Telegram's
-  JobQueue), DND/kill-switch gated
-- `src/kyraan/agents/orchestrator.py` — the single Phase 1 orchestrator
-- `src/kyraan/channels/telegram_bot.py` — the one channel
-- `config/permissions.yaml` — every skill's permission level (`auto` /
-  `confirm`) and model tier; unlisted skills default to `confirm`
-- `memory/` — the actual fact files (git-tracked; `pending_review/` is not)
-
-## Reviewing proposed memory writes
-
-Extraction never writes directly to `memory/`. Check
-`memory/pending_review/` periodically:
-
-```python
-from kyraan.memory import store
-from pathlib import Path
-
-for p in sorted(store.PENDING_DIR.glob("*")):
-    print(p.read_text())
-    # store.promote(p)  # approve
-    # store.reject(p)   # discard
-```
-
-## Status
-
-See [docs/progress.md](docs/progress.md) for what's built, what's not, and
-what's next.
+- `src/kyraan/control_plane/` — kernel (permission + kill-switch gate + loop
+  rails), config, DND rules, event logging
+- `src/kyraan/agents/` — orchestrator, the agent loop (primary brain), the
+  generated capability brief, deterministic guards
+- `src/kyraan/tools/` — registry + adapters: google_calendar, gmail,
+  home_assistant, web_search, weather, places
+- `src/kyraan/model_router/` — tier routing, retries, cost ledger, usage
+  reports
+- `src/kyraan/memory/` — Markdown fact store + engine (ranking, supersession,
+  discretion flags); writes queue in `memory/pending_review/` for approval
+- `src/kyraan/triggers/` — reminders, briefs, scheduled agent tasks, home
+  alerts, nightly self-review
+- `src/kyraan/channels/` — telegram_bot, voice (local Whisper), location
+  (pin reverse-geocoding)
+- `config/permissions.yaml` — every skill and tool with its permission
+  level; write tools are confirm-gated by a validator that refuses to load
+  anything else
+- `docker/` — compose file + container configs (SearXNG, Home Assistant)
