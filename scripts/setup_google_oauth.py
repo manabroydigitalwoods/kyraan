@@ -77,7 +77,9 @@ def main() -> None:
     else:
         text = text.rstrip("\n") + "\n" + line + "\n"
     env_path.write_text(text)
-    print("Refresh token saved to .env — restart the bot service:")
+    os.chmod(env_path, 0o600)  # the refresh token is a credential — never
+                               # readable by other local accounts (security round 3)
+    print("Refresh token saved to .env (permissions 0600) — restart the bot service:")
     print("  launchctl kickstart -k gui/$(id -u)/io.digitalwoods.kyraan")
 
 

@@ -397,6 +397,18 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
     return f"Run {tool} with {json.dumps(args)}?"
 
 
+def _pending_block(tier: str) -> str:
+    """Unapproved proposals never enter a CLOUD prompt (security round 3,
+    P1): their discretion flags are model-generated and can't be trusted
+    as a boundary. A local tier sees them (nothing leaves the machine);
+    a cloud tier gets a placeholder and the review flow still works."""
+    from kyraan.model_router import router as _router
+    provider = kernel.config.load()["model_tiers"].get(tier, {}).get("provider", "")
+    if _router.provider_is_local(provider):
+        return memory_store.load_pending_facts() or "(none)"
+    return "(pending items are held locally until the owner reviews them)"
+
+
 def _memory_block(message: str) -> str:
     """Engine-ranked memory (safety-critical + identity always, the rest
     by relevance and recency, budgeted). The flat Markdown dump is a
@@ -440,7 +452,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
         "Known facts (owner-reviewed; [FLAGS] mark safety-relevant ones):\n"
         f"{_memory_block(raw_text)}\n"
         "Awaiting owner review:\n"
-        f"{memory_store.load_pending_facts_filtered() or '(none)'}\n"
+        f"{_pending_block(tier)}\n"
         "Conversation so far:\n"
         f"{orchestrator._history_block(chat_id, older_clip=250)}\n\n"
         f"USER: {raw_text}"

@@ -375,3 +375,59 @@ async def test_stale_confirmation_button_is_rejected(monkeypatch):
     await telegram_bot._on_callback(update, SimpleNamespace(bot=FakeBot()))
     assert sent and "no longer active" in sent[0]
     orchestrator._confirmation_nonce.pop(9, None)
+
+
+async def test_nonce_race_old_button_cannot_confirm_swapped_action(monkeypatch):
+    """Security round 3, P1 — the RACE, not just the stale check: while an
+    old Yes waits on the per-chat lock, the pending action is replaced;
+    on acquiring the lock the old button must be rejected. (The previous
+    'fix' for this passed review twice while never being applied — this
+    test exercises the interleaving itself.)"""
+    import asyncio
+    from types import SimpleNamespace
+    from kyraan.agents import orchestrator
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    chat = 9
+    orchestrator._confirmation_nonce[chat] = "OLD"
+    confirmed = []
+
+    async def fake_handle(chat_id, word):
+        confirmed.append(word)
+        return "executed"
+
+    monkeypatch.setattr(orchestrator, "handle_message", fake_handle)
+    lock = telegram_bot._lock_for(chat)
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text):
+            sent.append(text)
+
+    async def answer():
+        pass
+
+    async def edit(reply_markup=None):
+        pass
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=chat, type="private"),
+        callback_query=SimpleNamespace(data="kyraan_yes:OLD", answer=answer,
+                                       edit_message_reply_markup=edit))
+
+    async def swap_pending_while_locked():
+        async with lock:
+            # the old button's callback starts NOW, and must wait on us
+            task = asyncio.create_task(
+                telegram_bot._on_callback(update, SimpleNamespace(bot=FakeBot())))
+            await asyncio.sleep(0.05)
+            # a NEW pending action replaces the old one before we release
+            orchestrator._confirmation_nonce[chat] = "NEW"
+            return task
+
+    task = await swap_pending_while_locked()
+    await task
+    assert confirmed == []                      # the swapped action was NOT confirmed
+    assert sent and "no longer active" in sent[0]
+    orchestrator._confirmation_nonce.pop(chat, None)

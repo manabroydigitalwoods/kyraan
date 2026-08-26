@@ -724,3 +724,23 @@ async def test_stale_listing_and_missing_title_are_refused(scripted_model, monke
     await agent_loop.run(90, "delete it")
     assert dispatched == []
     assert "exactly as listed" in prompts[base + 1]
+
+
+def test_pending_proposals_never_enter_cloud_prompts(monkeypatch, tmp_path):
+    """Security round 3, P1: unapproved proposals ride only to LOCAL
+    tiers — model-generated flags are not a trustworthy cloud boundary."""
+    from kyraan.memory import store as mstore
+
+    (mstore.PENDING_DIR).mkdir(parents=True, exist_ok=True)
+    mstore.propose_fact("people/secret.md", "- A very private pending fact",
+                        source="s", meta={"term": "long", "importance": "normal",
+                                          "flags": [], "supersedes": None})
+
+    # frontier (cloud) tier: placeholder only
+    cloud_block = agent_loop._pending_block("frontier")
+    assert "private pending fact" not in cloud_block
+    assert "held locally" in cloud_block
+
+    # cheap (local ollama) tier: the fact is visible
+    local_block = agent_loop._pending_block("cheap")
+    assert "A very private pending fact" in local_block

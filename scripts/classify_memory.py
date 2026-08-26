@@ -21,8 +21,8 @@ load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 from kyraan.memory import engine  # noqa: E402
 from kyraan.model_router import router  # noqa: E402
 
-_SYSTEM = """You classify a personal assistant's stored facts about its owner
-(Arun Verma, CTO at Digitalwoods; wife Mira; son Aarav).
+_SYSTEM = """You classify a personal assistant's stored facts about its
+owner (the entries themselves carry the personal context).
 For EVERY entry return:
 - kind: identity|relationship|preference|routine|work|situational|other
 - era: current|past   - sphere: personal|work|both   - term: long|short

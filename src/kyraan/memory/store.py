@@ -17,7 +17,7 @@ import os as _os
 
 MEMORY_ROOT = Path(__file__).resolve().parents[3] / "memory"
 PENDING_DIR = MEMORY_ROOT / "pending_review"
-PENDING_DIR.mkdir(exist_ok=True)
+PENDING_DIR.mkdir(parents=True, exist_ok=True)  # a purged clean clone has no memory/ at all
 for _d in (MEMORY_ROOT, PENDING_DIR):
     try:
         _os.chmod(_d, 0o700)

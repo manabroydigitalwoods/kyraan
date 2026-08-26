@@ -80,26 +80,24 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     await query.answer()
     action, _, nonce = (query.data or "").partition(":")
     chat_id = update.effective_chat.id
-    if nonce != orchestrator._confirmation_nonce.get(chat_id, ""):
-        # A button from an OLDER message must never confirm the current
-        # pending action (security round P1: the callback was static).
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text="That button belongs to an earlier ask and is no longer "
-                 "active — reply to the latest confirmation instead.")
-        return
     word = "yes" if action == "kyraan_yes" else "no"
     # Remove the buttons from the ask so a decided confirmation can't be
-    # tapped twice, then run the exact same path a typed yes/no takes.
+    # tapped twice.
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass  # message may be old/edited — the confirm flow still decides
+    # Nonce validated INSIDE the per-chat lock (security rounds 2-3, P1):
+    # checked outside, a concurrent message could replace the pending
+    # action while this old button waited on the lock — and the stale Yes
+    # would then confirm the NEWER action.
     async with _lock_for(chat_id):
+        if nonce != orchestrator._confirmation_nonce.get(chat_id, ""):
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="That button belongs to an earlier ask and is no longer "
+                     "active — reply to the latest confirmation instead.")
+            return
         reply = await orchestrator.handle_message(chat_id, word)
     await context.bot.send_message(chat_id=chat_id, text=_plain(reply))
 

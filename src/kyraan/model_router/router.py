@@ -175,6 +175,16 @@ def _get_openai_compatible_client(provider: str, provider_cfg: dict):
     return _openai_compatible_clients[provider]
 
 
+def resolve_base_url(provider_name: str, provider_cfg: dict) -> str:
+    """THE endpoint resolution — used by routing AND locality checks
+    (security round 3, P2: three sites resolved precedence differently;
+    env overrides config, per the config comment)."""
+    base = provider_cfg.get("base_url") or ""
+    if provider_cfg.get("kind") == "ollama_native" or provider_name == "ollama":
+        base = os.environ.get("OLLAMA_BASE_URL") or base or "http://localhost:11434"
+    return base
+
+
 def provider_is_local(provider_name: str) -> bool:
     """Locality of a provider's ENDPOINT, resolved exactly as routing
     resolves it (security round 2, P2: a separate hand-rolled resolution
@@ -183,11 +193,7 @@ def provider_is_local(provider_name: str) -> bool:
     from urllib.parse import urlsplit
 
     cfg = _provider_cfg(provider_name)
-    base = cfg.get("base_url") or ""
-    if cfg.get("kind") == "ollama_native":
-        base = os.environ.get("OLLAMA_BASE_URL") or base or "http://localhost:11434"
-    elif provider_name == "ollama":
-        base = os.environ.get("OLLAMA_BASE_URL") or base
+    base = resolve_base_url(provider_name, cfg)
     if not base:
         return False  # keyed cloud endpoint (no base_url = provider default host)
     host = (urlsplit(base if "//" in base else f"//{base}").hostname or "").lower()
@@ -369,9 +375,7 @@ def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str
     import json as _json
     import urllib.request
 
-    base = (provider_cfg.get("base_url")
-            or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434"))
-    base = base.removesuffix("/v1")
+    base = resolve_base_url("ollama", provider_cfg).removesuffix("/v1")
     messages = []
     if system:
         messages.append({"role": "system", "content": system})

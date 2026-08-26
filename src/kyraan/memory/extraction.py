@@ -100,8 +100,12 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
         # into a cloud prompt on every message). Full dedup stays in the
         # local code guard above.
         from kyraan.memory import engine
-        known_text = (engine.memory_context(args["text"]) + "\n"
-                      + store.load_pending_facts_filtered(800)).strip()
+        # Approved facts only (engine view, discretion-filtered). Pending
+        # proposals are EXCLUDED from the prompt entirely — extraction
+        # runs frontier-first, and unapproved content must not ride to
+        # the cloud (security round 3, P1). Dedup against pending stays
+        # complete in the LOCAL code guard (known_lines).
+        known_text = engine.memory_context(args["text"]).strip()
         if known_text and "(no facts stored yet)" not in known_text.split("\n")[0]:
             system += ("\n\nAlready known facts (for the duplicate rule and "
                        "the supersedes field):\n" + known_text)

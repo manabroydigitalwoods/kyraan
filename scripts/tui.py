@@ -349,9 +349,12 @@ class KyraanTUI(App):
         await self._log(f"[bold green]{tier}[/bold green] now points at {provider}/{model} (this session only).")
 
     async def _handle_export_command(self) -> None:
+        import os
         TRANSCRIPT_DIR.mkdir(parents=True, exist_ok=True)
+        os.chmod(TRANSCRIPT_DIR, 0o700)
         path = TRANSCRIPT_DIR / f"{local_now().strftime('%Y%m%d-%H%M%S')}.md"
         path.write_text("\n\n".join(self.transcript_lines))
+        os.chmod(path, 0o600)  # transcripts are personal data (security round 3)
         await self._log(f"[dim]Saved transcript to {path}[/dim]")
 
 
