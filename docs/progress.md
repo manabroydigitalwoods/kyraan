@@ -7,14 +7,21 @@ day-to-day commits speak for themselves in `git log`.
 
 ## Where we are
 
-**Phases 0–2 are complete; the system is in live soak** (as of
-2026-08-26). The model-driven agent loop is the primary brain; the tool
-registry (docs/design/tool_registry.md) carries six tools — Google
-Calendar (reads + confirm-gated writes), Gmail metadata, Home Assistant,
-web search (self-hosted SearXNG), weather (Open-Meteo), and nearby
-places (OSM/Google) — plus voice notes and location pins in the channel
-layer. Phase 3 is next and remains blocked on the §3a governance
-decisions. Phases 4–5 are not started.
+**Phases 0–2 are complete and Phase 3 is UNBLOCKED** (as of
+2026-08-27): the §3a governance decisions are resolved and recorded in
+[governance.md](governance.md) — Phase 3's data model must conform to
+it. The model-driven agent loop is the primary brain; the tool registry
+(docs/design/tool_registry.md) carries eight tools — Google Calendar
+(reads + confirm-gated writes), Gmail (metadata + opt-in local-only
+bodies), Home Assistant, web search (self-hosted SearXNG), weather
+(Open-Meteo), nearby places (OSM/Google), and live-traffic routes
+(Google/TomTom) — plus voice notes, photos with local face recognition,
+and location pins in the channel layer. CI runs the 433-test suite on
+every push. Two repository-wide audits (15 findings) are fixed with
+regression pins. A Phase 3 architecture draft exists (one brain + scoped
+contexts, PG/pgvector/Redis, multi-user gates); the family-rollout
+30-clean-day soak clock runs from 2026-08-27. Phases 4–5 are not
+started (the nightly prompt-critic is Phase 4's seed).
 
 ## Goal, restated
 
@@ -438,13 +445,16 @@ Phase 3.
 
 ## Next steps
 
-1. Revoke + reissue the bot token via BotFather (it passed through a chat
-   during setup), and `/setjoingroups` → Disable
-2. Review pending memory proposals as they accumulate
-   (`python scripts/review_memory.py`) — the manual-review weeks the plan
-   calls for start now
-3. CI for the test suite
-4. Consider whether `anthropic`/`openai` should become the default tiers
-   once real budget is allocated (currently free-tier providers only)
-5. Phase 2 groundwork: tool registry design, first MCP server (likely
-   Home Assistant or a calendar) — not started
+1. Phase 3 build, from the architecture draft — governance.md is the
+   constraint set; `undo` is a committed deliverable (§7)
+2. Owner hygiene still owed: bot-token revoke/reissue (it passed through
+   a chat during setup; `/setjoingroups` → Disable), and the
+   ICS-URL/client-secret/HASS-token rotations
+3. Keep the memory-review cadence (in-chat "review memory" or
+   `scripts/review_memory.py`) — §6's sample-review gate needs 200
+   reviewed at ≥90% trailing approval
+4. Watch the nightly self-review's prompt critiques and the cache-health
+   reading on a quiet day (`scripts/prompt_report.py`)
+5. Family stage-2 prep: nothing ships before ≈26 Sep (30 clean soak
+   days) AND the Phase 3 multi-user gates (per-person visibility,
+   conflict resolution) exist
