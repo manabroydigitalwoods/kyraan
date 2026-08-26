@@ -443,13 +443,36 @@ what-leaves-the-machine table of the live system. Roles only, no names
 Decide: line — the owner's red pen makes it ACCEPTED, which unblocks
 Phase 3.
 
+**Ops hardening (2026-08-27 night):** eval gate extended to the week's
+tool surfaces (weather/routes/places/search as SOFT — an upstream outage
+must not redden the gate — and the deterministic faces path as HARD;
+photo turns bypass handle_message and stay manually tested). Nightly
+state backup: `scripts/backup.py` via the `ai.kyraan.backup` launchd
+agent (03:30, tars data/+memory/+config+.env to ~/Backups/kyraan or
+KYRAAN_BACKUP_DIR, keep-14) — reverses the earlier skip-backup decision
+now that face templates and the memory index live in data/. Memory
+hygiene done via the engine: the stray "Born: 5 January 1955" fact and
+two of three duplicate evening-routine facts deactivated. Known and
+ACCEPTED latency floor: every tool turn costs two frontier decisions
+(~3.7s) — the levers (native tool-calling API, streamed replies) are
+Phase 3-era work, recorded here so the ceiling is a choice.
+
+**Parallel-session protocol (2026-08-27):** two Claude sessions share
+this repo (one owns Phase 3 design, one owns soak/ops). Rules learned
+the hard way: never deploy (`launchctl kickstart`) while the other may
+be mid-edit — a watchdog respawn once served MIXED half-edited code
+live; treat a surprise red test run as possible mid-edit interference
+and re-run before debugging; commits are the sync points.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
    constraint set; `undo` is a committed deliverable (§7)
-2. Owner hygiene still owed: bot-token revoke/reissue (it passed through
-   a chat during setup; `/setjoingroups` → Disable), and the
-   ICS-URL/client-secret/HASS-token rotations
+2. Owner hygiene still owed (the ONE open thread): bot-token
+   revoke/reissue (it passed through a chat during setup;
+   `/setjoingroups` → Disable), and the ICS-URL/client-secret/HASS-token
+   rotations — plus re-enrolling the child's face from 3-4 clear photos
+   now that match scores are logged
 3. Keep the memory-review cadence (in-chat "review memory" or
    `scripts/review_memory.py`) — §6's sample-review gate needs 200
    reviewed at ≥90% trailing approval

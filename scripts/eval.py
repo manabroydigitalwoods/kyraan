@@ -85,6 +85,19 @@ CASES = [
          [["search"], ["can't", "can’t", "cannot", "only", "limited", "snippet"]],
          hard=False),
     Case("memory.recall", "what's my favourite eval snack?", [["murukku"]], hard=False),
+    # 2026-08-27: the week's new tool surfaces. Networked tools are SOFT
+    # (an upstream outage must not redden the gate); the deterministic
+    # faces path is HARD.
+    Case("faces.forget.unknown", "forget the face Zephyrina",
+         [["No stored face", "no stored face", "aren't", "isn't", "don't have"]], hard=True),
+    Case("weather.place", "what's the weather in Kolkata right now?",
+         [["°C"], ["kolkata", "Kolkata"]], hard=False),
+    Case("routes.distance", "how far is Jalpaiguri from Siliguri by car?",
+         [["km"]], hard=False),
+    Case("places.nearby", "any hospitals near Siliguri?",
+         [["hospital", "Hospital"]], hard=False),
+    Case("web.current_fact", "who is the current prime minister of india?",
+         [["Modi"]], hard=False),
 ]
 
 

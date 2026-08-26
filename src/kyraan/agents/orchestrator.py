@@ -512,6 +512,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             # must never depend on a model's routing choice.
             from kyraan.agents import faces as _faces
             wanted = forget_face.group(1).strip()
+            known = _faces.enrolled_names()
+            if not any(_faces._slug(wanted) == _faces._slug(n) for n in known):
+                # Nothing to delete — asking the owner to confirm deleting
+                # a face that doesn't exist is a nonsense gate (eval case
+                # faces.forget.unknown caught the ask, 2026-08-27).
+                _skip_extraction.set(True)
+                return (f'No stored face named "{wanted}".'
+                        + (f" Enrolled: {', '.join(known)}" if known else
+                           " No faces are enrolled."))
 
             async def _forget_face(_a: dict) -> str:
                 if _faces.forget(wanted):
