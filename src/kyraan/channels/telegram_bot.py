@@ -263,7 +263,7 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     from kyraan.channels import voice
 
-    if not voice.available():
+    if not await voice.wait_available():
         await update.message.reply_text(
             "I can't listen to voice notes yet on this machine — tell me in "
             "words for now.", do_quote=True)
@@ -639,6 +639,8 @@ def _validate_startup() -> None:
 def run() -> None:
     _validate_startup()
     _harden_data_permissions()
+    from kyraan.channels import voice as _voice_probe
+    _voice_probe.start_probe()  # verdict ready before the first voice note
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(CommandHandler(["start", "help"], _on_command))

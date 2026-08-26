@@ -253,12 +253,37 @@ def advance_past_now(record) -> "datetime":
         # ~100k loop steps (audit round 2 — the cap could exit still in
         # the past AND stall the event loop); integer math does it in one.
         step = timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
-        k = (local_now() - next_when) // step + 1
-        # The FINAL step goes through advance_for so the daily-window
-        # snap applies — a bare += landed a 10:00-21:00 series at 02:00
-        # after long downtime (audit round 3, P1).
-        next_when = advance_for(record, from_when=next_when + step * (k - 1))
-        skipped += k
+        now = local_now()
+        if record.window_start and record.window_end:
+            # Windowed series re-anchor their phase at window_start on
+            # EVERY rollover (advance_for's day-to-day behavior), so
+            # continuous step arithmetic across skipped days drifts the
+            # cadence whenever the interval doesn't divide the day
+            # evenly — a 50-min 10:00-21:00 series resumed at 11:20
+            # when today's true grid is 10:00/10:50/11:40 (Bugbot P2).
+            # Compute today's grid slot directly instead.
+            from datetime import time as _time
+            sh, sm = (int(x) for x in record.window_start.split(":"))
+            eh, em = (int(x) for x in record.window_end.split(":"))
+            anchor = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            if now < anchor:
+                next_when = anchor
+            else:
+                k = (now - anchor) // step + 1
+                next_when = anchor + step * k
+                if (next_when.date() != now.date()
+                        or next_when.time() > _time(eh, em)):
+                    # past today's last slot (including a grid step that
+                    # crossed midnight) -> tomorrow's window start
+                    next_when = anchor + timedelta(days=1)
+                skipped += k
+        else:
+            k = (now - next_when) // step + 1
+            # The FINAL step goes through advance_for so any future rule
+            # additions still snap — a bare += landed a 10:00-21:00
+            # series at 02:00 after long downtime (audit round 3, P1).
+            next_when = advance_for(record, from_when=next_when + step * (k - 1))
+            skipped += k
     while next_when <= local_now() and skipped < 5000:
         # remaining steps are calendar-sized (window realignment, daily/
         # weekly/monthly) — a handful in practice

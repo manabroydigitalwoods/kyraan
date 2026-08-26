@@ -421,3 +421,81 @@ def test_voice_probe_does_not_block(monkeypatch):
     assert voice.available() is True        # probe result landed
     voice._native_probe = None
     voice._probe_thread = None
+
+
+# --- P2 pair (2026-08-27 round 2): window cadence + first voice note -------
+
+def test_windowed_interval_catchup_preserves_the_grid(monkeypatch):
+    """A 50-min 10:00-21:00 series has a daily grid of 10:00, 10:50,
+    11:40, ... (every rollover re-anchors at window_start). Catch-up
+    after downtime must resume ON that grid — continuous arithmetic
+    resumed at 11:20 for a 'now' of 11:00 (Bugbot P2: intervals that
+    don't divide the window evenly drifted)."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+
+    tz = local_now().tzinfo
+    fake_now = datetime(2026, 9, 1, 11, 0, tzinfo=tz)
+    monkeypatch.setattr(scheduler, "local_now", lambda: fake_now)
+    stale = Reminder(id="g1", chat_id=1, text="water",
+                     when_iso="2026-08-29T10:50:00+05:30",
+                     repeat="interval", interval_minutes=50,
+                     window_start="10:00", window_end="21:00")
+    nxt = scheduler.advance_past_now(stale)
+    assert (nxt.hour, nxt.minute) == (11, 40)   # the grid slot, not 11:20
+    assert nxt.date() == fake_now.date()
+
+
+def test_windowed_interval_catchup_edges(monkeypatch):
+    """Before the window -> today's window start; after the last slot
+    (including a grid step that crosses midnight) -> tomorrow's start."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+
+    tz = local_now().tzinfo
+    stale = Reminder(id="g2", chat_id=1, text="water",
+                     when_iso="2026-08-29T10:00:00+05:30",
+                     repeat="interval", interval_minutes=50,
+                     window_start="10:00", window_end="21:00")
+
+    monkeypatch.setattr(scheduler, "local_now",
+                        lambda: datetime(2026, 9, 1, 6, 0, tzinfo=tz))
+    early = scheduler.advance_past_now(stale)
+    assert (early.day, early.hour, early.minute) == (1, 10, 0)
+
+    monkeypatch.setattr(scheduler, "local_now",
+                        lambda: datetime(2026, 9, 1, 23, 59, tzinfo=tz))
+    late = scheduler.advance_past_now(stale)
+    assert (late.day, late.hour, late.minute) == (2, 10, 0)
+
+
+async def test_first_voice_note_waits_for_the_probe(monkeypatch):
+    """A healthy install must accept a voice note that arrives while the
+    native probe is still running — wait_available joins the probe
+    instead of reporting unavailable (Bugbot P2: the first voice note
+    after startup was rejected)."""
+    import threading
+    import time as _time
+    from kyraan.channels import voice
+
+    monkeypatch.setattr(voice, "_native_probe", None)
+    monkeypatch.setattr(voice, "_probe_thread", None)
+
+    def slow_ok():
+        _time.sleep(0.2)
+        voice._native_probe = True
+
+    monkeypatch.setattr(voice, "_run_probe", slow_ok)
+    assert voice.available() is False          # probe just started: honest "not yet"
+    assert await voice.wait_available() is True  # a note in hand waits and succeeds
+
+    # and a genuinely broken install still comes back False
+    monkeypatch.setattr(voice, "_native_probe", None)
+    monkeypatch.setattr(voice, "_probe_thread", None)
+
+    def slow_bad():
+        _time.sleep(0.1)
+        voice._native_probe = False
+
+    monkeypatch.setattr(voice, "_run_probe", slow_bad)
+    assert await voice.wait_available() is False

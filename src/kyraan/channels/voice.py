@@ -67,6 +67,34 @@ def available() -> bool:
     return _native_import_ok()
 
 
+def start_probe() -> None:
+    """Kick the background probe eagerly (bot startup calls this) so the
+    verdict exists before the first voice note can arrive — without it,
+    a voice note as the FIRST message after startup was rejected on a
+    healthy install because the probe was still running (Bugbot P2)."""
+    if _cfg().get("enabled") is False:
+        return
+    import importlib.util
+    if importlib.util.find_spec("mlx_whisper") is not None:
+        _native_import_ok()
+
+
+async def wait_available(timeout: float = 90.0) -> bool:
+    """available(), but a voice note in hand is worth waiting for: joins
+    the in-flight probe (in a worker thread — the event loop stays free)
+    instead of treating "still probing" as "unavailable"."""
+    if _cfg().get("enabled") is False:
+        return False
+    import importlib.util
+    if importlib.util.find_spec("mlx_whisper") is None:
+        return False
+    if _native_import_ok():
+        return True
+    if _probe_thread is not None:
+        await asyncio.to_thread(_probe_thread.join, timeout)
+    return bool(_native_probe)
+
+
 def _transcribe_sync(path: str) -> str:
     import os
     import shutil

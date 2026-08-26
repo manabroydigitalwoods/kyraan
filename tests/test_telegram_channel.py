@@ -508,11 +508,19 @@ async def test_voice_unavailable_and_empty_transcripts_stay_honest(monkeypatch):
         effective_chat=SimpleNamespace(id=9, type="private"),
         message=SimpleNamespace(voice=FakeVoice(), reply_text=reply_text))
 
-    monkeypatch.setattr(voice, "available", lambda: False)
+    async def not_available(timeout: float = 90.0):
+        return False
+
+    # the handler waits on the probe (a note in hand is worth waiting
+    # for) rather than reading the instantaneous available()
+    monkeypatch.setattr(voice, "wait_available", not_available)
     await telegram_bot._on_voice(update, SimpleNamespace(bot=FakeBot()))
     assert "can't listen to voice notes yet" in replies[0]
 
-    monkeypatch.setattr(voice, "available", lambda: True)
+    async def now_available(timeout: float = 90.0):
+        return True
+
+    monkeypatch.setattr(voice, "wait_available", now_available)
 
     async def empty(path):
         return ""
