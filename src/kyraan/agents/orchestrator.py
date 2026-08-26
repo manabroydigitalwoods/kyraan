@@ -911,7 +911,7 @@ async def _cancel_event(chat_id: int, text: str) -> str:
         if untouched:
             parts.append(f"NOT touched ({stop_reason.split(':')[0]}): "
                          + ", ".join(f'"{t}"' for t in untouched)
-                         + ' — say "cancel" again for the rest')
+                         + ' — say "cancel all events" again for the rest')
         return ". ".join(parts) if parts else "Nothing was deleted."
 
     described = "\n".join(

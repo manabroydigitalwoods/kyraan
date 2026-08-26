@@ -8,6 +8,8 @@ discards them. `write_fact` never calls `promote`.
 """
 import json
 import re
+
+from kyraan.control_plane.filelock import locked
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -110,12 +112,17 @@ def promote(proposal_path: Path) -> Path:
 
     target_path = MEMORY_ROOT / target_rel
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    existing = target_path.read_text() if target_path.exists() else ""
-    if body.strip() not in existing:
-        # idempotent for retries (review P2): a crash after this append
-        # and before the unlink must not duplicate the fact next time
-        with target_path.open("a") as f:
-            f.write(body.strip() + "\n\n")
+    with locked(target_path):
+        # Exact line-set comparison under the target's lock (round-4 P2:
+        # substring matching suppressed distinct shorter facts, and the
+        # unlocked check-then-append let concurrent promotes duplicate).
+        existing_lines = set()
+        if target_path.exists():
+            existing_lines = {l.strip() for l in target_path.read_text().splitlines() if l.strip()}
+        body_lines = [l.strip() for l in body.strip().splitlines() if l.strip()]
+        if not all(l in existing_lines for l in body_lines):
+            with target_path.open("a") as f:
+                f.write(body.strip() + "\n\n")
 
     proposal_path.unlink()
     return target_path

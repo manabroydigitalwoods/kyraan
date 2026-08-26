@@ -87,8 +87,17 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
     # log must say what actually happened — it previously logged
     # reminder_sent for a message that was never sent. None (legacy
     # send_fns) counts as delivered.
+    # Exactly-once is impossible without a transactional external send: a
+    # crash after Telegram accepts but before mark_sent leaves a stale
+    # lease, and losing the reminder would break the product's core
+    # promise. So delivery is at-least-once — and HONEST about it: a
+    # stale-lease takeover knows a prior attempt was in flight and says so
+    # (external review round 4, P1).
+    record = store.get(reminder_id)
+    suffix = (" (this may be a repeat — an earlier delivery attempt may have "
+              "reached you)") if record is not None and getattr(record, "takeover", False) else ""
     try:
-        delivered = await _send_fn(chat_id, f"Reminder: {text}")
+        delivered = await _send_fn(chat_id, f"Reminder: {text}{suffix}")
     except Exception as exc:
         # A Telegram hiccup must not strand the reminder inside its claim
         # lease with nothing scheduled (review P1): release and retry.

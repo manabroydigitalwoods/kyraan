@@ -275,3 +275,24 @@ def test_startup_validation_catches_a_broken_tool_config(monkeypatch):
             telegram_bot._validate_startup()
     finally:
         registry._adapter_module.cache_clear()
+
+
+def test_startup_validation_rejects_unknown_kinds_and_missing_tiers(monkeypatch):
+    """Round-4 P2: unknown provider kinds and an absent required tier must
+    fail the boot."""
+    import pytest
+    from kyraan.control_plane import config
+
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "1")
+    base = config.load()
+
+    bad_kind = {**base, "providers": {**base["providers"],
+                                      "weird": {"kind": "quantum", "api_key_env": "X"}}}
+    monkeypatch.setattr(config, "load", lambda: bad_kind)
+    with pytest.raises(ValueError, match="unknown kind"):
+        telegram_bot._validate_startup()
+
+    no_cheap = {**base, "model_tiers": {"frontier": base["model_tiers"]["frontier"]}}
+    monkeypatch.setattr(config, "load", lambda: no_cheap)
+    with pytest.raises(ValueError, match="must define 'cheap'"):
+        telegram_bot._validate_startup()

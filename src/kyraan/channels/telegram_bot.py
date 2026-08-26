@@ -285,6 +285,18 @@ def _validate_startup() -> None:
     cfg = config.load()
     tiers = cfg["model_tiers"]
     providers = cfg["providers"]
+    for required in ("cheap", "frontier"):
+        if required not in tiers:
+            raise ValueError(f"model_tiers must define {required!r} — the fallback chain depends on it")
+    _KNOWN_KINDS = {"anthropic", "gemini", "openai_compatible", "ollama_native"}
+    for pname, provider in providers.items():
+        kind = provider.get("kind")
+        if kind not in _KNOWN_KINDS:
+            raise ValueError(f"provider {pname!r} has unknown kind {kind!r}")
+        if kind in ("anthropic", "gemini") and not provider.get("api_key_env"):
+            raise ValueError(f"provider {pname!r} ({kind}) declares no api_key_env")
+        if kind == "openai_compatible" and not provider.get("api_key_env") and not provider.get("base_url"):
+            raise ValueError(f"provider {pname!r} has neither api_key_env nor base_url")
     for name, tier in tiers.items():
         provider = providers.get(tier.get("provider"))
         if provider is None:

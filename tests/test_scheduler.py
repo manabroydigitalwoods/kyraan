@@ -282,3 +282,36 @@ async def test_live_claim_defers_instead_of_stranding(isolated_store):
     await scheduler.fire(r.id, 0, r.text)
     assert sends == []                     # the lease holder owns the send
     assert len(rescheduled) == 1           # but the record is watched, not stranded
+
+
+async def test_stale_lease_takeover_resends_with_an_honest_repeat_note(isolated_store, monkeypatch):
+    """Round-4 P1: exactly-once is impossible, so delivery is
+    at-least-once and HONEST — a takeover of a crashed sender's stale
+    lease labels the resend as a possible repeat. A fresh first send
+    carries no such note."""
+    from datetime import datetime, timedelta, timezone
+
+    r = store.add(chat_id=0, text="crashy", when_iso="2099-01-01T10:00:00+00:00")
+    sends = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+
+    # Simulate: a previous process claimed, sent (or died mid-send), and
+    # crashed before mark_sent — its claim is now stale.
+    assert store.claim_for_send(r.id)
+    records = store._load_all()
+    for rec in records:
+        rec["claimed_at"] = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
+    store._save_all(records)
+
+    await scheduler.fire(r.id, 0, r.text)
+    assert len(sends) == 1
+    assert "may be a repeat" in sends[0]
+
+    # A clean first-time send never carries the note.
+    r2 = store.add(chat_id=0, text="fresh", when_iso="2099-01-01T11:00:00+00:00")
+    await scheduler.fire(r2.id, 0, r2.text)
+    assert sends[1] == "Reminder: fresh"

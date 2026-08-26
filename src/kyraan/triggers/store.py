@@ -22,6 +22,8 @@ class Reminder:
     sent: bool = False
     claimed_at: str = ""  # F4: set atomically before delivery; a stale
                           # claim (>120s) is a crashed sender's lease
+    takeover: bool = False  # this claim took over a stale lease — the
+                            # send may be a repeat and must say so
 
 
 def _load_all() -> list[dict]:
@@ -87,14 +89,17 @@ def claim_for_send(reminder_id: str, lease_seconds: int = 120) -> bool:
             if record.get("sent"):
                 return False
             claimed = record.get("claimed_at") or ""
+            takeover = False
             if claimed:
                 try:
                     age = datetime.now(timezone.utc) - datetime.fromisoformat(claimed)
                     if age < timedelta(seconds=lease_seconds):
                         return False
+                    takeover = True  # a prior attempt died mid-send
                 except ValueError:
                     pass
             record["claimed_at"] = datetime.now(timezone.utc).isoformat()
+            record["takeover"] = takeover
             _save_all(records)
             return True
         return False

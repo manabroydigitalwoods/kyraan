@@ -71,11 +71,17 @@ def _normalized_event_times(args: dict, raw_text: str) -> tuple:
             end_dt = anchored + duration
             start_dt = anchored
     elif len(matches) == 2:
-        # "8pm to 9pm": both ends stated — anchor both (review P1: two
-        # matches used to mean NO anchoring, letting drifted intervals
-        # through unchecked)
-        start_dt = _apply(start_dt, matches[0])
-        end_dt = _apply(end_dt, matches[1])
+        # "8pm to 9pm": both ends stated — anchor both. But ANY two
+        # AM/PM values in the message are not necessarily the range
+        # (round-4 P2): keep the pairwise anchor only when the result
+        # stays chronological; otherwise the times weren't the range —
+        # leave the parsed values untouched and log it.
+        candidate_start = _apply(start_dt, matches[0])
+        candidate_end = _apply(end_dt, matches[1])
+        if candidate_start < candidate_end:
+            start_dt, end_dt = candidate_start, candidate_end
+        else:
+            log_event("event_range_anchor_skipped", raw=raw_text[:120])
     return start_dt.isoformat(), end_dt.isoformat()
 
 

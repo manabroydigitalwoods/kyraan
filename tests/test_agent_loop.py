@@ -457,3 +457,26 @@ async def test_time_range_anchors_both_ends_and_the_receipt_matches(scripted_mod
     assert "T20:00:00" in dispatched["start"] and "T21:00:00" in dispatched["end"]
     assert "8:00 PM" in receipt            # the receipt shows what executed
     assert "7:49" not in receipt
+
+
+def test_unrelated_time_pair_does_not_hijack_the_event_range(monkeypatch):
+    """Round-4 P2: any two AM/PM values are NOT automatically the range —
+    a non-chronological anchor result means they weren't, and the parsed
+    model times stand."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    # "9pm" then "8am" would anchor start->21:00, end->08:00 — reversed.
+    start, end = agent_loop._normalized_event_times(
+        args, "after the 9pm call tomorrow, add dinner — not at 8am obviously")
+    assert "T20:00:00" in start and "T21:00:00" in end  # model times kept
+
+
+def test_partial_deletion_receipt_names_the_working_resume_phrase():
+    """Round-4 P2 — and the round-3 lesson: this wording 'fix' silently
+    never applied because nothing asserted it. Now something does."""
+    import inspect
+    from kyraan.agents import orchestrator as o
+
+    source = inspect.getsource(o._cancel_event)
+    assert 'say \"cancel all events\" again' in source
+    assert '— say \"cancel\" again' not in source
