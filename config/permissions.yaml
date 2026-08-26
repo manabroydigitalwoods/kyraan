@@ -62,6 +62,10 @@ providers:
                           # IGNORES think:false (verified on 0.30.10) and
                           # Qwen3 then burns 8-12s of hidden reasoning per
                           # call. base_url via OLLAMA_BASE_URL env if set.
+    keep_alive: "2h"      # pin the model in memory between turns — the
+                          # default 5-min eviction forced a ~20s reload
+                          # INSIDE a user turn (live 2026-08-27, "ok that
+                          # great" took 23s while qwen3 reloaded)
     think: false          # qwen3-only knob: remove this line if the cheap
                           # model ever goes back to a non-thinking model
                           # (llama rejects the parameter outright)

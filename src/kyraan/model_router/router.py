@@ -396,6 +396,11 @@ def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str
         "model": model,
         "stream": False,
         "messages": messages,
+        # keep_alive pins the model in memory between turns — the default
+        # 5-minute eviction (or another process loading a different model)
+        # forced a ~20s reload INSIDE a user turn, live 2026-08-27: "ok
+        # that great" took 23 seconds while qwen3 reloaded for extraction.
+        "keep_alive": provider_cfg.get("keep_alive", "2h"),
         # num_ctx MUST be set explicitly: Ollama's ~4K default silently
         # truncates Kyraan's qa prompt (capabilities + facts + 40-entry
         # history) and the model then answers garbage fragments — seen

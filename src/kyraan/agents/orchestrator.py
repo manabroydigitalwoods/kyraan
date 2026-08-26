@@ -331,7 +331,16 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
     if not _skip_extraction.get():
-        reply += await _extraction_note(chat_id, raw_text)
+        import asyncio as _aio
+        try:
+            # Extraction is bookkeeping — it must never hold the reply
+            # hostage. Live 2026-08-27: a local-model reload made "ok
+            # that great" take 23s because extraction sat on the reply
+            # path. A slow turn skips extraction for ONE message.
+            reply += await _aio.wait_for(_extraction_note(chat_id, raw_text),
+                                         timeout=6)
+        except _aio.TimeoutError:
+            log_event("extraction_skipped_slow", chat_id=chat_id)
     _skip_extraction.reset(skip_token)
     quota_warning = router.quota_alert_due()
     if quota_warning:
@@ -354,7 +363,10 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             # for the rolling summary instead of losing it (harness C)
             _summary_backlog[chat_id].append(_history[chat_id][0])
         _history[chat_id].append(entry)
-    await _roll_summary(chat_id)
+    # Summary rolling is equally off-path: fire-and-forget — its own
+    # error handling re-queues the backlog chunk on failure.
+    import asyncio as _aio2
+    _aio2.create_task(_roll_summary(chat_id))
     _history_redaction.reset(redaction_token)
     _last_sent_reply[chat_id] = reply
     _last_reply_at[chat_id] = time.monotonic()
