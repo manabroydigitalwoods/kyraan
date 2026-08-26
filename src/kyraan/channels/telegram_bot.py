@@ -27,6 +27,17 @@ def _owner_id() -> int:
     return int(os.environ["TELEGRAM_OWNER_ID"])
 
 
+def _owner_private(update: Update) -> bool:
+    """Owner id AND a private chat. The id check alone let the owner's
+    messages in any group trigger replies INTO that group — personal
+    data and confirm flows in front of whoever else is there (external
+    review P1). Group/channel updates are ignored outright."""
+    return (update.effective_user is not None
+            and update.effective_user.id == _owner_id()
+            and update.effective_chat is not None
+            and getattr(update.effective_chat, "type", None) == "private")
+
+
 def _plain(text: str) -> str:
     """Models emit markdown bold/italic; replies are sent without
     parse_mode (entity-parse errors on unbalanced markers would eat whole
@@ -62,7 +73,7 @@ def _confirm_keyboard(chat_id: int) -> InlineKeyboardMarkup | None:
 
 async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    if update.effective_user is None or update.effective_user.id != _owner_id():
+    if not _owner_private(update):
         await query.answer()
         return
     await query.answer()
@@ -106,8 +117,9 @@ def _lock_for(chat_id: int) -> asyncio.Lock:
 
 
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if update.effective_user is None or update.effective_user.id != _owner_id():
-        logger.warning("Ignored message from non-owner user %s", update.effective_user)
+    if not _owner_private(update):
+        logger.warning("Ignored non-owner or non-private update (user=%s chat=%s)",
+                       update.effective_user, update.effective_chat)
         return
 
     chat_id = update.effective_chat.id
@@ -191,7 +203,7 @@ async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     fires for these, and the owner got SILENCE (live 2026-08-26: an image
     with 'can yiu tell me what is this' was simply ignored). Until vision
     and voice land (Phase 5), the honest reply beats a dropped message."""
-    if update.effective_user is None or update.effective_user.id != _owner_id():
+    if not _owner_private(update):
         return
     message = update.message
     if message is None:
@@ -260,7 +272,24 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
     logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
 
 
+def _validate_startup() -> None:
+    """Fail LOUDLY at boot instead of latently at first use (review P2):
+    the tool registry's load-time validation (unknown servers, auto
+    writes, bad fallbacks) and the model-tier wiring both run now."""
+    from kyraan.control_plane import config
+    from kyraan.tools import registry
+
+    tools = registry.load()
+    tiers = config.load()["model_tiers"]
+    providers = config.load()["providers"]
+    for name, tier in tiers.items():
+        if tier["provider"] not in providers:
+            raise ValueError(f"model tier {name!r} names unknown provider {tier['provider']!r}")
+    logger.info("Startup validation: %d tools, %d model tiers OK", len(tools), len(tiers))
+
+
 def run() -> None:
+    _validate_startup()
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))

@@ -245,3 +245,20 @@ async def test_dnd_reschedule_releases_the_claim(isolated_store, monkeypatch):
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
     await scheduler.fire(r.id, 0, r.text)
     assert store.get(r.id).claimed_at == ""  # the 15-min retry can claim again
+
+
+async def test_failed_send_releases_the_claim_and_reschedules(isolated_store):
+    """Review P1: a Telegram hiccup must not strand a claimed reminder."""
+    r = store.add(chat_id=0, text="fragile", when_iso="2099-01-01T10:00:00+00:00")
+    rescheduled = []
+
+    async def broken_send(chat_id, text):
+        raise RuntimeError("telegram timeout")
+
+    scheduler.init(schedule_fn=lambda name, run_at, payload: rescheduled.append(run_at),
+                   cancel_fn=lambda *a, **k: None, send_fn=broken_send)
+    rescheduled.clear()  # init schedules the pending record itself
+    await scheduler.fire(r.id, 0, r.text)
+    assert store.get(r.id).sent is False
+    assert store.get(r.id).claimed_at == ""     # claim released
+    assert len(rescheduled) == 1                # retry scheduled

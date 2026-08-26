@@ -33,8 +33,14 @@ def _rotate_if_large(path: Path) -> None:
             return
     except FileNotFoundError:
         return
+    import uuid
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    path.rename(path.with_name(f"{path.stem}-{stamp}.jsonl"))
+    try:
+        # uuid suffix: two processes rotating in the same second produced
+        # colliding archive names (review P2); a lost race is harmless.
+        path.rename(path.with_name(f"{path.stem}-{stamp}-{uuid.uuid4().hex[:6]}.jsonl"))
+    except FileNotFoundError:
+        pass  # the other process rotated first
 
 
 def _append(path: Path, record: dict) -> None:

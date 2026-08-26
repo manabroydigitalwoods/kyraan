@@ -1704,3 +1704,95 @@ def test_history_block_tiers_old_entries(monkeypatch):
     # default behavior unchanged
     assert all(len(l) > 400 for l in orchestrator._history_block(95).splitlines())
     orchestrator._history.pop(95, None)
+
+
+async def test_email_redaction_survives_a_restart(monkeypatch):
+    """PROPERTY (review P1): sender/subject metadata must never reach a
+    cloud prompt — including via chat.jsonl -> history seeding after a
+    restart. The local log keeps the full text (that's the audit); the
+    seeded history must carry only the placeholder."""
+    import json as j
+    from kyraan.control_plane import logging_setup
+
+    _mock_normalize(monkeypatch, "email.check")
+
+    async def fake_run_tool(call, **kwargs):
+        return {"unread_estimate": 1, "messages": [
+            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+
+    await orchestrator.handle_message(chat_id=88, raw_text="any new emails?")
+
+    log_lines = [j.loads(l) for l in logging_setup.CHAT_LOG.read_text().splitlines()]
+    full = next(e for e in log_lines if e["role"] == "assistant" and e["chat_id"] == 88)
+    assert "Invoice pending" in full["text"]            # local audit keeps everything
+    assert "Invoice" not in full.get("cloud_text", "")  # the cloud twin does not
+
+    # THE RESTART: wipe memory, reseed from disk.
+    orchestrator._history.pop(88, None)
+    orchestrator.seed_history_from_log()
+    block = orchestrator._history_block(88)
+    assert "Invoice pending" not in block and "Suman Das" not in block
+    assert "email" in block.lower()                     # the placeholder survived
+    orchestrator._history.pop(88, None)
+
+
+async def test_unknown_outcome_warning_reaches_the_user(monkeypatch):
+    """PROPERTY (review P1): the write-timeout receipt exists to prevent
+    unsafe retries — no catch-all may replace it with a generic error."""
+    _mock_normalize(monkeypatch, "home.control", "turn on the AC")
+
+    calls = {"n": 0}
+
+    async def fake_run_tool(call, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise orchestrator.ConfirmationRequired(call.tool_name, call.args)
+        raise orchestrator.kernel.ToolFailed(
+            "home.turn_on timed out — the command MAY still have gone through; "
+            "check the actual state before retrying")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    await orchestrator.handle_message(chat_id=0, raw_text="turn on the AC")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "MAY still have gone through" in result
+    assert "Something went wrong" not in result
+
+
+async def test_cancel_all_ask_is_capped_at_the_kernel_batch_budget(monkeypatch, tmp_path):
+    """Review P2: never confirm more deletions than can actually run."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-01-02T00:00:00+00:00", "end_iso": "2099-01-02T23:59:59+00:00", "label": "today"}'))
+    events = [{"id": f"ev{i}", "title": f"Event {i}", "start": f"2099-01-02T{8+i:02d}:00:00+00:00",
+               "end": f"2099-01-02T{9+i:02d}:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False} for i in range(12)]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events today")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
+    assert "DELETE 8 event(s)" in ask and "4 more matched" in ask
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert result.count("Event ") == 8  # exactly the confirmed batch ran

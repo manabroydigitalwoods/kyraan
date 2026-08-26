@@ -90,11 +90,10 @@ def promote(proposal_path: Path) -> Path:
     # hand-edited between propose and promote.
     _validate_path(target_rel)
 
-    target_path = MEMORY_ROOT / target_rel
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    with target_path.open("a") as f:
-        f.write(body.strip() + "\n\n")
-
+    # Order matters for retry safety (review P2): the ENGINE INDEX is the
+    # retrieval authority and its add is idempotent, so it goes first; the
+    # Markdown append is the human audit copy; the unlink is last. A crash
+    # between steps leaves a retryable proposal, never a lost fact.
     from kyraan.memory import engine  # late: engine imports store
     engine.add_fact(
         content=body.strip(),
@@ -108,6 +107,11 @@ def promote(proposal_path: Path) -> Path:
         era=meta.get("era", "current"),
         sphere=meta.get("sphere", "personal"),
     )
+
+    target_path = MEMORY_ROOT / target_rel
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    with target_path.open("a") as f:
+        f.write(body.strip() + "\n\n")
 
     proposal_path.unlink()
     return target_path

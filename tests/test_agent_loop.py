@@ -395,3 +395,34 @@ async def test_calendar_create_dispatches_the_normalized_time(scripted_model, mo
     await orchestrator.handle_message(chat_id=90, raw_text="yes")
     assert dispatched["start"].endswith("+05:30")   # wall-clock kept, zone repaired
     assert "T19:00:00" in dispatched["start"]
+
+
+async def test_confirm_ask_and_execution_use_the_same_anchored_time(scripted_model, monkeypatch):
+    """PROPERTY (review P1): what the ask SHOWS is what the execution
+    DOES — one normalization, including the stated-clock anchor ("8pm"
+    beats the model's drifted timestamp)."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    dispatched = {}
+
+    async def fake_dispatch(spec, args):
+        dispatched.update(args)
+        return {"id": "ev1", "link": "l", "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(kernel.config, "skill_config",
+                        lambda name: {"permission": "auto", "model_tier": "cheap"})
+    scripted_model([
+        '{"action": "call", "tool": "calendar.create_event", '
+        '"args": {"title": "Call", "start": "2099-01-02T19:49:00Z", "end": "2099-01-02T20:49:00Z"}}',
+    ])
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await agent_loop.run(90, "add a call at 8pm on jan 2 2099")
+    assert "8:00 PM" in ask                              # the ask shows the anchored time
+    await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    assert "T20:00:00" in dispatched["start"]            # and that is what executed
+    assert dispatched["start"].endswith("+05:30")
+    assert "T21:00:00" in dispatched["end"]              # duration preserved

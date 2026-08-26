@@ -189,7 +189,8 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
         if role == "proactive":
             role = "assistant"
         if role in ("user", "assistant") and entry.get("text"):
-            per_chat[entry["chat_id"]].append((role, entry["text"]))
+            per_chat[entry["chat_id"]].append(
+                (role, entry.get("cloud_text") or entry["text"]))
     for chat_id, entries in per_chat.items():
         if not _history[chat_id]:  # never clobber a live conversation
             _history[chat_id].extend(entries[-max_per_chat:])
@@ -386,13 +387,18 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             f"{router.budget_alert_threshold_pct():.0f}% of the ${router.daily_budget_usd():.2f} "
             "daily budget. Calls stop at the cap."
         )
+    redacted = _history_redaction.get()
     _history[chat_id].append(("user", raw_text))
-    _history[chat_id].append(("assistant", _history_redaction.get() or reply))
+    _history[chat_id].append(("assistant", redacted or reply))
     _history_redaction.reset(redaction_token)
     _last_sent_reply[chat_id] = reply
     _last_reply_at[chat_id] = time.monotonic()
     log_chat(chat_id, "user", raw_text)
-    log_chat(chat_id, "assistant", reply)
+    # The full reply stays in the LOCAL log (inside the §3a boundary);
+    # cloud_text is what history seeding may hand back to cloud prompts —
+    # without it, the redaction died at the first restart (review P1).
+    log_chat(chat_id, "assistant", reply,
+             **({"cloud_text": redacted} if redacted else {}))
     return reply
 
 
@@ -642,6 +648,12 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         return await _answer(chat_id, text_for_answer)
     except KillSwitchEngaged:
         return "The kill switch is engaged — no autonomous action will run until it's disengaged."
+    except kernel.ToolFailed as exc:
+        # ToolFailed messages are user-facing by contract (on_failure:
+        # surface) — the catch-all was replacing "the command MAY still
+        # have gone through" with a generic error, inviting exactly the
+        # unsafe retry that warning exists to prevent (review P1).
+        return f"That didn't complete: {exc}"
     except router.ModelProviderError as exc:
         # Full detail (org ids, billing links) belongs in the log, not the
         # chat — seen live: a Groq 429 dumped its entire raw error into
@@ -855,6 +867,13 @@ async def _cancel_event(chat_id: int, text: str) -> str:
         if e["id"] not in seen:
             seen.add(e["id"])
             unique.append(e)
+    overflow = 0
+    if len(unique) > 8:
+        # Never confirm more than the kernel's 8-call rail can actually
+        # run (review P2: the ask covered the full batch, execution
+        # stopped at eight). The remainder is named up front.
+        overflow = len(unique) - 8
+        unique = unique[:8]
 
     async def handler(args: dict) -> str:
         # Per-event isolation + a COMPLETE receipt (external review P1: a
@@ -888,6 +907,9 @@ async def _cancel_event(chat_id: int, text: str) -> str:
         for e in unique)
     describe = (f"About to DELETE {len(unique)} event(s) from your Google Calendar:\n"
                 f"{described}\nThis can't be undone from here")
+    if overflow:
+        describe += (f"\n({overflow} more matched — this batch is capped at 8; "
+                     "run \"cancel all events\" again afterwards for the rest)")
     return await _gated(chat_id, SkillCall("calendar.cancel", {"text": text}), handler, describe=describe)
 
 
@@ -1130,8 +1152,7 @@ async def _answer(chat_id: int, text: str) -> str:
         system = _ANSWER_SYSTEM.format(
             now=local_now().isoformat(),
             capabilities=capability_brief(),
-            facts=engine.build_context(args["text"])
-                  or memory_store.load_all_facts() or "(no facts stored yet)",
+            facts=engine.memory_context(args["text"]),
             pending_facts=memory_store.load_pending_facts() or "(none)",
             history=_history_block(chat_id),
         )

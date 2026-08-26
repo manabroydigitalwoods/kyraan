@@ -102,3 +102,12 @@ def test_sensitive_memories_stay_private_without_direct_relevance():
     assert "counseling" in direct.lower()
     assert "[EMOTIONAL/SENSITIVE]" in direct or "[SENSITIVE/EMOTIONAL]" in direct \
         or "SENSITIVE" in direct
+
+
+def test_add_fact_is_idempotent_for_promote_retries():
+    """Review P2: a retried promote must not double-index the fact."""
+    first = engine.add_fact("Wife's name is Mira", "people/wife.md", "s")
+    second = engine.add_fact("Wife's name is Mira", "people/wife.md", "s")
+    assert first == second
+    assert sum(1 for e in engine.active_entries()
+               if e["content"] == "Wife's name is Mira") == 1

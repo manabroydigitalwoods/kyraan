@@ -27,7 +27,22 @@ def locked(path: Path):
 
 def atomic_write_text(path: Path, text: str) -> None:
     """Write-then-rename: a concurrent reader sees the old file or the
-    new one, never a half-written JSON (external review P2)."""
-    tmp = Path(str(path) + ".tmp")
-    tmp.write_text(text)
-    tmp.replace(path)
+    new one, never a half-written JSON. The temp name is unique per
+    writer (review P2: a fixed .tmp let unlocked writers race over each
+    other's staging file)."""
+    import os
+    import tempfile
+
+    handle = tempfile.NamedTemporaryFile(
+        mode="w", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False)
+    try:
+        handle.write(text)
+        handle.close()
+        os.replace(handle.name, path)
+    except BaseException:
+        handle.close()
+        try:
+            os.unlink(handle.name)
+        except OSError:
+            pass
+        raise

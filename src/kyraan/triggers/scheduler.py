@@ -76,7 +76,17 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
     # log must say what actually happened — it previously logged
     # reminder_sent for a message that was never sent. None (legacy
     # send_fns) counts as delivered.
-    delivered = await _send_fn(chat_id, f"Reminder: {text}")
+    try:
+        delivered = await _send_fn(chat_id, f"Reminder: {text}")
+    except Exception as exc:
+        # A Telegram hiccup must not strand the reminder inside its claim
+        # lease with nothing scheduled (review P1): release and retry.
+        store.release_claim(reminder_id)
+        log_event("reminder_send_failed", reminder_id=reminder_id, error=str(exc)[:200])
+        assert _schedule_fn is not None
+        _schedule_fn(reminder_id, local_now() + timedelta(minutes=2),
+                     {"chat_id": chat_id, "text": text, "reminder_id": reminder_id})
+        return
     store.mark_sent(reminder_id)
     if delivered is False:
         log_event("reminder_retired_undelivered", reminder_id=reminder_id, chat_id=chat_id)

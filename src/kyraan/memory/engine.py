@@ -141,6 +141,12 @@ def add_fact(content: str, target: str, source: str, kind: str = "other",
 
 def _add_locked(entries, new_id, content, target, source, kind, term,
                 importance, flags, supersedes, era, sphere) -> str:
+    clean = content.lstrip("- ").strip()
+    for entry in entries:
+        if entry["active"] and entry["target"] == target and entry["content"] == clean:
+            # Idempotency for promote retries (review P2): the index is
+            # the authority — re-registering the same fact is a no-op.
+            return entry["id"]
     if supersedes:
         old_words = _words(supersedes)
         for entry in entries:
@@ -166,22 +172,25 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
 
 
 def active_entries() -> list:
-    """Live entries, with short-term expiry applied lazily."""
-    entries = _load()
-    now = datetime.now(timezone.utc)
-    changed = False
-    for entry in entries:
-        if (entry["active"] and entry.get("term") == "short"):
-            try:
-                created = datetime.fromisoformat(entry["created"])
-            except ValueError:
-                continue
-            if now - created > timedelta(days=_SHORT_TERM_DAYS):
-                entry["active"] = False
-                changed = True
-                log_event("memory_short_term_expired", content=entry["content"][:80])
-    if changed:
-        _save(entries)
+    """Live entries, with short-term expiry applied lazily — the whole
+    read-modify-write runs under the index lock (review P1: an unlocked
+    expiry save could overwrite a concurrent promote or forget)."""
+    with locked(_index_path()):
+        entries = _load()
+        now = datetime.now(timezone.utc)
+        changed = False
+        for entry in entries:
+            if (entry["active"] and entry.get("term") == "short"):
+                try:
+                    created = datetime.fromisoformat(entry["created"])
+                except ValueError:
+                    continue
+                if now - created > timedelta(days=_SHORT_TERM_DAYS):
+                    entry["active"] = False
+                    changed = True
+                    log_event("memory_short_term_expired", content=entry["content"][:80])
+        if changed:
+            _save(entries)
     return [e for e in entries if e["active"]]
 
 
@@ -272,3 +281,13 @@ def forget(entry_ids: list) -> list:
                 log_event("memory_forgotten", content=entry["content"][:80])
         _save(entries)
     return forgotten
+
+
+def memory_context(message: str = "") -> str:
+    """THE memory block for any prompt, both brains (review P1: two call
+    sites re-implemented this and one kept resurrecting forgotten facts).
+    Once an index exists it is the sole authority; the Markdown dump
+    serves only installs that never migrated."""
+    if _index_path().exists():
+        return build_context(message) or "(no facts stored yet)"
+    return store.load_all_facts() or "(no facts stored yet)"

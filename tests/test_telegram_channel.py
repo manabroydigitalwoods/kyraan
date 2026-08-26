@@ -69,7 +69,7 @@ async def test_burst_messages_combine_into_one_answer(monkeypatch):
         message = SimpleNamespace(text=text, reply_text=reply_text)
         return SimpleNamespace(
             effective_user=SimpleNamespace(id=1),
-            effective_chat=SimpleNamespace(id=9),
+            effective_chat=SimpleNamespace(id=9, type="private"),
             message=message,
         )
 
@@ -102,7 +102,7 @@ def _channel_harness(monkeypatch, chat_id=9):
         message = SimpleNamespace(text=text, reply_text=reply_text)
         return SimpleNamespace(
             effective_user=SimpleNamespace(id=1),
-            effective_chat=SimpleNamespace(id=chat_id),
+            effective_chat=SimpleNamespace(id=chat_id, type="private"),
             message=message,
         )
 
@@ -183,7 +183,7 @@ async def test_photo_message_gets_an_honest_reply_not_silence(monkeypatch):
                               audio=None, sticker=None, document=None,
                               reply_text=reply_text)
     update = SimpleNamespace(effective_user=SimpleNamespace(id=1),
-                             effective_chat=SimpleNamespace(id=9), message=message)
+                             effective_chat=SimpleNamespace(id=9, type="private"), message=message)
     await telegram_bot._on_unsupported(update, SimpleNamespace(bot=None))
     assert len(replies) == 1 and "can't open a photo yet" in replies[0]
 
@@ -218,10 +218,59 @@ async def test_typing_starts_at_message_receipt(monkeypatch):
         pass
 
     update = SimpleNamespace(
-        effective_user=SimpleNamespace(id=1), effective_chat=SimpleNamespace(id=9),
+        effective_user=SimpleNamespace(id=1), effective_chat=SimpleNamespace(id=9, type="private"),
         message=SimpleNamespace(text="hello", reply_text=reply_text))
     task = aio.get_event_loop().create_task(
         telegram_bot._on_message(update, SimpleNamespace(bot=FakeBot())))
     await aio.sleep(0.05)  # inside the gather window, before composition
     assert actions, "typing action must fire during the gather window"
     await task
+
+
+async def test_owner_messages_in_a_group_are_ignored_entirely(monkeypatch):
+    """External review P1: the owner-id check alone would have replied
+    INTO a group — personal data and confirm flows in front of whoever
+    else is there. Any non-private chat is ignored, owner or not."""
+    from types import SimpleNamespace
+    from kyraan.agents import orchestrator
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+
+    async def must_not_run(chat_id, texts, superseded=None):
+        raise AssertionError("group message must never reach the orchestrator")
+
+    monkeypatch.setattr(orchestrator, "handle_burst", must_not_run)
+    replies = []
+
+    async def reply_text(reply, reply_markup=None, do_quote=False):
+        replies.append(reply)
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),                       # the OWNER —
+        effective_chat=SimpleNamespace(id=-100123, type="group"),   # but in a group
+        message=SimpleNamespace(text="what's on my calendar?", reply_text=reply_text,
+                                photo=None, voice=None, video=None, audio=None,
+                                sticker=None, document=None))
+    await telegram_bot._on_message(update, SimpleNamespace(bot=None))
+    await telegram_bot._on_unsupported(update, SimpleNamespace(bot=None))
+    assert replies == []
+
+
+def test_startup_validation_catches_a_broken_tool_config(monkeypatch):
+    """Review P2: invalid configuration fails loudly at boot, not latently
+    at first use."""
+    import pytest
+    from kyraan.control_plane import config
+
+    base = config.load()
+    broken = {**base, "tools": {"t.x": {"description": "t", "server": "nope",
+                                        "permission": "auto", "side_effects": "read",
+                                        "params": {}, "failure": {"on_failure": "surface"}}}}
+    monkeypatch.setattr(config, "load", lambda: broken)
+    from kyraan.tools import registry
+    registry._adapter_module.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="unknown server"):
+            telegram_bot._validate_startup()
+    finally:
+        registry._adapter_module.cache_clear()

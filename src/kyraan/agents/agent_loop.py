@@ -47,16 +47,30 @@ async def _calendar_list(chat_id: int, args: dict, raw_text: str):
     return events[:20]
 
 
+def _normalized_event_times(args: dict, raw_text: str) -> tuple:
+    """ONE normalization for both the confirm ask and the execution — they
+    were computed separately and could disagree (review P1). Repairs
+    offset-dropping (a bare Z in a non-UTC home is wall-clock intent) and
+    anchors to the user's explicitly stated clock time ("8pm" beats the
+    model's 19:49), exactly like reminders."""
+    from kyraan.agents import orchestrator
+    start_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"]))).isoformat()
+    end_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"]))).isoformat()
+    anchored = orchestrator._anchor_clock_time(raw_text, start_iso)
+    if anchored != start_iso:
+        # keep the event's duration when the start moves
+        from datetime import timedelta
+        duration = scheduler._parse_when(end_iso) - scheduler._parse_when(start_iso)
+        end_iso = (scheduler._parse_when(anchored) + duration).isoformat()
+        start_iso = anchored
+    return start_iso, end_iso
+
+
 async def _calendar_create(chat_id: int, args: dict, raw_text: str):
-    # Normalize, don't just validate: _parse_when repairs offset-dropping
-    # (a bare Z in a non-UTC home is wall-clock intent) and the dispatched
-    # value must be the REPAIRED one — the raw model string sent a 7 PM
-    # IST event 5.5 hours wrong.
-    start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
-    end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
-    if start_dt < local_now():
+    start_iso, end_iso = _normalized_event_times(args, raw_text)
+    if scheduler._parse_when(start_iso) < local_now():
         raise kernel.ToolFailed("that start time is in the past — ask the user for the intended date")
-    call_args = {"title": args["title"], "start": start_dt.isoformat(), "end": end_dt.isoformat()}
+    call_args = {"title": args["title"], "start": start_iso, "end": end_iso}
     if args.get("location"):
         call_args["location"] = args["location"]
     return await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
@@ -323,11 +337,16 @@ def _tools_block() -> str:
                      for name, spec in TOOLS.items())
 
 
-def _describe_call(tool: str, args: dict) -> str:
-    """The confirm ask the owner sees — concrete, named values."""
+def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
+    """The confirm ask the owner sees — concrete, named values, and for
+    events the SAME normalized times the execution will use."""
     if tool == "calendar.create_event":
+        try:
+            start_iso, end_iso = _normalized_event_times(args, raw_text)
+        except Exception:
+            start_iso, end_iso = str(args.get("start")), str(args.get("end"))
         return (f"About to create a calendar event: \"{args.get('title')}\" "
-                f"{humanize(str(args.get('start')))} → {humanize(str(args.get('end')))}")
+                f"{humanize(start_iso)} → {humanize(end_iso)}")
     if tool == "calendar.delete_event":
         return f"About to DELETE \"{args.get('title') or args.get('event_id')}\" from your Google Calendar"
     if tool == "memory.forget":
@@ -349,9 +368,7 @@ def _memory_block(message: str) -> str:
     authority — falling back on an empty result resurrected forgotten
     and discretion-filtered facts (external review, P1)."""
     from kyraan.memory import engine
-    if engine._index_path().exists():
-        return engine.build_context(message) or "(no facts stored yet)"
-    return memory_store.load_all_facts() or "(no facts stored yet)"
+    return engine.memory_context(message)
 
 
 async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
@@ -461,7 +478,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
             call = kernel.SkillCall("agent.action", {"tool": tool}, )
             return await orchestrator._gated(
                 chat_id, call, confirmed_handler,
-                describe=_describe_call(tool, args))
+                describe=_describe_call(tool, args, raw_text))
         except kernel.KillSwitchEngaged:
             raise
         except kernel.ToolFailed as exc:
