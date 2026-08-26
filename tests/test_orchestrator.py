@@ -1896,3 +1896,32 @@ async def test_successful_capped_batch_names_the_overflow(monkeypatch):
     receipt = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert "3 event(s) still to cancel" in receipt
     assert '"cancel all events today"' in receipt   # the WINDOW rides along
+
+
+async def test_window_words_are_never_title_filters(monkeypatch):
+    """Round-7 P2: 'cancel all events next month' must sweep the window —
+    the extractor's own label words can't double as title filters (this
+    exact phrase is what our receipts recommend)."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-02-01T00:00:00+00:00", "end_iso": "2099-02-28T23:59:59+00:00", "label": "next month"}'))
+    events = [{"id": "ev1", "title": "Board meeting", "start": "2099-02-10T10:00:00+00:00",
+               "end": "2099-02-10T11:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False}]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events next month")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events next month")
+    assert "About to DELETE 1 event(s)" in ask and "Board meeting" in ask
+    assert "couldn't match" not in ask

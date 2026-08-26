@@ -852,10 +852,17 @@ async def _cancel_event(chat_id: int, text: str) -> str:
     stop = {"cancel", "cancle", "delete", "remove", "the", "a", "an", "event",
             "events", "all", "my", "from", "calendar", "please", "meeting",
             "meetings", "appointment", "today", "tomorrow", "this", "that",
-            "week", "yes", "right", "now", "it", "them", "and", "of", "for",
+            "week", "weekend", "month", "months", "year", "next", "last",
+            "coming", "morning", "evening", "afternoon", "tonight",
+            "yes", "right", "now", "it", "them", "and", "of", "for",
             "can", "you", "everything", "every"}
     words = {w.strip(".,!?\"'").lower() for w in text.split()}
-    content = words - stop - {""}
+    # Whatever the extractor recognized as the WINDOW can't also be a
+    # title filter (round-7 P2: "cancel all events next month" treated
+    # "next month" as a title and dead-ended — the very phrase our own
+    # receipts recommend).
+    label_words = {w.strip(".,!?\"'").lower() for w in str(label).split()}
+    content = words - stop - label_words - {""}
     if content:
         targets = [e for e in events
                    if content & {w.strip(".,!?\"'").lower() for w in e["title"].split()}]
@@ -940,7 +947,7 @@ async def _cancel_event(chat_id: int, text: str) -> str:
                 f"{described}\nThis can't be undone from here")
     if overflow:
         describe += (f"\n({overflow} more matched — this batch is capped at 8; "
-                     "run \"cancel all events\" again afterwards for the rest)")
+                     f'say "cancel all events {label}" again afterwards for the rest)')
     return await _gated(chat_id, SkillCall("calendar.cancel", {"text": text}), handler, describe=describe)
 
 

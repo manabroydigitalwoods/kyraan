@@ -165,7 +165,16 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
 
     start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
     end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
-    matches = re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I)
+    # A time marked by a reference-point preposition ("AFTER my 7:45pm
+    # call", "until 6pm") is context, not the event's own time — distance
+    # tolerance can't catch a decoy 15 minutes away, but grammar marks it
+    # (round-7 P2). "at 8pm" keeps its match: "at" is the event marker.
+    matches = []
+    for m in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I):
+        lead = raw_text[max(0, m.start() - 20):m.start()].lower()
+        if re.search(r"\b(after|before|until|till|by|past|following)\s+(my|the|his|her|our|a|an)?\s*$", lead):
+            continue
+        matches.append(m.groups())
 
     def _apply(dt, match):
         hh, mm, ap = match

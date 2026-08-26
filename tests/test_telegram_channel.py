@@ -326,3 +326,12 @@ def test_startup_validation_rejects_keyless_remote_providers(monkeypatch):
                   "allow_unauthenticated": True}}}
     monkeypatch.setattr(config, "load", lambda: declared)
     telegram_bot._validate_startup()   # passes with the explicit declaration
+
+    # Round 7: truthy is not true — a mistyped flag must not bypass.
+    for bad_value in ("false", "true", 1):
+        mistyped = {**base, "providers": {**base["providers"],
+            "proxy": {"kind": "openai_compatible", "base_url": "http://localhost:9999/v1",
+                      "allow_unauthenticated": bad_value}}}
+        monkeypatch.setattr(config, "load", lambda m=mistyped: m)
+        with pytest.raises(ValueError, match="allow_unauthenticated"):
+            telegram_bot._validate_startup()

@@ -297,13 +297,16 @@ def _validate_startup() -> None:
             raise ValueError(f"provider {pname!r} ({kind}) declares no api_key_env")
         if (kind in ("openai_compatible", "ollama_native")
                 and not provider.get("api_key_env")
-                and not provider.get("allow_unauthenticated")):
+                and provider.get("allow_unauthenticated") is not True):
             # Keyless must be DECLARED, not inferred from the hostname
             # (round-6 P2: a local authenticated proxy broke the implicit
             # localhost-is-keyless assumption silently).
+            # `is True` on purpose: "false" (string) and 1 are truthy —
+            # a mistyped security flag must not grant the bypass (round-7).
             raise ValueError(
                 f"provider {pname!r} has no api_key_env — if that is intentional "
-                "(local unauthenticated server), set allow_unauthenticated: true")
+                "(local unauthenticated server), set allow_unauthenticated: true "
+                "(Boolean true exactly)")
     for name, tier in tiers.items():
         provider = providers.get(tier.get("provider"))
         if provider is None:

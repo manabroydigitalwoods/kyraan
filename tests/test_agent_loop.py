@@ -529,3 +529,21 @@ def test_nearby_contextual_time_no_longer_hijacks_the_event(monkeypatch):
 
     # both brains share ONE implementation
     assert agent_loop._normalized_event_times is guards.normalized_event_times
+
+
+def test_reference_point_times_are_grammar_filtered(monkeypatch):
+    """Round-7 P2: 'after my 7:45pm call, add dinner at 8' — the decoy is
+    15 minutes from the model's parse, inside any sane tolerance, but
+    grammar marks it: reference-point prepositions exclude the match.
+    'at 8pm' keeps anchoring."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    from kyraan.agents import guards
+
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    start, end = guards.normalized_event_times(
+        args, "after my 7:45pm call, add dinner at 8")
+    assert "T20:00:00" in start and "T21:00:00" in end   # decoy filtered, model kept
+
+    drift = {"start": "2099-01-02T19:49:00+05:30", "end": "2099-01-02T20:49:00+05:30"}
+    start, _ = guards.normalized_event_times(drift, "add dinner at 8pm")
+    assert "T20:00:00" in start                          # event-marker 'at' still anchors
