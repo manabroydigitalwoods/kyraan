@@ -198,22 +198,31 @@ yet permanent):
 TOOLS you can call (results come back to you before you answer):
 {tools}
 
-DECIDE with ONE JSON object, nothing else:
-  {{"action": "reply", "text": "<your reply to the user>"}}
-  {{"action": "call", "tool": "<tool name>", "args": {{...}}}}
+Before EVERY decision, walk the owner's six questions — this is the
+doctrine, in order:
+1. WANT — what is the user actually after? Read the whole conversation,
+   not just the last message; a fragment continues the thought before it.
+2. HAVE — which of the tools and known facts cover it?
+3. NEED — what's missing? If a required detail only the user knows is
+   missing, reply with ONE specific question. Never guess it.
+4. CAN — is it within the tools at all? If not, say so plainly in one
+   line; never invent an ability, never promise a workaround you can't do.
+5. HOW — the shortest tool chain that does it: list before delete, read
+   before summarize. You see each result before deciding again.
+6. OKAY FOR THE USER — would the outcome surprise or harm them? Prefer
+   the smaller action; anything irreversible or broad ("all events")
+   deserves a narrower reading or a check-in first. The system asks the
+   owner's yes for every write automatically — NEVER claim an action
+   already happened, and never promise future actions ("I'll check"):
+   act now or say what to ask for.
 
-Rules:
-- Ordinary conversation, questions about yourself, questions about what was
-  already said or shown, and anything answerable from the facts and the
-  conversation: just reply. Do not call tools you don't need.
-- Live data (calendar, email, reminders, home) must come from a tool call in
-  THIS exchange — never from memory of earlier listings, never invented.
-- Chain when needed: list before you delete, read before you summarize. You
-  will see each result before deciding again.
-- Write tools (create/delete/switch) run only after the owner's yes — the
-  system asks automatically; NEVER claim the action already happened.
-- Never promise future actions ("I'll check") — either call the tool now or
-  say what to ask for. A reply is the END of your turn.
+DECIDE with ONE JSON object, nothing else:
+  {{"action": "reply", "consider": "<one short line: WANT/HAVE/NEED verdict>", "text": "<your reply>"}}
+  {{"action": "call", "consider": "<one short line: why this tool now>", "tool": "<tool name>", "args": {{...}}}}
+
+Style rules:
+- Live data (calendar, email, reminders, home) must come from a tool call
+  in THIS exchange — never from memory of earlier listings, never invented.
 - Reply in the user's tone: brief, warm, direct. No markdown bold.
 - If a tool errors, tell the user honestly what failed; don't retry blindly.
 
@@ -273,11 +282,13 @@ async def run(chat_id: int, raw_text: str) -> str:
             transcript += "\nSYSTEM: that was not valid decision JSON — one JSON object only."
             continue
 
+        consider = str(decision.get("consider", ""))[:200]
+
         if action == "reply":
             reply = str(decision.get("text", "")).strip()
             if not reply:
                 raise AgentUnavailable("empty reply")
-            log_event("agent_reply", chat_id=chat_id, steps=step + 1)
+            log_event("agent_reply", chat_id=chat_id, steps=step + 1, consider=consider)
             return reply
 
         if action != "call" or decision.get("tool") not in TOOLS:
@@ -290,7 +301,8 @@ async def run(chat_id: int, raw_text: str) -> str:
 
         tool = decision["tool"]
         args = decision.get("args") or {}
-        log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1)
+        log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1,
+                  consider=consider)
         try:
             result = await TOOLS[tool]["run"](chat_id, args, raw_text)
         except kernel.ConfirmationRequired:
