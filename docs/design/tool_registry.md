@@ -136,7 +136,7 @@ kernel (2026-08-25):
 
 ## First tool: Google Calendar (decided 2026-08-25)
 
-Manab's answer: **Google**. That changed the transport choice: Google
+the owner's answer: **Google**. That changed the transport choice: Google
 retired app-password CalDAV long ago (CalDAV against Google requires
 OAuth), so the original "CalDAV with an app password" recommendation
 doesn't hold there. Instead:
@@ -168,5 +168,5 @@ flow's first real customer. The shipped config passes its own validator.
 
 - Free-form agentic tool selection by the model (needs the eval harness
   first — Phase 4).
-- Home Assistant / Woodsportal tools (next after calendar, same registry).
+- Home Assistant / Portalapp tools (next after calendar, same registry).
 - Relaxing any write tool to `auto` (Phase 4 guardrail maturity).

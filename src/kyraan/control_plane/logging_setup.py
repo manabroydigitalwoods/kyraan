@@ -44,24 +44,21 @@ def _rotate_if_large(path: Path) -> None:
 
 
 def _append(path: Path, record: dict) -> None:
-    existed = path.exists()
+    import os
+
     _rotate_if_large(path)
-    if not existed:
-        import os
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            os.chmod(path.parent, 0o700)  # CLI/TUI entry points too, not
-                                          # just the bot's startup sweep
-        except OSError:
-            pass
-    with path.open("a") as f:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+    except OSError:
+        pass
+    # O_CREAT with mode 0600: the file is owner-only from the moment it
+    # exists — no umask window, and never a byte of personal data before
+    # hardening (security round 5; a post-rotation replacement inherited
+    # the process umask and was chmodded only after the first write).
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a") as f:
         f.write(json.dumps(record, default=str) + "\n")
-    if not existed:
-        import os
-        try:
-            os.chmod(path, 0o600)  # personal data is owner-only from birth
-        except OSError:
-            pass
 
 
 def log_event(kind: str, **fields) -> None:

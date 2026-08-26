@@ -1,7 +1,7 @@
 # Kyraan — Master Plan
 **Knowledgeable Yielding Responsive Autonomous Agent Network**
 
-A personal multi-agent AI assistant for family life (home automation, planning, reminders) and work (Digitawoods / Woodsportal), designed to evolve safely over time through memory, reflection, and guardrails — not autonomous self-modification.
+A personal multi-agent AI assistant for family life (home automation, planning, reminders) and work (Digitawoods / Portalapp), designed to evolve safely over time through memory, reflection, and guardrails — not autonomous self-modification.
 
 ---
 
@@ -121,7 +121,7 @@ These are policy decisions, not just technical components — they shape the dat
 | Gap | Why it matters |
 |---|---|
 | **Family consent** | Wife, son, parents are being remembered/profiled (routines, schedules, possibly health-adjacent info). Need explicit agreement from each person whose data is stored — especially relevant if son is a minor. |
-| **Work/personal data boundary** | Woodsportal data (deploys, tickets, client info) and family data would share infrastructure. Needs an explicit boundary — check Digitawoods' data policy on routing work info through a personal AI + third-party model APIs; likely needs a fully separate scope, not just a permission tag. |
+| **Work/personal data boundary** | Portalapp data (deploys, tickets, client info) and family data would share infrastructure. Needs an explicit boundary — check Digitawoods' data policy on routing work info through a personal AI + third-party model APIs; likely needs a fully separate scope, not just a permission tag. |
 | **Third-party model data exposure** | Every request (including sensitive family/work data) goes to an external model API. Decide upfront what categories are acceptable to send externally vs. what should stay local. |
 | **Voice/recording consent (future)** | Once continuous voice is added, recording family members may have jurisdiction-specific consent requirements. Flag now, address before Phase 5. |
 | **Maintenance ownership** | The system needs ongoing attention (reflection tuning, skill additions, extraction review) to stay reliable. Decide realistic time budget given your CTO workload, and what "safe to leave alone" looks like if unmaintained for a while. |
@@ -136,9 +136,9 @@ These are policy decisions, not just technical components — they shape the dat
 These sit *inside* the Agent/Skill execution box in the architecture diagram — tooling defines what an agent *can* do; loop engineering defines *how* it acts when a task takes more than one step.
 
 **Tooling Layer**
-- **Tool registry** — central list of all tools (Home Assistant, calendar, Woodsportal APIs, memory store, web search), each with a clear schema: name, parameters, return type, permission level. Skills/agents reference tools from here rather than each defining their own.
+- **Tool registry** — central list of all tools (Home Assistant, calendar, Portalapp APIs, memory store, web search), each with a clear schema: name, parameters, return type, permission level. Skills/agents reference tools from here rather than each defining their own.
 - **Narrow, single-purpose tools** — e.g. `get_calendar_events`, `create_reminder`, not broad catch-alls. Easier for the model to use correctly and easier to permission precisely.
-- **MCP as the standard** for custom tools (Home Assistant bridge, Woodsportal API) — standardizes discovery, allows swapping/adding tools without rewriting agent code.
+- **MCP as the standard** for custom tools (Home Assistant bridge, Portalapp API) — standardizes discovery, allows swapping/adding tools without rewriting agent code.
 - **Failure handling per tool** — defined retry/fallback/surface-to-user behavior for every tool call (concrete implementation of the failure-recovery gap already listed).
 - **Tool testing in isolation** — each tool independently testable, feeding into the eval harness.
 
@@ -169,7 +169,7 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 - Set up Control Plane skeleton with **kill switch** built in from day one
 - Set up logging/observability (every decision, tool call, routing choice)
 - Define permission/guardrail config format (even a YAML file)
-- Bootstrap/onboarding: seed initial family + Woodsportal facts manually
+- Bootstrap/onboarding: seed initial family + Portalapp facts manually
 
 ### **Phase 1 — Core Brain (v1, minimum viable)**
 - Single orchestrator + Control Plane, one channel (Telegram bot)
@@ -183,7 +183,7 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 ### **Phase 2 — Tool Integrations**
 - Build the tool registry (schema, permission level per tool) before adding individual tools
 - Calendar, email/Slack (work), Home Assistant (home automation bridge) — built as MCP servers where possible
-- Woodsportal-specific tools scoped to your CTO workflows
+- Portalapp-specific tools scoped to your CTO workflows
 - Define failure handling per tool (retry/fallback/surface-to-user)
 - Basic loop engineering: iteration caps, loop-detection, human checkpoint before guardrail-gated actions
 - Cost monitoring (basic daily spend log to start)

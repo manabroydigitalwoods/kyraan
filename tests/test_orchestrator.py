@@ -2047,3 +2047,32 @@ async def test_next_two_weeks_sweeps_instead_of_dead_ending(monkeypatch):
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
     ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events next 2 weeks")
     assert "About to DELETE 1 event(s)" in ask and "couldn't match" not in ask
+
+
+def test_pre_fix_review_log_entries_are_redacted_at_seed(tmp_path, monkeypatch):
+    """Security round 5, P1: chat.jsonl entries from before review-reply
+    redaction carry unapproved proposal bodies — seeding must recognize
+    the fixed templates and substitute placeholders, exactly like the
+    legacy email listings."""
+    import json as j
+    from kyraan.control_plane import logging_setup
+
+    log = tmp_path / "chat.jsonl"
+    log.write_text("\n".join([
+        j.dumps({"ts": "t", "chat_id": 83, "role": "assistant",
+                 "text": "Facts awaiting your review:\n1. A very private pending fact  (people/x.md)"}),
+        j.dumps({"ts": "t", "chat_id": 83, "role": "assistant",
+                 "text": "✅ Saved to memory: A very private approved fact"}),
+        j.dumps({"ts": "t", "chat_id": 83, "role": "assistant",
+                 "text": "Hello! How can I assist you today?"}),
+    ]))
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    orchestrator._history.pop(83, None)
+    orchestrator.seed_history_from_log()
+    block = orchestrator._history_block(83)
+    assert "private pending fact" not in block
+    assert "private approved fact" not in block
+    assert "[showed the pending-review list]" in block
+    assert "[applied the owner's review decisions]" in block
+    assert "Hello! How can I assist" in block
+    orchestrator._history.pop(83, None)

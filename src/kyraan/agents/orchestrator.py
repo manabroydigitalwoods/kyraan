@@ -172,12 +172,20 @@ def _anchor_clock_time(raw_text: str, when_iso: str) -> str:
     return corrected.isoformat()
 
 
-def _is_email_listing(text: str) -> bool:
-    """The two legacy email-reply templates (metadata listings written to
-    chat.jsonl before the cloud_text twin existed)."""
+def _legacy_cloud_placeholder(text: str) -> str | None:
+    """Pre-cloud_text log entries whose bodies must not re-enter
+    model-visible history at seed time (security rounds: email listings,
+    then round-5's catch — pending-review listings and decision receipts
+    written before their redaction existed)."""
     import re
-    return bool(re.search(r"You have about \d+ unread", text)
-                or "Latest unread:" in text)
+    if re.search(r"You have about \d+ unread", text) or "Latest unread:" in text:
+        return "[showed the unread email summary]"
+    if text.startswith("Facts awaiting your review:") or "Pending facts awaiting" in text:
+        return "[showed the pending-review list]"
+    if text.startswith("✅ Saved to memory:") or text.startswith("🗑 Rejected:") \
+            or "Saved to memory:" in text.split("\n")[0]:
+        return "[applied the owner's review decisions]"
+    return None
 
 
 def seed_history_from_log(max_per_chat: int = 40) -> None:
@@ -209,11 +217,12 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
             role = "assistant"
         if role in ("user", "assistant") and entry.get("text"):
             text = entry.get("cloud_text") or entry["text"]
-            if role == "assistant" and "cloud_text" not in entry and _is_email_listing(text):
-                # Pre-upgrade log entries carry the full listing with no
-                # cloud twin (review P1) — the templates are fixed, so
-                # legacy listings are recognized and redacted here.
-                text = "[showed the unread email summary]"
+            if role == "assistant" and "cloud_text" not in entry:
+                placeholder = _legacy_cloud_placeholder(text)
+                if placeholder:
+                    # Pre-upgrade entries carry full bodies with no cloud
+                    # twin — recognized by their fixed templates.
+                    text = placeholder
             per_chat[entry["chat_id"]].append((role, text))
     for chat_id, entries in per_chat.items():
         if not _history[chat_id]:  # never clobber a live conversation
