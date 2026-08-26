@@ -327,7 +327,7 @@ TOOLS = {
     },
     "tasks.schedule": {
         "params": '{"instruction": "<what to DO at that time, self-contained>", "when_iso": "<first run, ISO +05:30>", "repeat": "<omit|daily|weekdays|weekly|monthly>"}',
-        "about": "Schedule an instruction the assistant RUNS at that time with read-only tools (check calendar/email/home and report). Owner confirms creation. Use for 'every evening check X and tell me' — NOT for plain reminders.",
+        "about": "Schedule an instruction the assistant RUNS at that time with read-only tools (check calendar/email/home and report). Owner confirms creation. Use for 'every evening check X and tell me' — NOT for plain reminders. If today's occurrence of the stated time is still AHEAD, the first run is TODAY, not tomorrow.",
         "run": _task_schedule,
     },
     "tasks.list": {
@@ -400,7 +400,12 @@ doctrine, in order:
 3. NEED — what's missing? If a required detail only the user knows is
    missing, reply with ONE specific question. Never guess it. But a
    detail with a sensible default ("last few days" -> a tool's default
-   window) is NOT missing — use the default instead of asking.
+   window) is NOT missing — use the default instead of asking. And a
+   stated request IS the want: NEVER reply "do you want me to X?" when
+   the user just asked for X — even if they cancelled the same thing a
+   minute ago. For writes, the confirm gate is the question; asking
+   before it is asking the owner twice (seen live: a re-requested task
+   got "Do you want me to schedule it again?" instead of the ask).
 4. CAN — is it within the tools at all? If a listed tool answers the
    question, CALL IT NOW — never tell the user to rephrase or to "say"
    some phrase for something you can do yourself this turn (seen live:
