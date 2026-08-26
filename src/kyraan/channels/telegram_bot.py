@@ -372,7 +372,12 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         import time as _time
         _recent_photos[chat_id] = (image_bytes, _time.monotonic())
 
-        enroll_name = faces.enroll_request(caption)
+        # Either form: the strict phrase ("remember this face as X") or
+        # the natural one ("remember this is Suman Ghosh") — with the
+        # photo in the same message the intent is unambiguous, and the
+        # confirm gate still stands (seen live 2026-08-26 23:08: the
+        # natural caption described the photo instead of enrolling).
+        enroll_name = faces.enroll_request(caption) or faces.enroll_from_text(caption)
         if enroll_name is not None:
             # Biometric write → the standard confirm gate; the photo's
             # bytes stay captured in the handler for the owner's yes.

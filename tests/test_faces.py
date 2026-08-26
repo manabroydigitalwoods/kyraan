@@ -17,6 +17,17 @@ def test_enroll_caption_parsing():
     assert faces.enroll_request("remember this face as") is None
 
 
+def test_caption_accepts_the_natural_form_too():
+    """Live 2026-08-26 23:08: "remember this is Suman Ghosh" as a photo
+    caption described the photo instead of enrolling — the channel now
+    accepts either the strict or the natural form on a caption."""
+    caption = "remember this is Suman Ghosh"
+    assert faces.enroll_request(caption) is None            # strict form: no
+    assert faces.enroll_from_text(caption) == "Suman Ghosh"  # natural form: yes
+    # the channel ORs the two — this pins the pair staying compatible
+    assert (faces.enroll_request(caption) or faces.enroll_from_text(caption)) == "Suman Ghosh"
+
+
 def test_enroll_match_and_forget(monkeypatch):
     # embeddings faked — the matcher's math and storage are what's under test
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[1.0, 0.0, 0.0]])
