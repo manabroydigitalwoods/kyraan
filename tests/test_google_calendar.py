@@ -116,17 +116,17 @@ async def test_create_event_posts_the_right_payload(monkeypatch):
 
     result = await google_calendar.call(
         "calendar.create_event",
-        {"title": "Call Suman", "start": "2026-08-26T17:00:00+05:30",
+        {"title": "Call Rohan", "start": "2026-08-26T17:00:00+05:30",
          "end": "2026-08-26T18:00:00+05:30", "location": "Office"},
     )
     assert captured["auth"] == "Bearer tok123"
     assert captured["payload"] == {
-        "summary": "Call Suman",
+        "summary": "Call Rohan",
         "start": {"dateTime": "2026-08-26T17:00:00+05:30"},
         "end": {"dateTime": "2026-08-26T18:00:00+05:30"},
         "location": "Office",
     }
-    assert result == {"id": "ev1", "link": "https://cal/ev1", "title": "Call Suman"}
+    assert result == {"id": "ev1", "link": "https://cal/ev1", "title": "Call Rohan"}
 
 
 async def test_listing_exposes_api_event_ids(fixture_ics):

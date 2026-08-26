@@ -160,19 +160,22 @@ def _get_gemini_client(provider_cfg: dict):
 
 
 def _get_openai_compatible_client(provider: str, provider_cfg: dict):
-    if provider not in _openai_compatible_clients:
+    # The SHARED resolver decides the endpoint, and the cache key includes
+    # it — so a changed OLLAMA_BASE_URL can't leave routing pinned to a
+    # stale client while locality classification reads the new value
+    # (security round 4, P2).
+    base_url = resolve_base_url(provider, provider_cfg) or None
+    cache_key = (provider, base_url)
+    if cache_key not in _openai_compatible_clients:
         from openai import OpenAI
 
         api_key_env = provider_cfg.get("api_key_env")
         api_key = os.environ[api_key_env] if api_key_env else "not-needed"
-        base_url = provider_cfg.get("base_url")
-        if provider == "ollama":
-            base_url = os.environ.get("OLLAMA_BASE_URL") or base_url
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
-        _openai_compatible_clients[provider] = OpenAI(**kwargs)
-    return _openai_compatible_clients[provider]
+        _openai_compatible_clients[cache_key] = OpenAI(**kwargs)
+    return _openai_compatible_clients[cache_key]
 
 
 def resolve_base_url(provider_name: str, provider_cfg: dict) -> str:

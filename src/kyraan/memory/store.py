@@ -206,7 +206,7 @@ def load_pending_facts_filtered(max_chars: int = 1500) -> str:
 def load_pending_facts(max_chars: int = 1500) -> str:
     """Fact lines awaiting review — conversationally usable (the user
     stated them) while the live tree still requires the owner's promote.
-    Found live: "who is biren?" failed although the fact sat in the queue."""
+    Found live: "who is deven?" failed although the fact sat in the queue."""
     lines = []
     for proposal in sorted(PENDING_DIR.glob("*.md")):
         _, _, rest = proposal.read_text().partition("---\n")

@@ -148,12 +148,12 @@ async def test_cancel_with_multiple_pending_and_no_id_asks_instead_of_guessing(m
     _mock_normalize(monkeypatch, "reminders.cancel", "cancel my reminder")
     store = orchestrator.scheduler.store
     store.add(chat_id=0, text="call mom", when_iso="2099-01-01T10:00:00+00:00")
-    store.add(chat_id=0, text="call ruma", when_iso="2099-01-01T11:00:00+00:00")
+    store.add(chat_id=0, text="call mira", when_iso="2099-01-01T11:00:00+00:00")
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="cancel my reminder")
 
     assert "which should I cancel" in result
-    assert "call mom" in result and "call ruma" in result
+    assert "call mom" in result and "call mira" in result
     assert len(store.list_pending(0)) == 2  # nothing was deleted
 
 
@@ -171,12 +171,12 @@ async def test_cancel_with_single_pending_and_no_id_cancels_it(monkeypatch, isol
 async def test_cancel_by_id_picks_the_matching_reminder_not_the_first(monkeypatch, isolated_store):
     store = orchestrator.scheduler.store
     store.add(chat_id=0, text="call mom", when_iso="2099-01-01T10:00:00+00:00")
-    second = store.add(chat_id=0, text="call ruma", when_iso="2099-01-01T11:00:00+00:00")
+    second = store.add(chat_id=0, text="call mira", when_iso="2099-01-01T11:00:00+00:00")
     _mock_normalize(monkeypatch, "reminders.cancel", f"cancel {second.id[:8]}")
 
     result = await orchestrator.handle_message(chat_id=0, raw_text=f"cancel {second.id[:8]}")
 
-    assert 'Cancelled reminder: "call ruma"' in result
+    assert 'Cancelled reminder: "call mira"' in result
     assert [r.text for r in store.list_pending(0)] == ["call mom"]
 
 
@@ -472,33 +472,33 @@ async def test_qa_prompt_forbids_conflating_reminders_and_calendar_events(monkey
 async def test_duplicate_reminder_is_refused_with_the_existing_id(monkeypatch, isolated_store):
     """Found live: asking again after a reminder was already set created a
     second identical one — two pings for one intent."""
-    _mock_normalize(monkeypatch, "reminders.create", "remind me to call suman at 7pm")
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call rohan at 7pm")
     monkeypatch.setattr(
         orchestrator.router,
         "call",
-        lambda **kwargs: _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T19:00:00+05:30"}'),
+        lambda **kwargs: _FakeRouted(text='{"text": "call Rohan", "when_iso": "2099-01-01T19:00:00+05:30"}'),
     )
     orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
 
-    first = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 7pm")
+    first = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call rohan at 7pm")
     assert "Reminder set" in first
 
-    second = await orchestrator.handle_message(chat_id=0, raw_text="set a reminder to call suman at 7pm")
+    second = await orchestrator.handle_message(chat_id=0, raw_text="set a reminder to call rohan at 7pm")
     assert "Already set" in second and "didn't add a duplicate" in second
     assert len(orchestrator.scheduler.store.list_pending(0)) == 1
 
 
 async def test_same_text_at_a_different_time_is_not_a_duplicate(monkeypatch, isolated_store):
-    _mock_normalize(monkeypatch, "reminders.create", "remind me to call suman")
+    _mock_normalize(monkeypatch, "reminders.create", "remind me to call rohan")
     responses = iter([
-        _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T19:00:00+05:30"}'),
-        _FakeRouted(text='{"text": "call Suman", "when_iso": "2099-01-01T21:00:00+05:30"}'),
+        _FakeRouted(text='{"text": "call Rohan", "when_iso": "2099-01-01T19:00:00+05:30"}'),
+        _FakeRouted(text='{"text": "call Rohan", "when_iso": "2099-01-01T21:00:00+05:30"}'),
     ])
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: next(responses))
     orchestrator.scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
 
-    await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 7pm")
-    second = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call suman at 9pm too")
+    await orchestrator.handle_message(chat_id=0, raw_text="remind me to call rohan at 7pm")
+    second = await orchestrator.handle_message(chat_id=0, raw_text="remind me to call rohan at 9pm too")
     assert "Reminder set" in second
     assert len(orchestrator.scheduler.store.list_pending(0)) == 2
 
@@ -509,13 +509,13 @@ async def test_calendar_create_asks_then_creates_the_exact_confirmed_event(monke
     "yes" runs it with byte-identical args (extraction is NOT re-run)."""
     from kyraan.tools import registry as reg
 
-    _mock_normalize(monkeypatch, "calendar.create", "add call suman tomorrow 5pm to my calendar")
+    _mock_normalize(monkeypatch, "calendar.create", "add call rohan tomorrow 5pm to my calendar")
     extraction_calls = []
 
     def fake_call(prompt, system="", **kwargs):
         extraction_calls.append(prompt)
         return _FakeRouted(
-            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
+            text='{"title": "Call Rohan", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
         )
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
@@ -527,25 +527,25 @@ async def test_calendar_create_asks_then_creates_the_exact_confirmed_event(monke
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
 
-    ask = await orchestrator.handle_message(chat_id=0, raw_text="add call suman tomorrow 5pm to my calendar")
-    assert "About to create a calendar event" in ask and "Call Suman" in ask and "5:00 PM" in ask
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="add call rohan tomorrow 5pm to my calendar")
+    assert "About to create a calendar event" in ask and "Call Rohan" in ask and "5:00 PM" in ask
     assert dispatched == []  # nothing written before the yes
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert "Event created" in result and "https://cal/ev1" in result
     assert dispatched == [("calendar.create_event", {
-        "title": "Call Suman", "start": "2099-01-02T17:00:00+00:00", "end": "2099-01-02T18:00:00+00:00"})]
+        "title": "Call Rohan", "start": "2099-01-02T17:00:00+00:00", "end": "2099-01-02T18:00:00+00:00"})]
     assert len(extraction_calls) == 1  # confirm did NOT re-extract
 
 
 async def test_calendar_create_no_cancels_without_writing(monkeypatch):
     from kyraan.tools import registry as reg
 
-    _mock_normalize(monkeypatch, "calendar.create", "add call suman tomorrow 5pm to my calendar")
+    _mock_normalize(monkeypatch, "calendar.create", "add call rohan tomorrow 5pm to my calendar")
     monkeypatch.setattr(
         orchestrator.router, "call",
         lambda **kwargs: _FakeRouted(
-            text='{"title": "Call Suman", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
+            text='{"title": "Call Rohan", "start_iso": "2099-01-02T17:00:00+00:00", "end_iso": "2099-01-02T18:00:00+00:00", "location": null}'
         ),
     )
     dispatched = []
@@ -555,7 +555,7 @@ async def test_calendar_create_no_cancels_without_writing(monkeypatch):
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
 
-    await orchestrator.handle_message(chat_id=0, raw_text="add call suman tomorrow 5pm to my calendar")
+    await orchestrator.handle_message(chat_id=0, raw_text="add call rohan tomorrow 5pm to my calendar")
     result = await orchestrator.handle_message(chat_id=0, raw_text="no")
     assert "cancelled" in result.lower()
     assert dispatched == []
@@ -692,7 +692,7 @@ async def test_email_check_redacts_history_only_when_a_cloud_tier_is_active(monk
     async def fake_run_tool(call, **kwargs):
         assert call.tool_name == "email.unread"
         return {"unread_estimate": 3, "messages": [
-            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"},
+            {"from": '"Rohan Sen" <s@x.com>', "subject": "Invoice pending", "date": "d"},
             {"from": "noreply@bank.com", "subject": "Statement", "date": "d"},
         ]}
 
@@ -701,10 +701,10 @@ async def test_email_check_redacts_history_only_when_a_cloud_tier_is_active(monk
     monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
     result = await orchestrator.handle_message(chat_id=0, raw_text="any new emails?")
     assert "about 3 unread" in result
-    assert "Suman Das: Invoice pending" in result
+    assert "Rohan Sen: Invoice pending" in result
     assert "noreply@bank.com: Statement" in result
     history = orchestrator._history_block(0)
-    assert "Invoice pending" not in history and "Suman Das" not in history
+    assert "Invoice pending" not in history and "Rohan Sen" not in history
     assert "[showed the unread email summary]" in history
 
     monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: False)
@@ -745,8 +745,8 @@ async def test_unconverged_switch_reply_is_honest(monkeypatch):
 async def test_proactive_sends_enter_history(monkeypatch):
     """Seen live: 'Thanks for the reminder' got 'I didn't actually send
     you any reminders' — fire() bypassed history entirely."""
-    orchestrator.record_proactive(0, "Reminder: call Suman")
-    assert "assistant: Reminder: call Suman" in orchestrator._history_block(0)
+    orchestrator.record_proactive(0, "Reminder: call Rohan")
+    assert "assistant: Reminder: call Rohan" in orchestrator._history_block(0)
 
 
 async def test_open_email_request_states_the_body_boundary(monkeypatch):
@@ -1007,16 +1007,16 @@ async def test_typo_correction_rewrites_are_accepted(monkeypatch):
 
 async def test_pending_facts_reach_the_qa_prompt(monkeypatch):
     _mock_normalize(monkeypatch, "qa.answer")
-    monkeypatch.setattr(orchestrator.memory_store, "load_pending_facts", lambda **kwargs: "- His name is biren roy")
+    monkeypatch.setattr(orchestrator.memory_store, "load_pending_facts", lambda **kwargs: "- His name is deven rao")
     captured = {}
 
     def fake_call(prompt, system="", **kwargs):
         captured["system"] = system
-        return _FakeRouted(text="Deven Roy is your father (awaiting your review).")
+        return _FakeRouted(text="Deven Rao is your father (awaiting your review).")
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
-    await orchestrator.handle_message(chat_id=0, raw_text="who is biren?")
-    assert "- His name is biren roy" in captured["system"]
+    await orchestrator.handle_message(chat_id=0, raw_text="who is deven?")
+    assert "- His name is deven rao" in captured["system"]
     assert "awaiting the" in captured["system"]  # honest framing instruction
 
 
@@ -1186,7 +1186,7 @@ def test_thought_open_reads_message_shape_like_a_human():
     assert not orchestrator.thought_open("what is the plan?")
     assert not orchestrator.thought_open("hello")
     assert not orchestrator.thought_open("turn off the AC.")
-    assert not orchestrator.thought_open("today moring I have to go to siliguri")
+    assert not orchestrator.thought_open("today moring I have to go to nagpur")
 
 
 async def test_burst_superseded_when_a_fragment_lands_mid_planning(monkeypatch):
@@ -1209,7 +1209,7 @@ async def test_burst_superseded_when_a_fragment_lands_mid_planning(monkeypatch):
     monkeypatch.setattr(orchestrator, "handle_message", must_not_run)
     with pytest.raises(orchestrator.BurstSuperseded):
         await orchestrator.handle_burst(
-            1, ["today morning I have to go", "to siliguri"], superseded=event)
+            1, ["today morning I have to go", "to nagpur"], superseded=event)
 
 
 async def test_reminder_intent_without_remind_wording_is_demoted(monkeypatch):
@@ -1547,7 +1547,7 @@ def _seed_review_queue(monkeypatch, tmp_path):
     monkeypatch.setattr(mstore, "MEMORY_ROOT", memory_root)
     monkeypatch.setattr(mstore, "PENDING_DIR", pending)
     (pending / "a__people__father.md").write_text(
-        "---\ntarget: people/father.md\nsource_statement: 'x'\n---\n\n- Father's name is Tarun Roy\n")
+        "---\ntarget: people/father.md\nsource_statement: 'x'\n---\n\n- Father's name is Tarun Rao\n")
     (pending / "b__people__reminder.md").write_text(
         "---\ntarget: people/reminder.md\nsource_statement: 'y'\n---\n\n- User asked to call the plumber\n")
     return memory_root, pending
@@ -1570,13 +1570,13 @@ async def test_review_memory_lists_then_mixed_decision_promotes_and_rejects(monk
     orchestrator._pending_reviews.pop(0, None)
 
     listing = await orchestrator.handle_message(chat_id=0, raw_text="review memory")
-    assert "1. Father's name is Tarun Roy" in listing
+    assert "1. Father's name is Tarun Rao" in listing
     assert "2. User asked to call the plumber" in listing
 
     result = await orchestrator.handle_message(chat_id=0, raw_text="approve 1 reject 2")
-    assert "Saved to memory: Father's name is Tarun Roy" in result
+    assert "Saved to memory: Father's name is Tarun Rao" in result
     assert "Rejected: User asked to call the plumber" in result
-    assert "Tarun Roy" in (memory_root / "people" / "father.md").read_text()
+    assert "Tarun Rao" in (memory_root / "people" / "father.md").read_text()
     assert list(pending.glob("*.md")) == []  # queue drained
 
 
@@ -1613,7 +1613,7 @@ def test_review_decision_parser_boundaries():
 
 
 async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch, tmp_path):
-    """Seen live: 'save the kiaan age' produced no proposal and no
+    """Seen live: 'save the aarav age' produced no proposal and no
     acknowledgement of the failure. An explicit save must either queue a
     fact (📝 line) or admit it couldn't."""
     from kyraan.memory import store as mstore
@@ -1622,7 +1622,7 @@ async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch, tmp_path
     (memory_root / "pending_review").mkdir(parents=True)
     monkeypatch.setattr(mstore, "MEMORY_ROOT", memory_root)
     monkeypatch.setattr(mstore, "PENDING_DIR", memory_root / "pending_review")
-    _mock_normalize(monkeypatch, "qa.answer", "save the kiaan age")
+    _mock_normalize(monkeypatch, "qa.answer", "save the aarav age")
 
     async def fake_answer(chat_id, text):
         return "Okay."
@@ -1635,7 +1635,7 @@ async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch, tmp_path
 
     monkeypatch.setattr(orchestrator, "_answer", fake_answer)
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", empty_extraction)
-    result = await orchestrator.handle_message(chat_id=0, raw_text="save the kiaan age")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="save the aarav age")
     assert calls == [True]                      # the insist path was used
     assert "couldn't distill a durable fact" in result
 
@@ -1673,7 +1673,7 @@ async def test_explicit_save_of_an_already_queued_fact_points_to_review(monkeypa
     from kyraan.memory import store as mstore
 
     _seed_review_queue(monkeypatch, tmp_path)  # queue holds the Tarun fact
-    _mock_normalize(monkeypatch, "qa.answer", "you should save ganak name")
+    _mock_normalize(monkeypatch, "qa.answer", "you should save tarun name")
 
     async def fake_answer(chat_id, text):
         return "Okay."
@@ -1683,7 +1683,7 @@ async def test_explicit_save_of_an_already_queued_fact_points_to_review(monkeypa
 
     monkeypatch.setattr(orchestrator, "_answer", fake_answer)
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", empty_extraction)
-    result = await orchestrator.handle_message(chat_id=0, raw_text="you should save ganak name")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="you should save tarun name")
     assert "already in the review queue" in result
     assert "couldn't distill" not in result
 
@@ -1718,7 +1718,7 @@ async def test_email_redaction_survives_a_restart(monkeypatch):
 
     async def fake_run_tool(call, **kwargs):
         return {"unread_estimate": 1, "messages": [
-            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
+            {"from": '"Rohan Sen" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
 
     async def no_facts(raw_text, context="", insist=False):
         return []
@@ -1738,7 +1738,7 @@ async def test_email_redaction_survives_a_restart(monkeypatch):
     orchestrator._history.pop(88, None)
     orchestrator.seed_history_from_log()
     block = orchestrator._history_block(88)
-    assert "Invoice pending" not in block and "Suman Das" not in block
+    assert "Invoice pending" not in block and "Rohan Sen" not in block
     assert "email" in block.lower()                     # the placeholder survived
     orchestrator._history.pop(88, None)
 
@@ -1809,7 +1809,7 @@ def test_pre_upgrade_email_logs_are_redacted_at_seed_time(tmp_path, monkeypatch)
     log.write_text("\n".join([
         j.dumps({"ts": "t", "chat_id": 81, "role": "user", "text": "check emails"}),
         j.dumps({"ts": "t", "chat_id": 81, "role": "assistant",
-                 "text": "You have about 201 unread. Latest:\n- Suman Das: Invoice pending"}),
+                 "text": "You have about 201 unread. Latest:\n- Rohan Sen: Invoice pending"}),
         j.dumps({"ts": "t", "chat_id": 81, "role": "assistant",
                  "text": "Hello! How can I assist you today?"}),
     ]))
@@ -1817,7 +1817,7 @@ def test_pre_upgrade_email_logs_are_redacted_at_seed_time(tmp_path, monkeypatch)
     orchestrator._history.pop(81, None)
     orchestrator.seed_history_from_log()
     block = orchestrator._history_block(81)
-    assert "Invoice pending" not in block and "Suman Das" not in block
+    assert "Invoice pending" not in block and "Rohan Sen" not in block
     assert "[showed the unread email summary]" in block
     assert "Hello! How can I assist" in block   # ordinary replies untouched
     orchestrator._history.pop(81, None)

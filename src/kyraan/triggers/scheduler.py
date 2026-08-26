@@ -147,7 +147,7 @@ def _parse_when(when_iso: str) -> datetime:
         and now.utcoffset().total_seconds() != 0
     ):
         # Model wrote "...Z" while the user lives in a non-UTC timezone —
-        # seen live: "call suman at 7pm" came back 19:00:00.000Z, which
+        # seen live: "call rohan at 7pm" came back 19:00:00.000Z, which
         # would have fired at 00:30 local, 5.5h late. For a personal
         # assistant a stated clock time is always wall-clock in the user's
         # tz; a Z here is the model dropping the offset, not the user

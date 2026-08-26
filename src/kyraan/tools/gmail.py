@@ -1,6 +1,6 @@
 """Gmail adapter — tool #3, read-only METADATA by deliberate scope
 decision (2026-08-25): unread count + sender/subject/date lines, never
-message bodies. Owner's §3a resolution: work tools in, Woodsportal out —
+message bodies. Owner's §3a resolution: work tools in, Portalapp out —
 and the data boundary is enforced upstream too (the orchestrator keeps
 email summaries out of the conversation history that feeds cloud models).
 

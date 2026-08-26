@@ -105,14 +105,14 @@ def test_load_all_facts_reads_live_tree_only(isolated_memory):
 
 
 async def test_questions_never_reach_the_extraction_model(monkeypatch, isolated_memory):
-    """Seen live: "who is ruma?" produced a proposal despite the prompt's
+    """Seen live: "who is mira?" produced a proposal despite the prompt's
     never-extract-from-questions rule. Enforced in code now — a trailing
     question mark skips extraction entirely (no model call at all)."""
     def explode(**kwargs):
         raise AssertionError("model should not be called for a question")
 
     monkeypatch.setattr(router, "call", explode)
-    assert await extraction.propose_from_message("who is ruma?") == []
+    assert await extraction.propose_from_message("who is mira?") == []
     assert list(isolated_memory.glob("*")) == []
 
 
@@ -123,7 +123,7 @@ async def test_long_pastes_never_reach_extraction(monkeypatch, isolated_memory):
         raise AssertionError("model must not be called for a long paste")
 
     monkeypatch.setattr(router, "call", explode)
-    assert await extraction.propose_from_message("Mamata Banerjee " * 200) == []
+    assert await extraction.propose_from_message("A Famous Politician " * 200) == []
 
 
 async def test_fabricated_facts_sharing_no_words_are_dropped(monkeypatch, isolated_memory):
@@ -158,7 +158,7 @@ async def test_restating_a_known_fact_is_not_reproposed(monkeypatch, isolated_me
     are the dedup baseline."""
     live = store.MEMORY_ROOT / "people"
     live.mkdir()
-    (live / "ruma.md").write_text("- Wife's name is Mira\n")
+    (live / "mira.md").write_text("- Wife's name is Mira\n")
     _mock_model(monkeypatch, '{"facts": [{"path": "people/wife.md", "content": "- Wife\'s name is Mira"}]}')
 
     queued = await extraction.propose_from_message("my wife's name is Mira")
@@ -175,17 +175,17 @@ async def test_pending_proposals_also_count_as_known(monkeypatch, isolated_memor
 
 
 async def test_context_resolves_referents_into_self_contained_facts(monkeypatch, isolated_memory):
-    """'His name is biren roy' after a father question reached the queue
+    """'His name is deven rao' after a father question reached the queue
     unable to say who Deven was. With conversation context, the extractor
     produces a self-contained fact — and the fabrication guard accepts
     'Father' because the referent word comes from the context."""
-    _mock_model(monkeypatch, '{"facts": [{"path": "people/father.md", "content": "- Father\'s name is Deven Roy"}]}')
+    _mock_model(monkeypatch, '{"facts": [{"path": "people/father.md", "content": "- Father\'s name is Deven Rao"}]}')
 
     queued = await extraction.propose_from_message(
-        "His name is biren roy",
+        "His name is deven rao",
         context="user: Do you know my father?\nassistant: I don't know it yet.",
     )
-    assert queued == ["- Father's name is Deven Roy"]
+    assert queued == ["- Father's name is Deven Rao"]
 
 
 async def test_fabrication_guard_holds_even_with_context(monkeypatch, isolated_memory):
@@ -208,7 +208,7 @@ async def test_capitalized_category_paths_are_normalized(monkeypatch, isolated_m
 
 
 async def test_explicit_save_passes_insist_and_context_to_the_model(monkeypatch, tmp_path):
-    """'save the kiaan age' pointed at an earlier statement and extracted
+    """'save the aarav age' pointed at an earlier statement and extracted
     nothing, silently. An explicit save escalates: the prompt insists, and
     the referenced statement in context becomes legitimate material."""
     memory_root = tmp_path / "memory"
@@ -219,13 +219,13 @@ async def test_explicit_save_passes_insist_and_context_to_the_model(monkeypatch,
 
     def fake_call(prompt, system="", **kwargs):
         captured["system"] = system
-        class R: text = '{"facts": [{"path": "people/kiaan.md", "content": "- Son Aarav was born around October 2025"}]}'
+        class R: text = '{"facts": [{"path": "people/aarav.md", "content": "- Son Aarav was born around October 2025"}]}'
         return R()
 
     monkeypatch.setattr(extraction.router, "call", fake_call)
     queued = await extraction.propose_from_message(
-        "save the kiaan age",
-        context="user: kiaan is about 10months old\nassistant: Got it.",
+        "save the aarav age",
+        context="user: aarav is about 10months old\nassistant: Got it.",
         insist=True,
     )
     assert "EXPLICITLY asked to save" in captured["system"]

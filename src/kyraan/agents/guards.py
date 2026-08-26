@@ -34,7 +34,7 @@ def is_time_fragment(text: str) -> bool:
 # Words that cannot END a finished English thought (prepositions,
 # conjunctions, articles, bare auxiliaries) and words that START a message
 # which is really the continuation of the previous one ("to buy something"
-# after "I have to go to siliguri", seen live misread as a standalone
+# after "I have to go to nagpur", seen live misread as a standalone
 # request and turned into a junk reminder).
 _TRAILING_OPEN = {
     "to", "and", "or", "but", "the", "a", "an", "my", "your", "our", "his",

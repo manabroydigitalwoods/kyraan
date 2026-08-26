@@ -37,7 +37,7 @@ async def test_compose_shows_events_and_todays_reminders(isolated_store, fake_ca
          "end": f"{local_now().date()}T09:45:00+00:00", "all_day": False, "location": "Meet"}
     )
     today = local_now().replace(hour=23, minute=0, second=0, microsecond=0)
-    store.add(chat_id=1, text="call Suman", when_iso=today.isoformat())
+    store.add(chat_id=1, text="call Rohan", when_iso=today.isoformat())
     store.add(chat_id=1, text="far future", when_iso="2099-01-01T10:00:00+00:00")  # not today
     store.add(chat_id=2, text="someone else's", when_iso=today.isoformat())  # other chat
 
@@ -45,7 +45,7 @@ async def test_compose_shows_events_and_todays_reminders(isolated_store, fake_ca
 
     assert "Morning brief" in text
     assert "9:30 AM — Standup (Meet)" in text
-    assert "11:00 PM — call Suman" in text
+    assert "11:00 PM — call Rohan" in text
     assert "far future" not in text and "someone else's" not in text
 
 

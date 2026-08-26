@@ -18,7 +18,7 @@ def fake_gmail(monkeypatch):
         },
         "/messages/m1?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date": {
             "payload": {"headers": [
-                {"name": "From", "value": '"Suman Das" <suman@x.com>'},
+                {"name": "From", "value": '"Rohan Sen" <rohan@x.com>'},
                 {"name": "Subject", "value": "Invoice pending"},
                 {"name": "Date", "value": "Mon, 25 Aug 2026 18:00:00 +0530"},
             ]}
@@ -39,7 +39,7 @@ async def test_unread_returns_metadata_only(fake_gmail):
     result = await gmail.call("email.unread", {"limit": 2})
     assert result["unread_estimate"] == 7
     assert result["messages"][0] == {
-        "from": '"Suman Das" <suman@x.com>', "subject": "Invoice pending",
+        "from": '"Rohan Sen" <rohan@x.com>', "subject": "Invoice pending",
         "date": "Mon, 25 Aug 2026 18:00:00 +0530",
     }
     assert result["messages"][1]["subject"] == "(no subject)"

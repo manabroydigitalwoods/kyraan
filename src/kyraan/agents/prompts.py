@@ -110,8 +110,8 @@ Examples:
   -> {{"requests": ["remind me to call the plumber tomorrow at 9am"]}}
 - ["is the AC on?", "any new emails?"]
   -> {{"requests": ["is the AC on?", "any new emails?"]}}
-- ["today morning I have to go to siliguri", "to buy something", "very important"]
-  -> {{"requests": ["this morning I have to go to siliguri to buy something very important"]}}
+- ["today morning I have to go to nagpur", "to buy something", "very important"]
+  -> {{"requests": ["this morning I have to go to nagpur to buy something very important"]}}
   (fragments of one STATEMENT merge into that statement — a story stays a
   story, it never becomes a reminder or any other action)
 The messages, numbered:

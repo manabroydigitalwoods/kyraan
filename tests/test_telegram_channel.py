@@ -138,14 +138,14 @@ async def test_late_fragment_supersedes_the_draft(monkeypatch):
     monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
 
     loop = asyncio.get_event_loop()
-    first = loop.create_task(telegram_bot._on_message(make_update("today morning I have to go to siliguri"), ctx))
+    first = loop.create_task(telegram_bot._on_message(make_update("today morning I have to go to nagpur"), ctx))
     await asyncio.sleep(0.2)  # window closes; composition begins
     late = loop.create_task(telegram_bot._on_message(make_update("to buy something"), ctx))
     await asyncio.gather(first, late)
 
     # Retracted once, then re-planned with the whole thought, one reply.
-    assert calls[-1] == ["today morning I have to go to siliguri", "to buy something"]
-    assert replies == ["today morning I have to go to siliguri + to buy something"]
+    assert calls[-1] == ["today morning I have to go to nagpur", "to buy something"]
+    assert replies == ["today morning I have to go to nagpur + to buy something"]
 
 
 async def test_fragment_after_the_safe_point_starts_the_next_round(monkeypatch):

@@ -41,7 +41,7 @@ Respond with ONLY JSON:
 "flags": [], "supersedes": null}}]}}
 where <category> is one of: people, routines, work, preferences — and <slug>
 is lowercase letters, digits, and underscores (e.g. people/wife.md,
-work/woodsportal.md). Classify each fact:
+work/portalapp.md). Classify each fact:
 - term: "short" for situational facts that stop mattering in weeks (a trip,
   a temporary schedule); "long" for identity, relationships, preferences.
 - importance: "critical" ONLY for facts that could matter in an emergency
@@ -80,7 +80,7 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
     review. Returns the queued facts' content lines ([] when none), so the
     caller can tell the user what was noted."""
     # A question states nothing — enforced in code, not just in the prompt,
-    # because the model was seen proposing a "fact" from "who is ruma?"
+    # because the model was seen proposing a "fact" from "who is mira?"
     # live despite the instruction. Conservative by design: skipping a rare
     # fact-inside-a-question costs little; polluting review costs trust.
     if raw_text.rstrip().endswith("?"):
@@ -112,9 +112,9 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
         if context:
             # Referent resolution: "His name is Deven" right after a
             # question about the user's father must become a SELF-CONTAINED
-            # "- Father's name is Deven Roy" — the conversation supplies
+            # "- Father's name is Deven Rao" — the conversation supplies
             # the referent; facts are still extracted ONLY from the
-            # current message. (Live: a terse "His name is biren roy"
+            # current message. (Live: a terse "His name is deven rao"
             # reached the queue unable to say who Deven even was.)
             system += (
                 "\n\nRecent conversation — use it ONLY to resolve referents"
@@ -122,7 +122,7 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
                 " extract facts solely from the CURRENT message:\n" + context
             )
         if insist:
-            # The user EXPLICITLY asked to save ("save the kiaan age") —
+            # The user EXPLICITLY asked to save ("save the aarav age") —
             # a silent empty result here reads as a broken promise. The
             # save command may point at an earlier statement, so context
             # becomes legitimate fact material for this call only.

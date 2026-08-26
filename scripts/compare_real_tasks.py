@@ -37,13 +37,13 @@ EXTRACTIONS = [
     # llama live-failed this exact shape as a PAST time (walkthrough v3):
     ("remind me in 45 mins to check the geyser", _future),
     # the live "8pm became 20:49" and "9pm became 8:00 AM" family:
-    ("remind me at 8pm to call Suman", _clock(20)),
+    ("remind me at 8pm to call Rohan", _clock(20)),
     ("wake me tomorrow at 7am", _clock(7)),
 ]
 
 BURSTS = [
     ["hey hi", "how are you?", "let cehck tomorrow email", "lety me kow", "what is plan"],
-    ["today moring I have to go to siliguri", "to buy something", "very important"],
+    ["today moring I have to go to nagpur", "to buy something", "very important"],
     ["is the AC on?", "any new emails?"],
 ]
 

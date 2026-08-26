@@ -76,9 +76,13 @@ def main() -> None:
         text = re.sub(r"^GOOGLE_OAUTH_REFRESH_TOKEN=.*$", line, text, flags=re.M)
     else:
         text = text.rstrip("\n") + "\n" + line + "\n"
-    env_path.write_text(text)
-    os.chmod(env_path, 0o600)  # the refresh token is a credential — never
-                               # readable by other local accounts (security round 3)
+    # 0600 BEFORE the credential lands — a crash between write and chmod
+    # must never leave a readable window (security round 4)
+    if env_path.exists():
+        os.chmod(env_path, 0o600)
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(text)
     print("Refresh token saved to .env (permissions 0600) — restart the bot service:")
     print("  launchctl kickstart -k gui/$(id -u)/io.digitalwoods.kyraan")
 

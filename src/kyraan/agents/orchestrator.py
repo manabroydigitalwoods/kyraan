@@ -57,7 +57,7 @@ _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 # forgets the conversation, which is honest, and durable facts are the
 # memory tree's job, not this window's.
 _HISTORY_MAX_ENTRIES = 40  # 20 exchanges — 20 rolled out mid-session live
-                           # ("you never shared Mamata data" after 17 turns)
+                           # ("you never shared Fpol data" after 17 turns)
 _history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
 
 # Below this length a message can't state a durable fact ("yes", "hi",
@@ -88,8 +88,11 @@ AGENT_LOOP_ENABLED = True
 async def _review_memory(chat_id: int, text: str) -> str:
     # A queue command states no facts — running extraction on "yes save
     # it" appended a bogus couldn't-distill warning under the review list
-    # itself (live).
+    # itself (live). And the listing carries UNAPPROVED proposal bodies:
+    # history stores a placeholder so they never ride to the cloud on the
+    # next request (security round 4, P1).
     _skip_extraction.set(True)
+    _history_redaction.set("[showed the pending-review list]")
 
     async def handler(args: dict) -> str:
         proposals = _load_review_proposals()
@@ -276,7 +279,7 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
     ("" when nothing was). Extraction is best-effort: it must never break
     or replace the actual reply, so every failure is logged and swallowed.
 
-    Exception to the silence: an EXPLICIT save request ("save the kiaan
+    Exception to the silence: an EXPLICIT save request ("save the aarav
     age") that extracts nothing must say so — seen live: the save command
     dead-ended with 'Nothing is pending review' while the fact was never
     queued at all."""
@@ -292,7 +295,7 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
     if not queued:
         if explicit_save:
             # An empty result may mean DEDUP, not failure — live: "i said
-            # the age of kiaan, you shoul save" warned 'couldn't distill'
+            # the age of aarav, you shoul save" warned 'couldn't distill'
             # while the fact was sitting in the queue already. Check both
             # stores before claiming failure.
             content = {w.strip(".,!?'\"").lower() for w in raw_text.split() if len(w) > 3}
@@ -502,6 +505,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                             parts.append(f"{remaining} still pending — say \"review memory\" to see them.")
                         return "\n".join(parts) if parts else "Nothing changed."
 
+                    _history_redaction.set("[applied the owner's review decisions]")
                     return str(await kernel.run_skill(
                         SkillCall("memory.review", {"approve": approved_idx,
                                                     "reject": rejected_idx}, confirmed=True),
@@ -561,7 +565,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # Structured JSON intent classification needs more reliability than
         # the cheap tier's local 3B model consistently gives — verified
         # live (2026-08-25): the cheap tier misclassified a clear reminder
-        # request ("set reminder in 5mis 'Call to RUma'" got routed to
+        # request ("set reminder in 5mis 'Call to MIra'" got routed to
         # reminders.list) and missed simple questions like "what time is
         # it?"/"who are you?", while frontier (still free, via Groq) was
         # 14/14 correct across the same test set. Classification is a tiny,
@@ -1015,7 +1019,7 @@ async def _create_event(chat_id: int, text: str) -> str:
             args["location"] = str(location)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         log_event("event_extraction_failed", text=text, raw=extracted.text, error=str(exc))
-        return "I couldn't work out the event details — try e.g. \"add a meeting with Suman tomorrow 5pm to my calendar\"."
+        return "I couldn't work out the event details — try e.g. \"add a meeting with Rohan tomorrow 5pm to my calendar\"."
 
     # A fabricated or mistyped PAST event dies before the confirm ask —
     # walkthrough v3 (degraded mode): "book a flight to delhi" misrouted

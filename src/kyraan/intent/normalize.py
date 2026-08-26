@@ -50,9 +50,9 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   calendar event?" is a question about what Kyraan did — qa.answer, never
   calendar.list.
 - calendar.create: adding an event to the user's calendar. E.g. "add a
-  meeting with suman tomorrow 5pm to my calendar", "set an event in my
+  meeting with rohan tomorrow 5pm to my calendar", "set an event in my
   calendar", "put lunch with mom on the calendar friday 1pm". Details
-  given as a follow-up while adding an event ("call suman at 7pm" after
+  given as a follow-up while adding an event ("call rohan at 7pm" after
   being asked for the event name) are also calendar.create — fold the
   context in. A calendar EVENT is not a reminder: only an explicit
   reminder request ("remind me...") is reminders.create.
@@ -70,7 +70,7 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   E.g. "review memory", "review the pending facts", "what review you need
   still?", "reviewed and confirmed", "approve the pending facts", "confirm
   the facts you noted". Saving facts happens ONLY through this flow.
-  Asking what is ALREADY known/saved is different: "show me kiaan
+  Asking what is ALREADY known/saved is different: "show me aarav
   memories", "what do you know about my son?", "what have you saved about
   me?" are qa.answer — the saved facts are available to it directly.
 - home.query: asking about the home's smart devices or climate — state,
@@ -121,9 +121,9 @@ SELF-CONTAINED command with the context folded in. Examples:
   that at 9am" -> reminders.create, "remind me to call the plumber at 9am"
 - assistant offered an action; user says "go ahead" / "yes do it"
   -> the offered action's intent, normalized_text spelling that action out.
-- user said "today morning I have to go to siliguri"; next message "to buy
+- user said "today morning I have to go to nagpur"; next message "to buy
   something" -> qa.answer, normalized_text "this morning I have to go to
-  siliguri to buy something". A fragment CONTINUING A STATEMENT stays part
+  nagpur to buy something". A fragment CONTINUING A STATEMENT stays part
   of that statement — it NEVER becomes a reminder, event, or any action
   unless the user actually asked for one.
 - user said "I need help"; assistant asked what with; user says "on my

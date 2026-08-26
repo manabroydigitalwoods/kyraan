@@ -10,13 +10,13 @@ def test_migrate_backfills_from_tree_once():
     (store.MEMORY_ROOT / "people").mkdir(parents=True)
     (store.MEMORY_ROOT / "people" / "wife.md").write_text("- Wife's name is Mira\n")
     (store.MEMORY_ROOT / "work").mkdir()
-    (store.MEMORY_ROOT / "work" / "job.md").write_text("- CTO at Digitalwoods\n")
+    (store.MEMORY_ROOT / "work" / "job.md").write_text("- CTO at Acmeworks\n")
 
     assert engine.migrate_from_tree() == 2
     assert engine.migrate_from_tree() == 0  # second run: no-op
     entries = engine.active_entries()
     spheres = {e["content"]: e["sphere"] for e in entries}
-    assert spheres["CTO at Digitalwoods"] == "work"
+    assert spheres["CTO at Acmeworks"] == "work"
     assert spheres["Wife's name is Mira"] == "personal"
 
 
@@ -53,7 +53,7 @@ def test_relevance_ranks_matching_facts_into_a_tight_budget():
 
 def test_past_era_facts_rank_up_when_reaching_for_the_past():
     engine.add_fact("Used to work at TCS", "work/history.md", "s", era="past", sphere="work")
-    engine.add_fact("Currently CTO at Digitalwoods", "work/job.md", "s", sphere="work")
+    engine.add_fact("Currently CTO at Acmeworks", "work/job.md", "s", sphere="work")
     for i in range(20):
         engine.add_fact(f"Neutral fact {i} entirely unrelated", "preferences/x.md", "s")
 

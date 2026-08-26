@@ -39,10 +39,10 @@ def ollama_chat(model: str, system: str, prompt: str, max_tokens: int = 1024) ->
 
 _HELP_HISTORY = (
     "user: I need help\n"
-    "assistant: Of course! What do you need assistance with, Manab?"
+    "assistant: Of course! What do you need assistance with, Arun?"
 )
-_SILIGURI_HISTORY = (
-    "user: today moring I have to go to siliguri\n"
+_TRIP_HISTORY = (
+    "user: today moring I have to go to nagpur\n"
     "assistant: Got it — a Nagpur trip this morning."
 )
 _TIME_FAILED_HISTORY = (
@@ -54,13 +54,13 @@ _TIME_FAILED_HISTORY = (
 # (message, history, accepted intents) — a set because some readings are
 # legitimately ambiguous.
 CASES = [
-    ("set reminder in 5mis 'Call to RUma'", "", {"reminders.create"}),
+    ("set reminder in 5mis 'Call to MIra'", "", {"reminders.create"}),
     ("wat tym is it", "", {"qa.answer"}),
     ("who are you?", "", {"qa.answer"}),
     ("do I have any reminders?", "", {"reminders.list"}),
     ("cancel my reminder", "", {"reminders.cancel"}),
     ("any meetings tomorrow?", "", {"calendar.list"}),
-    ("add a meeting with suman tomorrow 5pm to my calendar", "", {"calendar.create"}),
+    ("add a meeting with rohan tomorrow 5pm to my calendar", "", {"calendar.create"}),
     ("any new emails?", "", {"email.check"}),
     ("is the AC on?", "", {"home.query"}),
     ("turn off the AC", "", {"home.control"}),
@@ -70,7 +70,7 @@ CASES = [
     ("how long has the AC been on?", "", {"home.query"}),
     # Live failures, with the conversation context production would have:
     ("on my smoke havite", _HELP_HISTORY, {"qa.answer"}),
-    ("to buy something", _SILIGURI_HISTORY, {"qa.answer"}),
+    ("to buy something", _TRIP_HISTORY, {"qa.answer"}),
     ("6pm", _TIME_FAILED_HISTORY, {"reminders.create"}),
     ("i'm smoking right now", "", {"qa.answer"}),
 ]

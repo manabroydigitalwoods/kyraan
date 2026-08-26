@@ -52,10 +52,10 @@ async def test_plain_conversation_replies_without_tools(scripted_model, monkeypa
         dispatched.append(spec.name)
 
     monkeypatch.setattr(reg, "dispatch", no_dispatch)
-    scripted_model(['{"action": "reply", "text": "Hello Manab! How can I help?"}'])
+    scripted_model(['{"action": "reply", "text": "Hello Arun! How can I help?"}'])
 
     reply = await agent_loop.run(90, "hello")
-    assert reply == "Hello Manab! How can I help?"
+    assert reply == "Hello Arun! How can I help?"
     assert dispatched == []
 
 
@@ -86,7 +86,7 @@ async def test_email_metadata_never_enters_a_cloud_prompt(scripted_model, monkey
     model prompt, and history stores a placeholder."""
     async def fake_dispatch(spec, args):
         return {"unread_estimate": 2, "messages": [
-            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
+            {"from": '"Rohan Sen" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
     monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
@@ -97,7 +97,7 @@ async def test_email_metadata_never_enters_a_cloud_prompt(scripted_model, monkey
     token = orchestrator._history_redaction.set(None)
     try:
         reply = await agent_loop.run(90, "any new emails?")
-        assert "Suman Das: Invoice pending" in reply       # the user sees it
+        assert "Rohan Sen: Invoice pending" in reply       # the user sees it
         assert all("Invoice" not in p for p in prompts)    # no model ever did
         assert orchestrator._history_redaction.get() == "[showed the email.unread result]"
     finally:
@@ -111,16 +111,16 @@ async def test_forgotten_facts_stay_forgotten_in_the_memory_block(monkeypatch, t
     from kyraan.memory import store as mstore
 
     (mstore.MEMORY_ROOT / "people").mkdir(parents=True, exist_ok=True)
-    (mstore.MEMORY_ROOT / "people" / "father.md").write_text("- Father's name is Deven Roy\n")
+    (mstore.MEMORY_ROOT / "people" / "father.md").write_text("- Father's name is Deven Rao\n")
 
     # No index yet: migration fallback may show the tree.
-    assert "Deven Roy" in agent_loop._memory_block("anything")
+    assert "Deven Rao" in agent_loop._memory_block("anything")
 
     engine.migrate_from_tree()
     fact_id = engine.active_entries()[0]["id"]
     engine.forget([fact_id])
     block = agent_loop._memory_block("who is my father?")
-    assert "Deven Roy" not in block                        # forgotten stays forgotten
+    assert "Deven Rao" not in block                        # forgotten stays forgotten
 
 
 async def test_kill_switch_blocks_the_whole_loop(monkeypatch):
@@ -306,7 +306,7 @@ async def test_memory_forget_confirms_the_exact_facts_then_deactivates(scripted_
     in the index as history."""
     from kyraan.memory import engine
 
-    engine.add_fact("Father's name is Deven Roy", "people/father.md", "s")
+    engine.add_fact("Father's name is Deven Rao", "people/father.md", "s")
     engine.add_fact("Wife's name is Mira", "people/wife.md", "s")
 
     async def no_facts(raw_text, context="", insist=False):
@@ -314,19 +314,19 @@ async def test_memory_forget_confirms_the_exact_facts_then_deactivates(scripted_
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
     scripted_model([
-        '{"action": "call", "tool": "memory.forget", "args": {"fact": "father Deven Roy"}}',
+        '{"action": "call", "tool": "memory.forget", "args": {"fact": "father Deven Rao"}}',
     ])
 
-    ask = await agent_loop.run(90, "forget the Deven Roy fact")
-    assert "About to FORGET" in ask and "Deven Roy" in ask
-    assert any(e["content"] == "Father's name is Deven Roy" for e in engine.active_entries())
+    ask = await agent_loop.run(90, "forget the Deven Rao fact")
+    assert "About to FORGET" in ask and "Deven Rao" in ask
+    assert any(e["content"] == "Father's name is Deven Rao" for e in engine.active_entries())
 
     result = await orchestrator.handle_message(chat_id=90, raw_text="yes")
-    assert "Forgotten" in result and "Deven Roy" in result
+    assert "Forgotten" in result and "Deven Rao" in result
     active = [e["content"] for e in engine.active_entries()]
-    assert "Father's name is Deven Roy" not in active
+    assert "Father's name is Deven Rao" not in active
     assert "Wife's name is Mira" in active          # unrelated fact untouched
-    assert any(e["content"] == "Father's name is Deven Roy" and not e["active"]
+    assert any(e["content"] == "Father's name is Deven Rao" and not e["active"]
                for e in engine._load())             # history, not deletion
 
 
@@ -583,7 +583,7 @@ def test_window_vocabulary_never_filters_titles():
 
     for w in ("feb", "February", "monday", "22nd", "2024", "3:30", "pm", "tonight"):
         assert guards.is_window_word(w), w
-    for w in ("yoga", "dentist", "board", "suman"):
+    for w in ("yoga", "dentist", "board", "rohan"):
         assert not guards.is_window_word(w), w
 
 
@@ -604,7 +604,7 @@ def test_round9_precision_fixes(monkeypatch):
     assert not guards.wants_email_body("any unread emails?")
     assert not guards.wants_email_body("show my unread mail")
     assert guards.wants_email_body("open the first email")
-    assert guards.wants_email_body("read the email from Suman")
+    assert guards.wants_email_body("read the email from Rohan")
     assert guards.wants_email_body("summarize the latest email")
 
 

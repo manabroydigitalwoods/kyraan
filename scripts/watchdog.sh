@@ -3,7 +3,7 @@
 # has a live PID for the bot; if not, alerts the owner on Telegram
 # directly via the Bot API (which works even with the bot process dead)
 # — at most once per hour. A dead assistant must announce itself.
-REPO="/Users/owneruser/workspace/kyraan2.0"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MARK="/tmp/kyraan_watchdog_alerted"
 export $(grep -E '^(TELEGRAM_BOT_TOKEN|TELEGRAM_OWNER_ID)=' "$REPO/.env" | xargs)
 pid=$(launchctl list | awk '$3 == "io.digitalwoods.kyraan" {print $1}')

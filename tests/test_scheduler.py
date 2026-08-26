@@ -131,7 +131,7 @@ async def test_fire_is_idempotent_against_duplicate_scheduling(isolated_store):
 
 
 def test_utc_offset_from_model_is_reinterpreted_as_local_wall_time(monkeypatch):
-    """Found live: "call suman at 7pm" extracted as 19:00:00.000Z — the
+    """Found live: "call rohan at 7pm" extracted as 19:00:00.000Z — the
     model dropped the +05:30 offset to Z, which would have fired at 00:30
     local, 5.5 hours late. A Z timestamp in a non-UTC KYRAAN_TIMEZONE is
     offset-dropping, not UTC intent: keep the wall time, fix the zone."""

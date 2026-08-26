@@ -27,8 +27,8 @@ def test_reject_discards_proposal():
 def test_same_second_same_target_proposals_do_not_collide():
     """External review P1: second-resolution filenames overwrote a second
     same-target fact from the same extraction."""
-    a = store.propose_fact("people/kiaan.md", "- Fact one", source="s")
-    b = store.propose_fact("people/kiaan.md", "- Fact two", source="s")
+    a = store.propose_fact("people/aarav.md", "- Fact one", source="s")
+    b = store.propose_fact("people/aarav.md", "- Fact two", source="s")
     assert a != b
     assert a.exists() and b.exists()
 

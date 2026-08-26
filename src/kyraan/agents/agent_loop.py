@@ -4,7 +4,7 @@ One frontier model sees the conversation, the owner's saved memory, and a
 menu of callable tools, then decides: call a tool (and see its result), or
 reply. This replaces classify-and-dispatch as the first path because the
 classifier architecture kept failing on questions no rule anticipated
-("are these latest emails?", "show me kiaan memories", "can you cancel") —
+("are these latest emails?", "show me aarav memories", "can you cancel") —
 each needed a hand-written rule; a reader with tools needs none.
 
 Safety is layered, not replaced:
@@ -271,7 +271,7 @@ TOOLS = {
         "run": _usage_report,
     },
     "memory.forget": {
-        "params": '{"fact": "<roughly the fact to forget, e.g. \'father Deven Roy\'>"}',
+        "params": '{"fact": "<roughly the fact to forget, e.g. \'father Deven Rao\'>"}',
         "about": "Forget a saved fact (deactivates it; kept as history). Matching is deterministic; the owner confirms the exact facts before anything is forgotten. For corrections prefer stating the new fact — supersession handles it.",
         "run": _memory_forget,
     },
@@ -312,7 +312,7 @@ _register_home_switches()
 # changes (time, facts, history, the message) rides in the prompt half,
 # AFTER the stable prefix. Nothing is trimmed — only ordered for the
 # discount. Do not move dynamic values in here.
-_AGENT_SYSTEM = """You are Kyraan, Manab's personal assistant, deciding how to
+_AGENT_SYSTEM = """You are Kyraan, the owner's personal assistant, deciding how to
 handle his latest message. The CONTEXT block in the request carries the
 current date/time (the user's own timezone — a stated clock time is always
 wall-clock in this zone), the owner-reviewed facts, and the conversation.

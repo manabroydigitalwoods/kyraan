@@ -50,6 +50,8 @@ def _append(path: Path, record: dict) -> None:
         import os
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            os.chmod(path.parent, 0o700)  # CLI/TUI entry points too, not
+                                          # just the bot's startup sweep
         except OSError:
             pass
     with path.open("a") as f:
