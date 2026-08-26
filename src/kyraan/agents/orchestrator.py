@@ -334,16 +334,28 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         import asyncio as _aio
 
         from kyraan.control_plane.logging_setup import stage as _stage
+        # Extraction is bookkeeping — it must never hold the reply
+        # hostage. Live 2026-08-27: a local-model reload made "ok
+        # that great" take 23s because extraction sat on the reply
+        # path. A slow turn skips extraction for ONE message.
+        # EXCEPT an explicit "remember/save this": there extraction IS
+        # the request — a 6s cutoff silently swallowed it during cold
+        # model reloads (Bugbot P1), so it waits out a full Ollama
+        # reload, and if even that expires it says so instead of
+        # pretending the fact was noted.
+        explicit_save = any(w in raw_text.lower() for w in _SAVE_WORDS)
         try:
-            # Extraction is bookkeeping — it must never hold the reply
-            # hostage. Live 2026-08-27: a local-model reload made "ok
-            # that great" take 23s because extraction sat on the reply
-            # path. A slow turn skips extraction for ONE message.
             with _stage("extraction"):
-                reply += await _aio.wait_for(_extraction_note(chat_id, raw_text),
-                                             timeout=6)
+                reply += await _aio.wait_for(
+                    _extraction_note(chat_id, raw_text),
+                    timeout=45 if explicit_save else 6)
         except _aio.TimeoutError:
-            log_event("extraction_skipped_slow", chat_id=chat_id)
+            log_event("extraction_skipped_slow", chat_id=chat_id,
+                      explicit_save=explicit_save)
+            if explicit_save:
+                reply += ("\n\n(I couldn't queue that for memory just now — "
+                          "the local model is too slow to respond. Nothing "
+                          "was saved; tell me again in a minute.)")
     _skip_extraction.reset(skip_token)
     quota_warning = router.quota_alert_due()
     if quota_warning:

@@ -480,6 +480,10 @@ async def test_first_voice_note_waits_for_the_probe(monkeypatch):
 
     monkeypatch.setattr(voice, "_native_probe", None)
     monkeypatch.setattr(voice, "_probe_thread", None)
+    # CI has no mlx_whisper package: without this, find_spec returns None
+    # and both calls bail before ever reaching the mocked probe
+    import importlib.util
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n: object())
 
     def slow_ok():
         _time.sleep(0.2)
@@ -499,3 +503,81 @@ async def test_first_voice_note_waits_for_the_probe(monkeypatch):
 
     monkeypatch.setattr(voice, "_run_probe", slow_bad)
     assert await voice.wait_available() is False
+
+
+# --- P1/P2 round 3: explicit saves wait, same-day phase, stage depth -------
+
+def test_same_day_windowed_catchup_keeps_the_records_phase(monkeypatch):
+    """A 50-min 10:00-21:00 series whose next slot was 10:30 must resume
+    on :30-phase slots after a short same-day outage — re-anchoring to
+    window_start shifted the phase (Bugbot P2 round 3). Rollover-day
+    catch-up still re-anchors at window_start, as a real rollover does."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+    from kyraan.control_plane.dnd import local_now as real_now
+
+    tz = real_now().tzinfo
+    fake_now = datetime(2026, 9, 1, 11, 0, tzinfo=tz)
+    monkeypatch.setattr(scheduler, "local_now", lambda: fake_now)
+    same_day = Reminder(id="p1", chat_id=1, text="water",
+                        when_iso="2026-09-01T10:30:00+00:00",
+                        repeat="interval", interval_minutes=50,
+                        window_start="10:00", window_end="21:00")
+    nxt = scheduler.advance_past_now(same_day)
+    assert (nxt.hour, nxt.minute) == (11, 20)   # 10:30 + 50, not the 10:00 grid
+
+
+async def test_explicit_save_survives_a_slow_local_model(monkeypatch):
+    """'remember X' with a cold local model: the 6s bookkeeping timeout
+    silently cancelled the user's actual request (Bugbot P1). An explicit
+    save waits longer, and a timeout is now HONEST, never silent."""
+    import asyncio
+    from kyraan.agents import orchestrator
+
+    async def instant_dispatch(chat_id, raw_text):
+        return "Okay."
+
+    monkeypatch.setattr(orchestrator, "_dispatch", instant_dispatch)
+
+    async def slow_note(chat_id, raw_text):
+        await asyncio.sleep(8)          # slower than the implicit 6s cutoff
+        return "\n\n📝 Noted for review: sister works at the hospital."
+
+    monkeypatch.setattr(orchestrator, "_extraction_note", slow_note)
+    reply = await orchestrator.handle_message(1, "remember that my sister works at the hospital")
+    assert "Noted for review" in reply   # waited past 6s instead of cancelling
+
+    async def never_note(chat_id, raw_text):
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(orchestrator, "_extraction_note", never_note)
+    monkeypatch.setattr(orchestrator, "_SAVE_WORDS", orchestrator._SAVE_WORDS)
+    # shrink the explicit ceiling so the test doesn't wait 45s for the
+    # honesty path — the property is the message, not the exact number
+    real_wait_for = asyncio.wait_for
+
+    async def tiny_ceiling(awaitable, timeout):
+        return await real_wait_for(awaitable, timeout=0.05)
+
+    monkeypatch.setattr(asyncio, "wait_for", tiny_ceiling)
+    reply = await orchestrator.handle_message(1, "remember that my sister works at the hospital")
+    assert "Nothing was saved" in reply  # honest, not silent
+
+
+def test_nested_stages_do_not_double_count():
+    """The extraction stage CONTAINS its model calls: nested stage
+    records carry depth>0 so trace math counts only top-level time
+    (Bugbot P2: percentages exceeded 100%)."""
+    from kyraan.control_plane import logging_setup as ls
+
+    ls.new_turn()
+    with ls.stage("outer"):
+        with ls.stage("inner"):
+            pass
+        ls.record_stage("model:test", 5.0)
+    ls.record_stage("model:toplevel", 3.0)
+    stages = {s["stage"]: s["depth"] for s in ls.turn_summary()["stages"]}
+    assert stages["outer"] == 0
+    assert stages["inner"] == 1
+    assert stages["model:test"] == 1     # direct record inside the block
+    assert stages["model:toplevel"] == 0

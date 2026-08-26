@@ -265,18 +265,30 @@ def advance_past_now(record) -> "datetime":
             from datetime import time as _time
             sh, sm = (int(x) for x in record.window_start.split(":"))
             eh, em = (int(x) for x in record.window_end.split(":"))
-            anchor = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            # Normalize to the LOCAL zone: the window ("10:00-21:00") is
+            # wall-clock local, so date equality and the end-of-window
+            # time() check are only meaningful there — a record stored
+            # with a different offset kept its own zone through the
+            # arithmetic and compared 17:10 against a 21:00 window.
+            base = _parse_when(record.when_iso).astimezone(now.tzinfo)
+            ws_today = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
+            # SAME-DAY catch-up keeps the record's OWN phase: a series
+            # whose next slot was 10:30 stays on :30 slots today —
+            # re-anchoring to window_start shifted the phase for a mere
+            # minutes-long outage (Bugbot P2 round 3). The window_start
+            # re-anchor is only what a real day ROLLOVER does.
+            anchor = base if base.date() == now.date() else ws_today
             if now < anchor:
                 next_when = anchor
             else:
                 k = (now - anchor) // step + 1
                 next_when = anchor + step * k
-                if (next_when.date() != now.date()
-                        or next_when.time() > _time(eh, em)):
-                    # past today's last slot (including a grid step that
-                    # crossed midnight) -> tomorrow's window start
-                    next_when = anchor + timedelta(days=1)
                 skipped += k
+            if (next_when.date() != now.date()
+                    or next_when.time() > _time(eh, em)):
+                # past today's last slot (including a grid step that
+                # crossed midnight) -> tomorrow's window start
+                next_when = ws_today + timedelta(days=1)
         else:
             k = (now - next_when) // step + 1
             # The FINAL step goes through advance_for so any future rule

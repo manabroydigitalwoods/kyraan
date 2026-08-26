@@ -442,7 +442,14 @@ async def test_voice_note_becomes_text_in_the_normal_pipeline(monkeypatch):
 
     monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
     monkeypatch.setattr(telegram_bot, "_BURST_WINDOW_S", 0.05)
-    monkeypatch.setattr(voice, "available", lambda: True)
+
+    async def probe_ok(timeout: float = 90.0):
+        return True
+
+    # the handler's seam is wait_available — patching available() left
+    # the real probe running, which only passed on machines WITH mlx
+    # installed (the CI red)
+    monkeypatch.setattr(voice, "wait_available", probe_ok)
 
     async def fake_transcribe(path):
         return "remind me to call Rohan tomorrow at nine am"

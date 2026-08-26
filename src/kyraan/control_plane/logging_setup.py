@@ -30,6 +30,12 @@ _turn_id: contextvars.ContextVar = contextvars.ContextVar("turn_id", default=Non
 
 _turn_stages: contextvars.ContextVar = contextvars.ContextVar("turn_stages", default=None)
 
+# How many `with stage(...)` blocks enclose the current code. Stamped on
+# every stage record so consumers can tell a top-level step from work
+# nested inside another timed step — summing a flat list double-counted
+# (the extraction stage CONTAINS its model calls; trace.py showed >100%).
+_stage_depth: contextvars.ContextVar = contextvars.ContextVar("stage_depth", default=0)
+
 
 def new_turn() -> str:
     """Open a turn: returns the id now stamped on this task's events."""
@@ -48,7 +54,8 @@ def record_stage(name: str, ms: float, **fields) -> None:
     tool runs, photo downloads, face matching, geocoding, extraction.
     Collected for the turn_end summary AND written as a trace record, so
     'which step was slow?' is answerable per turn from the log alone."""
-    entry = {"stage": name, "ms": round(ms), **fields}
+    entry = {"stage": name, "ms": round(ms), "depth": _stage_depth.get(),
+             **fields}
     stages = _turn_stages.get()
     if stages is not None:
         stages.append(entry)
@@ -65,10 +72,14 @@ class stage:
     def __enter__(self):
         import time as _t
         self._t0 = _t.monotonic()
+        self._depth_token = _stage_depth.set(_stage_depth.get() + 1)
         return self
 
     def __exit__(self, *exc):
         import time as _t
+        # reset FIRST so this stage records at its own level, with only
+        # the work inside it counted one level deeper
+        _stage_depth.reset(self._depth_token)
         record_stage(self.name, (_t.monotonic() - self._t0) * 1000, **self.fields)
         return False
 

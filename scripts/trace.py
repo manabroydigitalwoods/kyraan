@@ -83,11 +83,22 @@ def main() -> None:
             if stages and r.get("total_ms"):
                 total = r["total_ms"]
                 print("            —— timing ——")
-                for s in sorted(stages, key=lambda x: -x.get("ms", 0)):
+                # Only TOP-LEVEL stages participate in percentages and
+                # the accounted sum — a nested stage's time is already
+                # inside its parent (the extraction stage contains its
+                # model calls; summing the flat list showed >100%).
+                # Nested stages print indented, for detail not for math.
+                top = [s for s in stages if s.get("depth", 0) == 0]
+                nested = [s for s in stages if s.get("depth", 0) > 0]
+                for s in sorted(top, key=lambda x: -x.get("ms", 0)):
                     pct = s.get("ms", 0) * 100 // max(total, 1)
                     extra = s.get("provider") or ""
                     print(f"            {s.get('ms', 0):>7}ms {pct:>3}%  {s.get('stage')} {extra}")
-                accounted = sum(s.get("ms", 0) for s in stages)
+                for s in sorted(nested, key=lambda x: -x.get("ms", 0)):
+                    indent = "  " * s.get("depth", 1)
+                    extra = s.get("provider") or ""
+                    print(f"            {s.get('ms', 0):>7}ms   ·  {indent}{s.get('stage')} {extra}")
+                accounted = sum(s.get("ms", 0) for s in top)
                 print(f"            {max(total - accounted, 0):>7}ms {max(total - accounted, 0) * 100 // max(total, 1):>3}%  (transport/overhead)")
         elif kind in ("model_call", "tool_retry"):
             continue  # detail already shown via model_io / final result
