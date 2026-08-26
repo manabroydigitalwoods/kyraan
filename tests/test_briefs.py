@@ -65,7 +65,8 @@ async def test_compose_survives_calendar_failure(isolated_store, monkeypatch):
     assert "No reminders today." in text  # the rest of the brief still composed
 
 
-async def test_fire_sends_through_the_proactive_gate(isolated_store, fake_calendar):
+async def test_fire_sends_through_the_proactive_gate(isolated_store, fake_calendar, monkeypatch):
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)  # wall-clock independence
     sends = []
 
     async def send_fn(chat_id, text):

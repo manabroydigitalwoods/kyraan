@@ -60,6 +60,16 @@ HONESTY RULES, absolute:
 - If a request maps to a live capability but landed here by mistake,
   suggest the phrasing that works ("what's on my calendar today", "is the
   AC on?", "any new emails?") instead of denying the capability.
+- NEVER say "let me check", "I'll check", "checking now", or any promise
+  of an action — you cannot run anything from inside this answer. Either
+  the information is already in the conversation below (use it), or tell
+  the user the exact phrase to send ("say 'check emails'"). A promise
+  with no action behind it is a lie.
+- If the user refers to something you supposedly showed ("are those the
+  latest emails?") and it is NOT in the conversation below, say you don't
+  see it in the current conversation and offer the phrase to fetch it
+  fresh — never pass judgment ("no, those aren't the latest") on
+  something you cannot see.
 
 When the user asks you to CREATE something — a song, poem, story, message,
 code — ask at most ONE clarifying question, then create it. "anything",
@@ -186,12 +196,20 @@ def _cloud_tier_in_use() -> bool:
 # pointing back at the previous reply.
 _META_STARTERS = ("are", "is", "was", "were", "do", "does", "did", "really", "so")
 _META_DEMONSTRATIVES = {"these", "this", "that", "those", "it", "they", "them"}
+# "these emails are already shared by u" — a repetition COMPLAINT, same
+# family: the user is talking about the previous reply, not requesting it.
+_META_COMPLAINT_MARKERS = {"already", "again", "repeating", "repeated"}
+_META_YOU = {"you", "u", "shared", "showed", "said", "told", "sent", "gave"}
 
 
 def _is_meta_question(text: str) -> bool:
     words = [w.strip(".,!?\"'").lower() for w in text.split()]
     words = [w for w in words if w]
-    return bool(words) and words[0] in _META_STARTERS and bool(set(words) & _META_DEMONSTRATIVES)
+    if not words:
+        return False
+    if words[0] in _META_STARTERS and set(words) & _META_DEMONSTRATIVES:
+        return True
+    return bool(set(words) & _META_COMPLAINT_MARKERS) and bool(set(words) & _META_YOU)
 
 
 # The exact last reply each chat received (unredacted — _history may hold
@@ -204,8 +222,13 @@ async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) ->
     identical to the previous reply, triggered by a meta-question, means
     the classifier re-ran a tool the user was asking ABOUT — answer the
     question instead."""
-    last = _last_sent_reply.get(chat_id, "")
-    if reply.strip() and reply.strip() == last.strip() and _is_meta_question(raw_text):
+    last = _last_sent_reply.get(chat_id, "").strip()
+    # Containment, not equality: the re-run reply may carry a prefix (the
+    # wants-body boundary line) around the same listing — live: "these
+    # emails are already shared by u" got the boundary text PLUS the same
+    # five emails again.
+    same = bool(last) and reply.strip() and (reply.strip() in last or last in reply.strip())
+    if same and _is_meta_question(raw_text):
         log_event("meta_question_rerouted", chat_id=chat_id, intent=intent, text=raw_text)
         return await _answer(chat_id, raw_text)
     return reply
@@ -277,6 +300,41 @@ def _anchor_clock_time(raw_text: str, when_iso: str) -> str:
     log_event("clock_time_anchored", stated=f"{hh}:{mm or '00'}{ap}", model_gave=when_iso,
               corrected=corrected.isoformat())
     return corrected.isoformat()
+
+
+def seed_history_from_log(max_per_chat: int = 40) -> None:
+    """Rebuild in-memory conversation history from chat.jsonl at startup.
+
+    Found live 2026-08-26: five minutes after a service restart, 'are
+    those the latest emails?' got a fabricated 'No, those are not the
+    latest' — the restart had wiped _history, so qa was judging a listing
+    it could not see. The log on disk has the whole conversation; a
+    restart should be invisible to the user."""
+    from kyraan.control_plane import logging_setup
+
+    path = logging_setup.CHAT_LOG
+    if not path.exists():
+        return
+    per_chat: dict = defaultdict(list)
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError as exc:
+        log_event("history_seed_failed", error=str(exc))
+        return
+    for line in lines[-2000:]:
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        role = entry.get("role")
+        if role == "proactive":
+            role = "assistant"
+        if role in ("user", "assistant") and entry.get("text"):
+            per_chat[entry["chat_id"]].append((role, entry["text"]))
+    for chat_id, entries in per_chat.items():
+        if not _history[chat_id]:  # never clobber a live conversation
+            _history[chat_id].extend(entries[-max_per_chat:])
+    log_event("history_seeded", chats=len(per_chat))
 
 
 def record_proactive(chat_id: int, text: str) -> None:

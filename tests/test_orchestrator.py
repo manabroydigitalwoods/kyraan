@@ -1439,3 +1439,57 @@ async def test_meta_question_about_a_listing_answers_instead_of_reprinting(monke
     _mock_normalize(monkeypatch, "email.check", "check emails")
     result = await orchestrator.handle_message(chat_id=61, raw_text="check emails")
     assert result.startswith("You have about 201 unread")
+
+
+def test_history_seeds_from_chat_log_after_restart(tmp_path, monkeypatch):
+    """Restart amnesia, seen live: 5 minutes after a service restart,
+    'are those the latest emails?' was judged against an EMPTY history
+    and got a fabricated 'No'. The disk log is the source of truth."""
+    import json as j
+    from kyraan.control_plane import logging_setup
+
+    log = tmp_path / "chat.jsonl"
+    entries = [
+        {"ts": "t", "chat_id": 71, "role": "user", "text": "check emails"},
+        {"ts": "t", "chat_id": 71, "role": "assistant", "text": "Latest: A, B, C"},
+        {"ts": "t", "chat_id": 71, "role": "proactive", "text": "Reminder: call the plumber"},
+        {"ts": "t", "chat_id": 72, "role": "user", "text": "other chat"},
+    ]
+    log.write_text("\n".join(j.dumps(e) for e in entries))
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    orchestrator._history.pop(71, None)
+    orchestrator._history.pop(72, None)
+
+    orchestrator.seed_history_from_log()
+    block = orchestrator._history_block(71)
+    assert "Latest: A, B, C" in block                 # the listing survives restart
+    assert "call the plumber" in block                # proactive sends count as assistant
+    assert "other chat" not in block                  # per-chat isolation
+    orchestrator._history.pop(71, None)
+    orchestrator._history.pop(72, None)
+
+
+def test_seed_never_clobbers_a_live_conversation(tmp_path, monkeypatch):
+    import json as j
+    from kyraan.control_plane import logging_setup
+
+    log = tmp_path / "chat.jsonl"
+    log.write_text(j.dumps({"ts": "t", "chat_id": 73, "role": "user", "text": "old stuff"}))
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    orchestrator._history.pop(73, None)
+    orchestrator._history[73].append(("user", "live message"))
+
+    orchestrator.seed_history_from_log()
+    block = orchestrator._history_block(73)
+    assert "live message" in block and "old stuff" not in block
+    orchestrator._history.pop(73, None)
+
+
+def test_meta_detection_covers_complaints_and_questions():
+    assert orchestrator._is_meta_question("are these latest emails")
+    assert orchestrator._is_meta_question("is that all?")
+    assert orchestrator._is_meta_question("these emails are already shared by u")
+    assert orchestrator._is_meta_question("you showed this again")
+    assert not orchestrator._is_meta_question("check emails")
+    assert not orchestrator._is_meta_question("any new emails?")
+    assert not orchestrator._is_meta_question("cancel all events today")

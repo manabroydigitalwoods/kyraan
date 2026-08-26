@@ -237,6 +237,10 @@ def run() -> None:
 
     _wire_scheduler(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
+    # A restart must be invisible to the owner: reload the conversation
+    # from chat.jsonl so follow-ups ("are those the latest emails?") still
+    # have their context.
+    orchestrator.seed_history_from_log()
 
     logger.info("Kyraan Telegram bot starting (owner-only, Phase 1)")
     app.run_polling()

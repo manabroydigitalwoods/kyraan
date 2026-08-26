@@ -23,6 +23,15 @@ def test_parse_when_attaches_local_tz_if_naive():
     assert parsed.utcoffset() == timezone.utc.utcoffset(None)
 
 
+@pytest.fixture(autouse=True)
+def _dnd_gate_open(monkeypatch):
+    """fire() consults the real quiet-hours gate — without pinning it these
+    tests fail whenever the suite runs between 22:00 and 07:00 UTC (found
+    live at 04:00 UTC). DND behavior itself is covered in test_dnd.py."""
+    from kyraan.control_plane import kernel
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+
+
 @pytest.fixture
 def isolated_store(monkeypatch, tmp_path):
     """store.py uses a fixed real path (data/reminders.json) with no

@@ -71,7 +71,9 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
 - incomplete: the message is a FRAGMENT that starts a thought but isn't a
   complete request yet — a bare time or place ("tomorrow morning", "at 9",
   "after lunch"), a dangling noun — AND nothing in the recent conversation
-  makes it a follow-up that completes an earlier exchange. The user is
+  makes it a follow-up that completes an earlier exchange. A GREETING
+  ("hey", "hi", "hello", "yo", "hallo") is NEVER incomplete — it's a
+  complete social move that deserves a greeting back: qa.answer. The user is
   mid-thought; more is coming. (If the conversation makes the fragment a
   real follow-up — "the call mom one" after a which-reminder question,
   "6pm" after a failed time — classify it as that continued intent
@@ -83,7 +85,9 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   previous reply is ALWAYS qa.answer, never a re-run of the tool that
   produced it: after an email listing, "are these latest emails?" is
   qa.answer (the user is asking about the list, not asking to fetch it
-  again); after a calendar listing, "is that all?" is qa.answer.
+  again); after a calendar listing, "is that all?" is qa.answer. A
+  COMPLAINT about the previous reply is also qa.answer: "these emails are
+  already shared by u" means "you repeated yourself" — never email.check.
 - unknown: only for input so garbled or empty that even "have a conversation"
   doesn't apply.
 Handle typos, slang, and shorthand. Respond with ONLY a JSON object:
