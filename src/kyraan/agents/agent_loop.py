@@ -40,7 +40,11 @@ _DEFLECTION_RE = re.compile(
     # "if you want, I can list them — just say 'list reminders'": telling
     # the user to issue another command for something a tool does right
     # now is homework, not help (seen live 2026-08-26 18:30).
-    r"|if you want,? i can"
+    # Anchored: an OPENING offer answers nothing, but an offer after real
+    # content is a normal reply — unanchored, this pattern killed a good
+    # correction-acknowledgment and forced a hallucinated non-sequitur
+    # (the Amazon Pay incident, 2026-08-26 23:04).
+    r"|\Aif you want,? i can"
     r"|just say [\"'“‘]"
     # Asking a person for coordinates or a pin when they already NAMED a
     # place is homework — geocoders resolve landmarks ("City Center Mall,
@@ -953,7 +957,10 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
                     "say another command for something your tools answer "
                     "right now — call the tool and include the answer. Keep "
                     "a permission question ONLY if you are proposing "
-                    "something the user never asked for. Decide again.")
+                    "something the user never asked for. And if the user's "
+                    "message was a STATEMENT or correction with nothing to "
+                    "do, a brief acknowledgment IS the right reply — never "
+                    "answer a question they didn't ask instead. Decide again.")
                 continue
             if executed_tool:
                 # This turn was a command (a tool ran) — commands are

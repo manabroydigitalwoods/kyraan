@@ -934,6 +934,13 @@ async def test_menu_question_opening_counts_as_deflection(scripted_model, monkey
     # trailing question after real content does NOT match the guard
     assert agent_loop._DEFLECTION_RE.search(
         "Your task: 8 PM daily calendar check. What would you like to do next?") is None
+    # a mid-reply offer after real content stands too — unanchored, this
+    # pattern killed a good correction-acknowledgment and cornered the
+    # model into a hallucinated non-sequitur (Amazon Pay, 2026-08-26)
+    assert agent_loop._DEFLECTION_RE.search(
+        "Got it — that's Avik, not Kiaan. If you want, I can re-enroll the face.") is None
+    assert agent_loop._DEFLECTION_RE.search(
+        "If you want, I can list them — just say 'list reminders'") is not None  # opener still caught
 
 
 async def test_short_interval_asks_with_the_volume_math_then_creates(
