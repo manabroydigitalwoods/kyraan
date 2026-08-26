@@ -42,7 +42,7 @@ _ENROLL_RE = re.compile(
 
 
 _NAMING_RE = re.compile(
-    r"^\s*this\s+(?:is\s+)?([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$",
+    r"^\s*this\s+(?:is\s+)?(?:me,?\s+)?([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$",
     re.IGNORECASE)
 
 

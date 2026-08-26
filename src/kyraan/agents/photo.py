@@ -39,7 +39,17 @@ never a policy speech about being unable to identify people.
 You are looking at the photo right now, so never say you can't see
 images — but don't announce that you can see it either ("I saw this
 photo", "Yep, I can see it" are filler): just answer about the photo,
-the way a person looking at it would."""
+the way a person looking at it would.
+
+OUTPUT exactly one JSON object:
+  {"reply": "<your reply>", "remember_face_as": null}
+Set "remember_face_as" to a NAME string instead of null ONLY when the
+caption asks — in any wording or language — to remember/save/enroll this
+face for future recognition ("remember this face as Maan", "save him as
+Suman", "recognize me next time, I'm Maan"). Merely NAMING who is in the
+photo ("this is kiaan") is not such a request — keep null. The system
+will ask the owner to confirm before anything is stored; you never store
+faces yourself and never claim one was saved."""
 
 
 class VisionUnavailable(Exception):
@@ -71,10 +81,23 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
     try:
         response = await router.acall(prompt=prompt, system=_SYSTEM,
                                       tier="frontier", max_tokens=700,
+                                      force_json=True,
                                       images=[image_data_url])
     except router.ModelProviderError as exc:
         log_event("photo_vision_unavailable", error=str(exc)[:200])
         raise VisionUnavailable(str(exc)) from exc
     log_event("photo_answered", chat_id=chat_id, caption=caption[:80],
               latency_ms=round(response.latency_ms))
-    return response.text.strip()
+    import json
+    try:
+        decision = json.loads(router.strip_code_fence(response.text))
+        reply = str(decision.get("reply", "")).strip()
+        name = decision.get("remember_face_as")
+        enroll_name = str(name).strip() if name else None
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        # Robustness: an unparseable response is still a reply — losing
+        # the intent field beats losing the answer.
+        reply, enroll_name = response.text.strip(), None
+    if enroll_name and (len(enroll_name) < 2 or len(enroll_name) > 40):
+        enroll_name = None
+    return reply or "(couldn't read that photo — try sending it again)", enroll_name

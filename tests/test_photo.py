@@ -20,18 +20,48 @@ async def test_answer_sends_image_to_frontier(monkeypatch):
         return _R()
 
     monkeypatch.setattr(photo.router, "acall", fake_acall)
-    reply = await photo.answer(9, "data:image/jpeg;base64,AAA", "what is this?")
-    assert reply == "That's a red square."
+    reply, enroll = await photo.answer(9, "data:image/jpeg;base64,AAA", "what is this?")
+    assert reply == "That's a red square."   # non-JSON response: fallback keeps the text
+    assert enroll is None
     assert seen["tier"] == "frontier"
     assert seen["images"] == ["data:image/jpeg;base64,AAA"]
     assert "what is this?" in seen["prompt"]
     assert "never instructions" in seen["system"]   # the taint rule rides along
 
 
+async def test_vision_extracts_enrollment_intent_from_any_caption(monkeypatch):
+    """The caption path's intelligence: the vision model returns JSON with
+    the reply AND any enrollment intent — regex phrases no longer the
+    only door (live 2026-08-26: 'save this face, it's Maan' had no path)."""
+    class _R:
+        text = '{"reply": "A man in a green blazer.", "remember_face_as": "Maan"}'
+        latency_ms = 5.0
+
+    async def fake_acall(**kw):
+        assert kw.get("force_json") is True
+        return _R()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall)
+    reply, enroll = await photo.answer(9, "data:x", "save this face, it's Maan")
+    assert reply == "A man in a green blazer."
+    assert enroll == "Maan"
+
+    class _R2:
+        text = '{"reply": "A toddler crawling.", "remember_face_as": null}'
+        latency_ms = 5.0
+
+    async def fake_acall2(**kw):
+        return _R2()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall2)
+    reply, enroll = await photo.answer(9, "data:x", "this is kiaan")
+    assert enroll is None   # naming alone is not an enrollment request
+
+
 async def test_kill_switch_blocks_photo_turns(monkeypatch):
     monkeypatch.setattr(photo.kill_switch, "is_engaged", lambda: True)
     reply = await photo.answer(9, "data:x", "hi")
-    assert "kill switch" in reply.lower()
+    assert "kill switch" in str(reply).lower()
 
 
 async def test_provider_error_becomes_vision_unavailable(monkeypatch):

@@ -383,9 +383,22 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                       else {"names": [], "maybe": [], "unknown_faces": 0})
         data_url = ("data:image/jpeg;base64,"
                     + base64.b64encode(image_bytes).decode())
-        reply = await photo.answer(chat_id, data_url, caption,
-                                   recognized=recognized["names"],
-                                   maybe=recognized.get("maybe") or [])
+        reply, vision_enroll = await photo.answer(
+            chat_id, data_url, caption,
+            recognized=recognized["names"],
+            maybe=recognized.get("maybe") or [])
+        if vision_enroll and faces.available():
+            # The vision model read enrollment intent in the caption (any
+            # wording) — the regex above only catches the fixed phrases.
+            # Same confirm gate; the ask replaces the descriptive reply.
+            reply = await _enroll_face_gated(chat_id, vision_enroll, image_bytes)
+            orchestrator.record_exchange(
+                chat_id, f"[sent a photo: {caption}]", reply)
+            log_trace("turn_end", chat_id=chat_id, reply=reply)
+            await update.message.reply_text(
+                _plain(reply), do_quote=True,
+                reply_markup=_confirm_keyboard(chat_id))
+            return
         hint_name = faces.enroll_hint(caption) if faces.available() else None
         if hint_name:
             reply += (f'\n\n(Want me to recognize this face later? Send a solo '

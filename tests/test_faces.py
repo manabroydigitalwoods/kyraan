@@ -62,6 +62,7 @@ def test_enroll_hint_on_naming_captions(monkeypatch):
     the real phrase — but never for enrolled names or ordinary captions."""
     assert faces.enroll_hint("this kiaan") == "kiaan"
     assert faces.enroll_hint("This is Ruma!") == "Ruma"
+    assert faces.enroll_hint("this is me Maan") == "Maan"  # live: hint offered "me Maan"
     assert faces.enroll_hint("what is this?") is None
     assert faces.enroll_hint("remember this face as Maan") is None  # real phrase, not a hint case
     monkeypatch.setattr(faces, "enrolled_names", lambda: ["Kiaan"])
@@ -172,7 +173,7 @@ async def test_recognized_names_ride_into_the_vision_prompt(monkeypatch):
         return _R()
 
     monkeypatch.setattr(photo.router, "acall", fake_acall)
-    reply = await photo.answer(9, "data:x", "what's he doing?", recognized=["Kiaan"])
+    reply, _ = await photo.answer(9, "data:x", "what's he doing?", recognized=["Kiaan"])
     assert "Kiaan" in reply
     assert "LOCALLY RECOGNIZED FACES" in seen["prompt"]
     assert "Kiaan" in seen["prompt"]
