@@ -443,8 +443,14 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         if isinstance(result, dict) and "__direct_reply__" in result:
             # Privacy short-circuit: the executor composed the user-facing
             # reply itself so its contents never enter a model prompt.
-            # History stores a placeholder for the same reason.
-            orchestrator._history_redaction.set(f"[showed the {tool} result]")
+            # History stores a placeholder for the same reason — UNLESS
+            # the executor supplies __history__, meaning its receipt holds
+            # nothing private (the owner's own reminder text, already in
+            # their prompt). Without that, "cancel it" was followed by a
+            # blind "[showed the reminders.cancel result]" and the next
+            # question couldn't tell WHICH reminder went (Bugbot P2 r5).
+            orchestrator._history_redaction.set(
+                result.get("__history__") or f"[showed the {tool} result]")
             orchestrator._skip_extraction.set(True)  # a command turn, never a fact
             log_event("agent_direct_reply", chat_id=chat_id, tool=tool, steps=step + 1)
             return result["__direct_reply__"]

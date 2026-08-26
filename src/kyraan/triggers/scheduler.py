@@ -254,14 +254,22 @@ def advance_past_now(record) -> "datetime":
         # the past AND stall the event loop); integer math does it in one.
         step = timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
         now = local_now()
-        # The daily-grid shortcut below is only valid for series that
-        # actually CYCLE within a day (step < 24h always overflows the
-        # window and re-anchors at window_start tomorrow). A multi-day
-        # interval (weekly, every-2-days) never hits the daily rollover —
-        # its phase lives on the record's own date/time, and re-anchoring
-        # it to "today's window start" changed both (Bugbot P1 round 4).
-        if (record.window_start and record.window_end
-                and step < timedelta(hours=24)):
+        # The daily-grid shortcut below models a series that fires
+        # SEVERAL TIMES inside its window — that is the only shape whose
+        # slots form a within-day grid. The valid boundary is the WINDOW
+        # length, not 24h: a 23h step in an 11:00-wide window overflows
+        # every single time, so advance_for's real semantics collapse to
+        # "daily at window_start" while the grid computed window_start +
+        # k*23h (Bugbot P1 round 5). Anything stepping past the window —
+        # 23-hourly, weekly, every-2-days — falls through to the bounded
+        # loop below, which IS advance_for iterated: exact semantics, and
+        # each iteration advances at least a day, so it is cheap.
+        window_len = None
+        if record.window_start and record.window_end:
+            _sh, _sm = (int(x) for x in record.window_start.split(":"))
+            _eh, _em = (int(x) for x in record.window_end.split(":"))
+            window_len = timedelta(minutes=(_eh * 60 + _em) - (_sh * 60 + _sm))
+        if window_len is not None and step <= window_len:
             # Windowed series re-anchor their phase at window_start on
             # EVERY rollover (advance_for's day-to-day behavior), so
             # continuous step arithmetic across skipped days drifts the
@@ -296,7 +304,9 @@ def advance_past_now(record) -> "datetime":
                 # past today's last slot (including a grid step that
                 # crossed midnight) -> tomorrow's window start
                 next_when = ws_today + timedelta(days=1)
-        else:
+        elif window_len is None:
+            # No window: every slot is base + k*step, so one jump lands
+            # exactly on the grid.
             k = (now - next_when) // step + 1
             # The FINAL step goes through advance_for so any future rule
             # additions still snap — a bare += landed a 10:00-21:00

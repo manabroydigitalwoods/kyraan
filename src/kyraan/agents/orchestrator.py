@@ -213,13 +213,27 @@ _EXPLICIT_SAVE_RE = re.compile(
     r"|\bkeep in mind\b|\bmake a note\b|\bmemori[sz]e\b",
     re.IGNORECASE)
 
-# The non-command shapes: a question auxiliary before "you save/remember"
+# A determiner in front turns the verb into a NOUN — "this note contains
+# the recipe" is prose, not an instruction (Bugbot P1 round 5).
+_SAVE_AS_NOUN_RE = re.compile(
+    r"\b(?:a|an|the|this|that|these|those|my|your|his|her|our|their|"
+    r"some|any|each|every|no)\s+(?:note|save)s?\b", re.IGNORECASE)
+
+# "can/could you remember that X" is a POLITE COMMAND — it was being
+# rejected with the recall questions (Bugbot P1 round 5). Checked before
+# the non-command shapes so a polite save containing "to save" survives.
+_POLITE_SAVE_RE = re.compile(
+    r"\b(?:can|could|please|pls|kindly)\s+(?:you\s+)?(?:also\s+)?"
+    r"(?:remember|save|note)\s+\S",
+    re.IGNORECASE)
+
+# The non-command shapes: a recall auxiliary before "you save/remember"
 # asks about Kyraan's memory ("do you remember...?"); a first-person or
 # infinitive construction is the USER saving something themselves ("I
-# need to save money", "wants to save for a car") — while "you should
-# save tarun name" (live owner phrasing) commands Kyraan and must pass.
+# need to save money") — while "you should save tarun name" (live owner
+# phrasing) commands Kyraan and must pass.
 _SAVE_NONCOMMAND_RE = re.compile(
-    r"\b(?:do|did|does|can|could|will|would|won'?t|don'?t|shall|should)\s+"
+    r"\b(?:do|did|does|will|would|won'?t|don'?t|didn'?t|shall)\s+"
     r"you\s+(?:remember|save|note)\b"
     r"|\b(?:i|we)\s+(?:\w+\s+){0,2}(?:save|remember|note)\b"
     r"|\bto\s+(?:save|remember|note)\b",
@@ -227,10 +241,22 @@ _SAVE_NONCOMMAND_RE = re.compile(
 
 
 def is_explicit_save(text: str) -> bool:
+    """True when the message INSTRUCTS Kyraan to store something. Wrong
+    either way costs: a false positive holds an ordinary reply behind the
+    patient 45s extraction ceiling; a false negative silently drops a
+    fact the owner asked for."""
     stripped = text.strip()
-    if stripped.endswith("?") or _SAVE_NONCOMMAND_RE.search(stripped):
+    if stripped.endswith("?"):
         return False
-    return bool(_EXPLICIT_SAVE_RE.search(stripped))
+    if _POLITE_SAVE_RE.search(stripped):
+        return True
+    if _SAVE_NONCOMMAND_RE.search(stripped):
+        return False
+    if not _EXPLICIT_SAVE_RE.search(stripped):
+        return False
+    # Only a noun usage in the whole message -> prose, not a command.
+    without_nouns = _SAVE_AS_NOUN_RE.sub(" ", stripped)
+    return bool(_EXPLICIT_SAVE_RE.search(without_nouns))
 
 
 async def _extraction_note(chat_id: int, raw_text: str) -> str:

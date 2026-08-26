@@ -227,10 +227,10 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
             series = f"{existing.repeat}, next at "
         else:
             series = "at "
-        return {"__direct_reply__": (
-            f'Already set: "{existing.text}" {series}'
-            f"{humanize(existing.when_iso)} "
-            f"(id {existing.id[:8]}) — I didn't add a duplicate.")}
+        receipt = (f'Already set: "{existing.text}" {series}'
+                   f"{humanize(existing.when_iso)} "
+                   f"(id {existing.id[:8]}) — I didn't add a duplicate.")
+        return {"__direct_reply__": receipt, "__history__": receipt}
     if repeat == "interval" and interval_minutes < scheduler._MIN_INTERVAL_MINUTES:
         # The hard floor refuses BEFORE the confirm gate — never ask the
         # owner to approve a series that would be rejected anyway.
@@ -291,9 +291,12 @@ async def _reminders_cancel_gated(chat_id: int, args: dict):
     # discretion, same mechanism as the duplicate-create reply.
     from kyraan.control_plane.dnd import humanize as _humanize
     series = f" (repeats {match.repeat})" if match.repeat else ""
-    return {"__direct_reply__": (
-        f'Cancelled: "{match.text}" at {_humanize(match.when_iso)}{series} — '
-        "it won't fire again.")}
+    receipt = (f'Cancelled: "{match.text}" at {_humanize(match.when_iso)}'
+               f"{series} — it won't fire again.")
+    # The receipt names the owner's OWN reminder — nothing private —
+    # so history keeps it verbatim: a follow-up ("put it back", "which
+    # one did you cancel?") needs to know which reminder went.
+    return {"__direct_reply__": receipt, "__history__": receipt}
 
 
 async def _usage_report(chat_id: int, args: dict, raw_text: str):

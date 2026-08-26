@@ -634,3 +634,130 @@ def test_explicit_save_keeps_the_live_phrasings():
 
     assert is_explicit_save("save the aarav age")
     assert is_explicit_save("you should save tarun name")
+
+
+# --- round 5: window-length boundary, polite saves, receipt history --------
+
+def test_interval_longer_than_the_window_keeps_advance_for_semantics(monkeypatch):
+    """A 23h step in an 11h window overflows EVERY time, so the true rule
+    collapses to 'daily at window_start' — the daily-grid shortcut
+    computed window_start + k*23h and fired hours early (Bugbot P1 round
+    5). The boundary is the WINDOW length, not 24h."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+    from kyraan.control_plane.dnd import local_now as real_now
+
+    tz = real_now().tzinfo
+    fake_now = datetime(2026, 9, 3, 15, 0, tzinfo=tz)
+    monkeypatch.setattr(scheduler, "local_now", lambda: fake_now)
+    rec = Reminder(id="l1", chat_id=1, text="long series",
+                   when_iso="2026-08-30T10:30:00+00:00",
+                   repeat="interval", interval_minutes=23 * 60,
+                   window_start="10:00", window_end="21:00")
+    nxt = scheduler.advance_past_now(rec)
+
+    # ground truth: iterate the real rule from the record's own base
+    truth = scheduler.advance_for(rec)
+    while truth <= fake_now:
+        truth = scheduler.advance_for(rec, from_when=truth)
+    assert nxt == truth
+    assert nxt > fake_now
+
+
+def test_short_interval_still_uses_the_fast_grid(monkeypatch):
+    """The optimization must survive the boundary change: a 50-min series
+    inside an 11h window still lands on the grid, in one jump."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+    from kyraan.control_plane.dnd import local_now as real_now
+
+    tz = real_now().tzinfo
+    fake_now = datetime(2026, 9, 1, 11, 0, tzinfo=tz)
+    monkeypatch.setattr(scheduler, "local_now", lambda: fake_now)
+    rec = Reminder(id="l2", chat_id=1, text="water",
+                   when_iso="2026-09-01T10:30:00+00:00",
+                   repeat="interval", interval_minutes=50,
+                   window_start="10:00", window_end="21:00")
+    assert (scheduler.advance_past_now(rec).hour,
+            scheduler.advance_past_now(rec).minute) == (11, 20)
+
+
+def test_polite_saves_and_noun_phrases():
+    """'Can you remember that...' is a polite COMMAND (was rejected with
+    the recall questions); 'This note contains...' is prose (was a false
+    positive) — Bugbot P1 round 5."""
+    from kyraan.agents.orchestrator import is_explicit_save
+
+    assert is_explicit_save("Can you remember that I switched to the new bank")
+    assert is_explicit_save("could you note my new address is 4 Park Lane")
+    assert is_explicit_save("please save that my passport expires in March")
+
+    assert not is_explicit_save("This note contains the recipe for the cake")
+    assert not is_explicit_save("the note says we should leave early")
+    assert not is_explicit_save("do you remember my birthday")   # recall, no '?'
+
+    # round-4 contracts unchanged
+    assert is_explicit_save("save the aarav age")
+    assert is_explicit_save("you should save tarun name")
+    assert not is_explicit_save("How can I save time?")
+    assert not is_explicit_save("I need to save money this month")
+
+
+async def test_cancel_receipt_stays_in_history(monkeypatch, tmp_path):
+    """A cancel receipt names the owner's own reminder — nothing private
+    — so history keeps it verbatim; a generic '[showed the ... result]'
+    left a follow-up unable to tell WHICH reminder went (Bugbot P2 r5).
+    The email boundary's placeholder behavior is unchanged."""
+    from kyraan.agents import agent_loop, loop_tools, orchestrator
+    from kyraan.triggers import scheduler as sch, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sch.init(schedule_fn=lambda *a, **k: None,
+             cancel_fn=lambda *a, **k: None, send_fn=None)
+    r = sch.create_reminder(93, "Call mom", "2099-01-01T21:00:00+05:30")
+
+    class _R:
+        def __init__(self, t): self.text = t
+
+    decisions = iter([
+        f'{{"action": "call", "tool": "reminders.cancel", '
+        f'"args": {{"reminder_id": "{r.id[:8]}"}}}}',
+    ])
+    monkeypatch.setattr(agent_loop.router, "call",
+                        lambda prompt, system="", **kw: _R(next(decisions)))
+    token = orchestrator._history_redaction.set(None)
+    try:
+        reply = await agent_loop.run(93, "cancel my reminder")
+        assert "Call mom" in orchestrator._history_redaction.get()
+        assert orchestrator._history_redaction.get() == reply
+    finally:
+        orchestrator._history_redaction.reset(token)
+
+
+async def test_email_direct_reply_still_redacts_history(monkeypatch):
+    """The privacy default is untouched: an executor that does NOT opt in
+    still gets the blind placeholder."""
+    from kyraan.agents import agent_loop, orchestrator
+    from kyraan.tools import registry as reg
+
+    async def fake_dispatch(spec, args):
+        return {"unread_estimate": 2, "messages": [
+            {"from": "Bank <b@x.com>", "subject": "Statement ready"}]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+
+    class _R:
+        def __init__(self, t): self.text = t
+
+    decisions = iter(['{"action": "call", "tool": "email.unread", "args": {}}'])
+    monkeypatch.setattr(agent_loop.router, "call",
+                        lambda prompt, system="", **kw: _R(next(decisions)))
+    token = orchestrator._history_redaction.set(None)
+    try:
+        reply = await agent_loop.run(94, "any new emails?")
+        assert "Statement ready" in reply                      # the owner sees it
+        assert "Statement ready" not in orchestrator._history_redaction.get()
+        assert "[showed the email.unread result]" == orchestrator._history_redaction.get()
+    finally:
+        orchestrator._history_redaction.reset(token)
