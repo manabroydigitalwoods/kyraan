@@ -1894,5 +1894,5 @@ async def test_successful_capped_batch_names_the_overflow(monkeypatch):
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
     await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
     receipt = await orchestrator.handle_message(chat_id=0, raw_text="yes")
-    assert "3 more matched beyond this batch" in receipt
-    assert '"cancel all events"' in receipt
+    assert "3 event(s) still to cancel" in receipt
+    assert '"cancel all events today"' in receipt   # the WINDOW rides along

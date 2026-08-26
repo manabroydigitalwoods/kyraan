@@ -52,6 +52,8 @@ providers:
     base_url: https://openrouter.ai/api/v1
     api_key_env: OPENROUTER_API_KEY
   ollama:
+    allow_unauthenticated: true   # local server, no credential — DECLARED,
+                                  # not inferred from the hostname
     kind: ollama_native   # native /api/chat — the OpenAI-compat endpoint
     context_length: 16384 # Ollama's ~4K default silently truncated the qa
                           # prompt and produced garbage loop replies (live

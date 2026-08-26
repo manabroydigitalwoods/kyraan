@@ -140,3 +140,59 @@ def thought_open(text: str) -> bool:
     if not words:
         return False
     return words[-1] in _TRAILING_OPEN or words[0] in _LEADING_OPEN
+
+
+def normalized_event_times(args: dict, raw_text: str) -> tuple:
+    """ONE time normalization for BOTH brains (round-6: the legacy path
+    had drifted behind the loop's guards — this is the shared capability
+    service the reviews kept asking for, delivered for the time domain).
+
+    Repairs offset-dropping, anchors to the user's stated clock times,
+    and refuses inverted ranges. Anchoring corrects model DRIFT — small
+    disagreements between a stated time and the parsed value. Tolerance
+    is 45 minutes: every live-observed drift was minutes, while an hour
+    or more apart means the matched time belongs to something else in
+    the message ("after the 7pm call, dinner at 8"). For pairs, matches
+    pick their NEAREST endpoint rather than trusting word order. The
+    residual ambiguity is accepted by design: the confirm ask shows the
+    final times and nothing writes before the owner's yes."""
+    import re
+    from datetime import timedelta
+
+    from kyraan.control_plane import kernel
+    from kyraan.control_plane.logging_setup import log_event
+    from kyraan.triggers import scheduler
+
+    start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
+    end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
+    matches = re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I)
+
+    def _apply(dt, match):
+        hh, mm, ap = match
+        hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
+        return dt.replace(hour=hour, minute=int(mm) if mm else 0, second=0, microsecond=0)
+
+    def _close(anchored, original, minutes=45):
+        return abs(anchored - original) <= timedelta(minutes=minutes)
+
+    if len(matches) == 1:
+        duration = end_dt - start_dt
+        anchored = _apply(start_dt, matches[0])
+        if anchored != start_dt and _close(anchored, start_dt):
+            end_dt = anchored + duration
+            start_dt = anchored
+    elif len(matches) == 2:
+        # nearest-match: each stated time anchors the endpoint it is
+        # closest to, not its word-order position
+        cands = [_apply(start_dt, m) for m in matches]
+        start_c = min(cands, key=lambda c: abs(c - start_dt))
+        end_cands = [_apply(end_dt, m) for m in matches]
+        end_c = min(end_cands, key=lambda c: abs(c - end_dt))
+        if (start_c < end_c and _close(start_c, start_dt) and _close(end_c, end_dt)):
+            start_dt, end_dt = start_c, end_c
+        else:
+            log_event("event_range_anchor_skipped", raw=raw_text[:120])
+    if end_dt <= start_dt:
+        raise kernel.ToolFailed(
+            "the event's end is not after its start — ask the user for the intended times")
+    return start_dt.isoformat(), end_dt.isoformat()

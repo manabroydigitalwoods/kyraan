@@ -333,3 +333,37 @@ async def test_stale_lease_takeover_resends_with_an_honest_repeat_note(isolated_
     r2 = store.add(chat_id=0, text="fresh", when_iso="2099-01-01T11:00:00+00:00")
     await scheduler.fire(r2.id, 0, r2.text)
     assert sends[1] == "Reminder: fresh"
+
+
+async def test_dnd_release_never_launders_delivery_uncertainty(isolated_store, monkeypatch):
+    """Round-6 P1: takeover is STICKY — a DND release and re-claim after
+    a stale-lease takeover must still label the eventual send. Only
+    confirmed success clears uncertainty."""
+    from datetime import datetime, timedelta, timezone
+    from kyraan.control_plane import kernel
+
+    r = store.add(chat_id=0, text="uncertain", when_iso="2099-01-01T10:00:00+00:00")
+    sends = []
+
+    async def send_fn(chat_id, text):
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=send_fn)
+
+    # A crashed sender's stale lease...
+    assert store.claim_for_send(r.id)
+    records = store._load_all()
+    for rec in records:
+        rec["claimed_at"] = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
+    store._save_all(records)
+
+    # ...taken over during DND: released, rescheduled — takeover must survive.
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: False)
+    await scheduler.fire(r.id, 0, r.text)
+    assert sends == []
+    assert store.get(r.id).takeover is True     # uncertainty preserved through release
+
+    # DND ends; the fresh claim still knows and labels the send.
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+    await scheduler.fire(r.id, 0, r.text)
+    assert len(sends) == 1 and "may be a repeat" in sends[0]

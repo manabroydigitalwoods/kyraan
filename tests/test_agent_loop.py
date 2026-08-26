@@ -478,7 +478,7 @@ def test_partial_deletion_receipt_names_the_working_resume_phrase():
     from kyraan.agents import orchestrator as o
 
     source = inspect.getsource(o._cancel_event)
-    assert 'say \"cancel all events\" again' in source
+    assert 'say \"cancel all events {label}\" again' in source  # windowed resume
     assert '— say \"cancel\" again' not in source
 
 
@@ -509,3 +509,23 @@ def test_anchor_tolerance_rejects_hours_away_hijacks(monkeypatch):
     bad = {"start": "2099-01-02T21:00:00+05:30", "end": "2099-01-02T20:00:00+05:30"}
     with pytest.raises(kernel.ToolFailed, match="end is not after"):
         agent_loop._normalized_event_times(bad, "add the thing")
+
+
+def test_nearby_contextual_time_no_longer_hijacks_the_event(monkeypatch):
+    """Round-6 P2: 'after the 7pm call, dinner at 8' — a stated time an
+    hour away is context, not drift; 45-minute tolerance rejects it while
+    real drift (minutes) still corrects. Shared implementation: the
+    legacy path resolves to the same guards function."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    from kyraan.agents import guards
+
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    start, end = guards.normalized_event_times(args, "after the 7pm call, add dinner")
+    assert "T20:00:00" in start                     # 60 min away = context, kept
+
+    drift = {"start": "2099-01-02T19:49:00+05:30", "end": "2099-01-02T20:49:00+05:30"}
+    start, _ = guards.normalized_event_times(drift, "dinner at 8pm")
+    assert "T20:00:00" in start                     # 11 min = drift, corrected
+
+    # both brains share ONE implementation
+    assert agent_loop._normalized_event_times is guards.normalized_event_times

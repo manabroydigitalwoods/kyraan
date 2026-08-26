@@ -917,14 +917,19 @@ async def _cancel_event(chat_id: int, text: str) -> str:
         if unknown:
             parts.append(f'Outcome UNKNOWN for "{unknown}" — the delete timed out and may '
                          "have succeeded; check the calendar before retrying it")
+        remaining = len(untouched) + overflow
+        resume = f'say "cancel all events {label}" again'
         if untouched:
             parts.append(f"NOT touched ({stop_reason.split(':')[0]}): "
-                         + ", ".join(f'"{t}"' for t in untouched)
-                         + ' — say "cancel all events" again for the rest')
-        if overflow and not untouched and not unknown:
-            parts.append(f'{overflow} more matched beyond this batch — say '
-                         '"cancel all events" again to cancel them (the fresh listing '
-                         "keeps this loop safe even if the calendar changed)")
+                         + ", ".join(f'"{t}"' for t in untouched))
+        if remaining:
+            # ALWAYS account for everything beyond what ran (round-6 P2:
+            # overflow silently vanished whenever a batch stopped early),
+            # and the resume phrase carries the ORIGINAL WINDOW so
+            # "next month" doesn't resume as "today". Fresh listing on
+            # the re-run stays the design: cached ids go stale, and
+            # already-deleted events resolve harmlessly.
+            parts.append(f"{remaining} event(s) still to cancel — {resume}")
         return ". ".join(parts) if parts else "Nothing was deleted."
 
     described = "\n".join(
@@ -954,10 +959,17 @@ async def _create_event(chat_id: int, text: str) -> str:
 
     try:
         data = json.loads(router.strip_code_fence(extracted.text))
+        # ONE time normalization shared with the agent loop (round-6 P2:
+        # this path had drifted behind — no tolerance on the anchor, no
+        # end>start check): guards.normalized_event_times does sanitize,
+        # tolerant anchoring against the user's words, and range sanity.
+        from kyraan.agents.guards import normalized_event_times
+        start_iso, end_iso = normalized_event_times(
+            {"start": str(data["start_iso"]), "end": str(data["end_iso"])}, text)
         args = {
             "title": str(data["title"]),
-            "start": clean_iso(_anchor_clock_time(text, str(data["start_iso"]))),
-            "end": clean_iso(data["end_iso"]),
+            "start": clean_iso(start_iso),
+            "end": clean_iso(end_iso),
         }
         location = data.get("location")
         # Models sometimes emit the STRING "null" instead of JSON null —

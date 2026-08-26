@@ -47,48 +47,7 @@ async def _calendar_list(chat_id: int, args: dict, raw_text: str):
     return events[:20]
 
 
-def _normalized_event_times(args: dict, raw_text: str) -> tuple:
-    """ONE normalization for both the confirm ask and the execution — they
-    were computed separately and could disagree (review P1). Repairs
-    offset-dropping (a bare Z in a non-UTC home is wall-clock intent) and
-    anchors to the user's explicitly stated clock time ("8pm" beats the
-    model's 19:49), exactly like reminders."""
-    import re
-    start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
-    end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
-    matches = re.findall(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I)
-
-    def _apply(dt, match):
-        hh, mm, ap = match
-        hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
-        return dt.replace(hour=hour, minute=int(mm) if mm else 0, second=0, microsecond=0)
-
-    def _close(anchored, original, minutes=90):
-        # Anchoring corrects model DRIFT (19:49 for a stated 8pm) — an
-        # anchor that moves a time by hours is a hijack by an unrelated
-        # time in the message ("after my 9am meeting..."), not a
-        # correction (round-5 P2).
-        from datetime import timedelta
-        return abs(anchored - original) <= timedelta(minutes=minutes)
-
-    if len(matches) == 1:
-        duration = end_dt - start_dt
-        anchored = _apply(start_dt, matches[0])
-        if anchored != start_dt and _close(anchored, start_dt):
-            end_dt = anchored + duration
-            start_dt = anchored
-    elif len(matches) == 2:
-        candidate_start = _apply(start_dt, matches[0])
-        candidate_end = _apply(end_dt, matches[1])
-        if (candidate_start < candidate_end
-                and _close(candidate_start, start_dt) and _close(candidate_end, end_dt)):
-            start_dt, end_dt = candidate_start, candidate_end
-        else:
-            log_event("event_range_anchor_skipped", raw=raw_text[:120])
-    if end_dt <= start_dt:
-        raise kernel.ToolFailed(
-            "the event's end is not after its start — ask the user for the intended times")
-    return start_dt.isoformat(), end_dt.isoformat()
+from kyraan.agents.guards import normalized_event_times as _normalized_event_times
 
 
 async def _calendar_create(chat_id: int, args: dict, raw_text: str):

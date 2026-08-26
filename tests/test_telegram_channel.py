@@ -305,9 +305,24 @@ def test_startup_validation_rejects_keyless_remote_providers(monkeypatch):
     from kyraan.control_plane import config
 
     monkeypatch.setenv("TELEGRAM_OWNER_ID", "1")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")  # active-tier check needs it
     base = config.load()
     keyless_remote = {**base, "providers": {**base["providers"],
         "sketchy": {"kind": "openai_compatible", "base_url": "https://api.example.com/v1"}}}
     monkeypatch.setattr(config, "load", lambda: keyless_remote)
     with pytest.raises(ValueError, match="no api_key_env"):
         telegram_bot._validate_startup()
+
+    # Round 6: keyless must be DECLARED — a localhost proxy without the
+    # flag fails too, and the declaration makes it legal anywhere.
+    keyless_local = {**base, "providers": {**base["providers"],
+        "proxy": {"kind": "openai_compatible", "base_url": "http://localhost:9999/v1"}}}
+    monkeypatch.setattr(config, "load", lambda: keyless_local)
+    with pytest.raises(ValueError, match="allow_unauthenticated"):
+        telegram_bot._validate_startup()
+
+    declared = {**base, "providers": {**base["providers"],
+        "proxy": {"kind": "openai_compatible", "base_url": "http://localhost:9999/v1",
+                  "allow_unauthenticated": True}}}
+    monkeypatch.setattr(config, "load", lambda: declared)
+    telegram_bot._validate_startup()   # passes with the explicit declaration

@@ -66,6 +66,7 @@ def mark_sent(reminder_id: str) -> None:
 
 
 def _mark_sent_locked(reminder_id: str) -> None:
+    # the one place uncertainty legitimately ends
     records = _load_all()
     for r in records:
         if r["id"] == reminder_id:
@@ -99,7 +100,10 @@ def claim_for_send(reminder_id: str, lease_seconds: int = 120) -> bool:
                 except ValueError:
                     pass
             record["claimed_at"] = datetime.now(timezone.utc).isoformat()
-            record["takeover"] = takeover
+            # STICKY (round-6 P1): once delivery uncertainty exists, only
+            # confirmed success may clear it — a DND release and re-claim
+            # must not launder a possible duplicate into a fresh send.
+            record["takeover"] = takeover or bool(record.get("takeover"))
             _save_all(records)
             return True
         return False
