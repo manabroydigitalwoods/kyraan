@@ -581,3 +581,56 @@ def test_nested_stages_do_not_double_count():
     assert stages["inner"] == 1
     assert stages["model:test"] == 1     # direct record inside the block
     assert stages["model:toplevel"] == 0
+
+
+# --- round 4: long intervals keep their date; save-words need intent -------
+
+def test_multiday_windowed_interval_keeps_date_and_phase(monkeypatch):
+    """A weekly series (Monday 10:30, window 10:00-21:00) that missed a
+    fire must resume NEXT Monday 10:30 — the daily-grid shortcut
+    re-anchored it to 'today's window start', changing its weekday and
+    phase (Bugbot P1 round 4). The grid is only for series that cycle
+    within a day."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+    from kyraan.control_plane.dnd import local_now as real_now
+
+    tz = real_now().tzinfo
+    # Monday 2026-09-07; downtime since the fire scheduled Mon 2026-08-31
+    fake_now = datetime(2026, 9, 3, 15, 0, tzinfo=tz)   # a Thursday
+    monkeypatch.setattr(scheduler, "local_now", lambda: fake_now)
+    weekly = Reminder(id="w1", chat_id=1, text="water the big plants",
+                      when_iso="2026-08-31T10:30:00+00:00",  # a Monday
+                      repeat="interval", interval_minutes=7 * 24 * 60,
+                      window_start="10:00", window_end="21:00")
+    nxt = scheduler.advance_past_now(weekly)
+    assert nxt.weekday() == 0                      # still a Monday
+    assert (nxt.hour, nxt.minute) == (10, 30)      # still :30 phase
+    assert nxt > fake_now
+
+
+def test_explicit_save_needs_intent_not_substrings():
+    """'How can I save time?' matched the raw save-words and inherited
+    the 45s extraction ceiling (Bugbot P2 round 4). The detector wants an
+    instruction with an object; questions and 'you remember' are out."""
+    from kyraan.agents.orchestrator import is_explicit_save
+
+    assert is_explicit_save("remember that my sister works at the hospital")
+    assert is_explicit_save("save this: the wifi password hint is the dog")
+    assert is_explicit_save("note down my blood group is O+")
+    assert is_explicit_save("please keep in mind I hate okra")
+
+    assert not is_explicit_save("How can I save time?")
+    assert not is_explicit_save("do you remember my birthday?")
+    assert not is_explicit_save("can you save it as a draft?")
+    assert not is_explicit_save("will you remember this tomorrow?")
+    assert not is_explicit_save("I need to save money this month")
+
+
+def test_explicit_save_keeps_the_live_phrasings():
+    """The owner's real phrasings from the live incidents must stay
+    classified as saves — the detector tightened, not the contract."""
+    from kyraan.agents.orchestrator import is_explicit_save
+
+    assert is_explicit_save("save the aarav age")
+    assert is_explicit_save("you should save tarun name")

@@ -1039,3 +1039,24 @@ async def test_interval_under_five_minutes_is_refused(
     assert "5 minutes" in reply
     assert rstore.list_pending(90) == []
     assert "smallest interval" in prompts[1]
+
+
+async def test_cancel_returns_a_deterministic_receipt(scripted_model, monkeypatch, tmp_path):
+    """After a successful cancel the model once replied with a menu
+    ('Got it. What would you like to do next—...') instead of a receipt —
+    past the deflection guard's opening anchor. Cancel outcomes are
+    templated now, zero discretion (eval reminder.cancel, 2026-08-27)."""
+    from kyraan.triggers import scheduler as sch, store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    sch.init(schedule_fn=lambda *a, **k: None,
+             cancel_fn=lambda *a, **k: None, send_fn=None)
+    r = sch.create_reminder(90, "Call mom", "2099-01-01T21:00:00+05:30")
+    scripted_model([
+        f'{{"action": "call", "tool": "reminders.cancel", "args": {{"reminder_id": "{r.id[:8]}"}}}}',
+    ])
+
+    reply = await agent_loop.run(90, "cancel my reminder")
+    assert reply.startswith('Cancelled: "Call mom"')
+    assert "won't fire again" in reply
+    assert rstore.list_pending(90) == []

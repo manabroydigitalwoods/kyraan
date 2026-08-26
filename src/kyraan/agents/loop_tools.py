@@ -283,7 +283,17 @@ async def _reminders_cancel_gated(chat_id: int, args: dict):
     if match is None:
         raise kernel.ToolFailed(f"no pending reminder with id {wanted!r} — list reminders first")
     scheduler.cancel_reminder(match.id)
-    return {"cancelled": True, "text": match.text}
+    # Deterministic receipt: after a successful cancel the model was seen
+    # replying with a menu ("Got it. What would you like to do next—...")
+    # instead of confirming what happened — the third appearance of the
+    # menu-reply disease, this time past the deflection guard's opening
+    # anchor. A destructive outcome gets a templated receipt, zero
+    # discretion, same mechanism as the duplicate-create reply.
+    from kyraan.control_plane.dnd import humanize as _humanize
+    series = f" (repeats {match.repeat})" if match.repeat else ""
+    return {"__direct_reply__": (
+        f'Cancelled: "{match.text}" at {_humanize(match.when_iso)}{series} — '
+        "it won't fire again.")}
 
 
 async def _usage_report(chat_id: int, args: dict, raw_text: str):

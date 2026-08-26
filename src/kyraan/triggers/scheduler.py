@@ -254,7 +254,14 @@ def advance_past_now(record) -> "datetime":
         # the past AND stall the event loop); integer math does it in one.
         step = timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
         now = local_now()
-        if record.window_start and record.window_end:
+        # The daily-grid shortcut below is only valid for series that
+        # actually CYCLE within a day (step < 24h always overflows the
+        # window and re-anchors at window_start tomorrow). A multi-day
+        # interval (weekly, every-2-days) never hits the daily rollover —
+        # its phase lives on the record's own date/time, and re-anchoring
+        # it to "today's window start" changed both (Bugbot P1 round 4).
+        if (record.window_start and record.window_end
+                and step < timedelta(hours=24)):
             # Windowed series re-anchor their phase at window_start on
             # EVERY rollover (advance_for's day-to-day behavior), so
             # continuous step arithmetic across skipped days drifts the

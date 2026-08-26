@@ -5,6 +5,7 @@ for the Response Engine (here, just the Telegram send call) to deliver.
 """
 import contextvars
 import json
+import re
 import time
 from collections import defaultdict, deque
 
@@ -200,6 +201,37 @@ async def _structured_call(prompt: str, system: str):
 _SAVE_WORDS = ("remember", "save", "note that", "note this", "note it",
                "keep in mind", "make a note")
 
+# An explicit save is an INSTRUCTION to store something, not any sentence
+# containing a save-word: "How can I save time?" and "do you remember my
+# birthday?" matched the raw substrings and inherited explicit-save
+# behavior — including the patient 45s extraction ceiling, delaying an
+# ordinary reply (Bugbot P2 round 4). The save-verb must carry an object
+# ("remember THAT/THIS/MY..."), questions are never save commands, and
+# "you remember/save" is about Kyraan's memory, not a new fact.
+_EXPLICIT_SAVE_RE = re.compile(
+    r"\b(?:remember|save|note)\s+\S"
+    r"|\bkeep in mind\b|\bmake a note\b|\bmemori[sz]e\b",
+    re.IGNORECASE)
+
+# The non-command shapes: a question auxiliary before "you save/remember"
+# asks about Kyraan's memory ("do you remember...?"); a first-person or
+# infinitive construction is the USER saving something themselves ("I
+# need to save money", "wants to save for a car") — while "you should
+# save tarun name" (live owner phrasing) commands Kyraan and must pass.
+_SAVE_NONCOMMAND_RE = re.compile(
+    r"\b(?:do|did|does|can|could|will|would|won'?t|don'?t|shall|should)\s+"
+    r"you\s+(?:remember|save|note)\b"
+    r"|\b(?:i|we)\s+(?:\w+\s+){0,2}(?:save|remember|note)\b"
+    r"|\bto\s+(?:save|remember|note)\b",
+    re.IGNORECASE)
+
+
+def is_explicit_save(text: str) -> bool:
+    stripped = text.strip()
+    if stripped.endswith("?") or _SAVE_NONCOMMAND_RE.search(stripped):
+        return False
+    return bool(_EXPLICIT_SAVE_RE.search(stripped))
+
 
 async def _extraction_note(chat_id: int, raw_text: str) -> str:
     """Run fact extraction and return a reply suffix naming what was queued
@@ -212,7 +244,7 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
     queued at all."""
     if len(raw_text.strip()) < _EXTRACTION_MIN_CHARS:
         return ""
-    explicit_save = any(w in raw_text.lower() for w in _SAVE_WORDS)
+    explicit_save = is_explicit_save(raw_text)
     try:
         queued = await extraction.propose_from_message(
             raw_text, context=_classifier_context(chat_id), insist=explicit_save)
@@ -343,7 +375,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         # model reloads (Bugbot P1), so it waits out a full Ollama
         # reload, and if even that expires it says so instead of
         # pretending the fact was noted.
-        explicit_save = any(w in raw_text.lower() for w in _SAVE_WORDS)
+        explicit_save = is_explicit_save(raw_text)
         try:
             with _stage("extraction"):
                 reply += await _aio.wait_for(
