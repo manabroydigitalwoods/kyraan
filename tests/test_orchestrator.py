@@ -1679,3 +1679,21 @@ async def test_explicit_save_of_an_already_queued_fact_points_to_review(monkeypa
     result = await orchestrator.handle_message(chat_id=0, raw_text="you should save ganak name")
     assert "already in the review queue" in result
     assert "couldn't distill" not in result
+
+
+def test_history_block_tiers_old_entries(monkeypatch):
+    """Token thrift without information loss: the last 8 entries keep the
+    full clip (they carry follow-up context); older ones keep their gist."""
+    orchestrator._history.pop(95, None)
+    long = "x" * 500
+    for i in range(12):
+        orchestrator._history[95].append(("user", f"{i}:{long}"))
+
+    block = orchestrator._history_block(95, clip=600, older_clip=100)
+    lines = block.splitlines()
+    assert len(lines) == 12
+    assert all(len(l) <= 110 for l in lines[:4])   # old: tightened
+    assert all(len(l) > 400 for l in lines[4:])    # recent 8: full
+    # default behavior unchanged
+    assert all(len(l) > 400 for l in orchestrator._history_block(95).splitlines())
+    orchestrator._history.pop(95, None)

@@ -181,19 +181,19 @@ def _register_home_switches() -> None:
 _register_home_switches()
 
 
+# Token economics: OpenAI bills CACHED input at a ~90% discount, and
+# caching is automatic for a byte-stable prompt prefix (>=1024 tokens).
+# Everything in this system prompt is therefore STATIC — identity, tools,
+# doctrine — so it caches across every call all day; everything that
+# changes (time, facts, history, the message) rides in the prompt half,
+# AFTER the stable prefix. Nothing is trimmed — only ordered for the
+# discount. Do not move dynamic values in here.
 _AGENT_SYSTEM = """You are Kyraan, Manab's personal assistant, deciding how to
-handle his latest message. The current date/time is {now} (the user's own
-timezone — a stated clock time is always wall-clock in this zone).
+handle his latest message. The CONTEXT block in the request carries the
+current date/time (the user's own timezone — a stated clock time is always
+wall-clock in this zone), the owner-reviewed facts, and the conversation.
 
 {capabilities}
-
-Known facts, from the owner-reviewed memory — treat as true; never invent
-personal facts beyond these and the conversation:
-{facts}
-
-Stated but still awaiting the owner's review (usable in conversation, not
-yet permanent):
-{pending_facts}
 
 TOOLS you can call (results come back to you before you answer):
 {tools}
@@ -223,11 +223,11 @@ DECIDE with ONE JSON object, nothing else:
 Style rules:
 - Live data (calendar, email, reminders, home) must come from a tool call
   in THIS exchange — never from memory of earlier listings, never invented.
+- Known facts in the CONTEXT are owner-reviewed — treat as true; never
+  invent personal facts beyond them and the conversation. Facts listed as
+  awaiting review are usable in conversation but not yet permanent.
 - Reply in the user's tone: brief, warm, direct. No markdown bold.
-- If a tool errors, tell the user honestly what failed; don't retry blindly.
-
-The conversation so far:
-{history}"""
+- If a tool errors, tell the user honestly what failed; don't retry blindly."""
 
 
 def _tools_block() -> str:
@@ -255,14 +255,23 @@ async def run(chat_id: int, raw_text: str) -> str:
     from kyraan.agents import orchestrator  # late: avoids a module cycle
 
     system = _AGENT_SYSTEM.format(
-        now=local_now().isoformat(),
         capabilities=capability_brief(),
-        facts=memory_store.load_all_facts() or "(no facts stored yet)",
-        pending_facts=memory_store.load_pending_facts() or "(none)",
         tools=_tools_block(),
-        history=orchestrator._history_block(chat_id),
     )
-    transcript = f"USER: {raw_text}"
+    # Dynamic context lives AFTER the cache-stable system prefix. History
+    # keeps its recent entries at full clip; older ones tighten — recency
+    # carries the follow-up context, so nothing useful is dropped.
+    transcript = (
+        "CONTEXT:\n"
+        f"Current date/time: {local_now().isoformat()}\n"
+        "Known facts (owner-reviewed):\n"
+        f"{memory_store.load_all_facts() or '(no facts stored yet)'}\n"
+        "Awaiting owner review:\n"
+        f"{memory_store.load_pending_facts() or '(none)'}\n"
+        "Conversation so far:\n"
+        f"{orchestrator._history_block(chat_id, older_clip=250)}\n\n"
+        f"USER: {raw_text}"
+    )
     malformed_retries = 0
 
     for step in range(_MAX_STEPS):

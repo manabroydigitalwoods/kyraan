@@ -78,3 +78,21 @@ def test_provider_token_quota_alerts_once_at_80pct(monkeypatch, tmp_path):
     assert "groq" in warning and "85%" in warning
     assert router.quota_alert_due() == ""  # never twice in a day
     assert router.provider_tokens_today("groq") == 170_000
+
+
+def test_cached_prompt_tokens_bill_at_the_discount_rate():
+    """The agent prompt keeps its static prefix byte-stable precisely so
+    OpenAI's prefix cache bills most input at ~90% off — the ledger must
+    reflect that, not overcharge at the full rate."""
+    tier = {"pricing": {"input_per_million": 0.20, "output_per_million": 1.25,
+                        "cached_input_per_million": 0.02}}
+    usage = router.Usage(input_tokens=2000, output_tokens=100, cached_tokens=1500)
+    cost = router._cost_usd(tier, usage)
+    expected = (500 / 1e6) * 0.20 + (1500 / 1e6) * 0.02 + (100 / 1e6) * 1.25
+    assert abs(cost - expected) < 1e-9
+
+    # No cached price configured -> cached tokens bill at full rate
+    # (never under-count).
+    tier_nocache = {"pricing": {"input_per_million": 0.20, "output_per_million": 1.25}}
+    full = router._cost_usd(tier_nocache, usage)
+    assert abs(full - ((2000 / 1e6) * 0.20 + (100 / 1e6) * 1.25)) < 1e-9

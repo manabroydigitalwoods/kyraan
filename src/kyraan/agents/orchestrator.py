@@ -450,15 +450,22 @@ def record_proactive(chat_id: int, text: str) -> None:
     log_chat(chat_id, "proactive", text)
 
 
-def _history_block(chat_id: int, clip: int = 600) -> str:
+def _history_block(chat_id: int, clip: int = 600, older_clip: int | None = None) -> str:
     """Per-entry clip: one pasted article must not drown the prompt (and
     with Ollama's default 4K context it literally truncated the system
-    instructions — the likely cause of a live garbled reply)."""
-    rendered = "\n".join(
-        f"{role}: {text[:clip] + '…' if len(text) > clip else text}"
-        for role, text in _history[chat_id]
-    )
-    return rendered or "(no conversation yet)"
+    instructions — the likely cause of a live garbled reply).
+
+    older_clip: tighter cap for everything but the last 8 entries — recent
+    turns carry the follow-up context and stay at full clip; old turns keep
+    their gist. Token thrift without dropping what's actually used."""
+    entries = list(_history[chat_id])
+    lines = []
+    for i, (role, text) in enumerate(entries):
+        cap = clip
+        if older_clip is not None and i < len(entries) - 8:
+            cap = older_clip
+        lines.append(f"{role}: {text[:cap] + '…' if len(text) > cap else text}")
+    return "\n".join(lines) or "(no conversation yet)"
 
 
 def _classifier_context(chat_id: int, entries: int = 6, clip: int = 200) -> str:

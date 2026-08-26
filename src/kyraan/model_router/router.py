@@ -198,6 +198,9 @@ class Usage:
 
     input_tokens: int | None
     output_tokens: int | None
+    cached_tokens: int | None = None  # prompt tokens served from the
+                                      # provider's prefix cache (billed at
+                                      # a deep discount by OpenAI)
 
 
 @dataclass
@@ -220,7 +223,13 @@ def _cost_usd(tier_cfg: dict, usage: Usage) -> float:
     pricing = tier_cfg.get("pricing")
     if not pricing:
         return 0.0
-    input_cost = (usage.input_tokens or 0) / 1_000_000 * pricing.get("input_per_million", 0)
+    cached = usage.cached_tokens or 0
+    fresh = max((usage.input_tokens or 0) - cached, 0)
+    input_price = pricing.get("input_per_million", 0)
+    # Cached prompt tokens bill at the provider's discount rate; absent
+    # config falls back to the full input price (never under-counts).
+    cached_price = pricing.get("cached_input_per_million", input_price)
+    input_cost = fresh / 1_000_000 * input_price + cached / 1_000_000 * cached_price
     output_cost = (usage.output_tokens or 0) / 1_000_000 * pricing.get("output_per_million", 0)
     return input_cost + output_cost
 
@@ -301,9 +310,11 @@ def _call_openai_compatible(
         **kwargs,
     )
     usage_obj = getattr(response, "usage", None)
+    details = getattr(usage_obj, "prompt_tokens_details", None) if usage_obj else None
     usage = Usage(
         input_tokens=getattr(usage_obj, "prompt_tokens", None) if usage_obj else None,
         output_tokens=getattr(usage_obj, "completion_tokens", None) if usage_obj else None,
+        cached_tokens=getattr(details, "cached_tokens", None) if details else None,
     )
     # "Reasoning" models (Groq's, OpenRouter's free tier, OpenAI's gpt-5
     # family) put hidden chain-of-thought here, separate from .content.
@@ -458,6 +469,7 @@ def call(
                 latency_ms=round(latency_ms),
                 input_tokens=raw.usage.input_tokens,
                 output_tokens=raw.usage.output_tokens,
+                cached_tokens=raw.usage.cached_tokens,
                 had_reasoning=raw.reasoning is not None,
                 cost_usd=cost_usd,
             )
