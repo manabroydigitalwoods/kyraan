@@ -22,27 +22,40 @@ def _cfg() -> dict:
 
 
 _native_probe: bool | None = None  # cached for the process lifetime
+_probe_thread = None
+
+
+def _run_probe() -> None:
+    """Import mlx_whisper in a SACRIFICIAL SUBPROCESS: a broken native
+    install SIGABRTs the child, not the bot — no in-process import can be
+    guarded any other way, because SIGABRT is not an exception (audit
+    rounds 1+2, P1)."""
+    global _native_probe
+    import subprocess
+    import sys
+    try:
+        _native_probe = subprocess.run(
+            [sys.executable, "-c", "import mlx_whisper"],
+            capture_output=True, timeout=90).returncode == 0
+    except Exception:
+        _native_probe = False
+    if not _native_probe:
+        log_event("voice_native_probe_failed")
 
 
 def _native_import_ok() -> bool:
-    """Import mlx_whisper in a SACRIFICIAL SUBPROCESS: a broken native
-    install SIGABRTs the child, not the bot — no in-process import (here
-    OR in the first transcription) can be guarded any other way, because
-    SIGABRT is not an exception (audit rounds 1+2, P1). ~1-2s once, then
-    cached; transcription itself only proceeds when the probe passed."""
-    global _native_probe
-    if _native_probe is None:
-        import subprocess
-        import sys
-        try:
-            _native_probe = subprocess.run(
-                [sys.executable, "-c", "import mlx_whisper"],
-                capture_output=True, timeout=90).returncode == 0
-        except Exception:
-            _native_probe = False
-        if not _native_probe:
-            log_event("voice_native_probe_failed")
-    return _native_probe
+    """Non-blocking: the probe runs in a daemon thread; until it reports,
+    voice counts as unavailable (a synchronous subprocess here blocked
+    the event loop for the probe's duration — audit round 3, P2). The
+    capability brief self-corrects on the next turn."""
+    global _probe_thread
+    if _native_probe is not None:
+        return _native_probe
+    if _probe_thread is None:
+        import threading
+        _probe_thread = threading.Thread(target=_run_probe, daemon=True)
+        _probe_thread.start()
+    return False
 
 
 def available() -> bool:

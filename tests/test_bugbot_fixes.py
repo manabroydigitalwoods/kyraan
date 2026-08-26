@@ -214,8 +214,9 @@ async def test_empty_result_is_failure_not_success(task_env, monkeypatch):
 
 
 async def test_send_failure_never_reruns_the_model(task_env, monkeypatch):
-    """Ambiguous Telegram send failure: the run happened, delivery is
-    unknown — retire the one-shot rather than executing twice."""
+    """Send failure: the run happened — the model NEVER runs again for
+    delivery retries (round 3 upgraded retire-with-loss to
+    stash-and-redeliver; this pins the no-duplicate-run half)."""
     from kyraan.control_plane import kernel
     scheduled, sent = task_env
     monkeypatch.setattr(kernel, "can_send_proactively", lambda force=False: True)
@@ -234,9 +235,11 @@ async def test_send_failure_never_reruns_the_model(task_env, monkeypatch):
     agent_tasks._send_fn = broken_send
     scheduled.clear()
     await agent_tasks.fire(task.id)
-    assert runs == [1]                                             # ran once
-    assert not any(t.id == task.id for t in agent_tasks.list_active())  # retired
-    assert not scheduled                                           # no re-run queued
+    await agent_tasks.fire(task.id)   # delivery retry with send still broken
+    assert runs == [1]                # the model ran exactly once across both
+    survivor = next(t for t in agent_tasks.list_active() if t.id == task.id)
+    assert survivor.pending_result == "the result"
+    agent_tasks.cancel(task.id)
 
 
 def test_create_refuses_interval():
@@ -294,6 +297,7 @@ async def test_local_fallback_rebuilds_prompt_with_pending_facts(monkeypatch):
 def test_voice_probe_runs_in_a_subprocess(monkeypatch):
     from kyraan.channels import voice
     voice._native_probe = None
+    voice._probe_thread = None
     calls = {}
 
     class _Proc:
@@ -307,8 +311,113 @@ def test_voice_probe_runs_in_a_subprocess(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     import importlib.util
     monkeypatch.setattr(importlib.util, "find_spec", lambda n: object())
+    voice.available()                      # kicks the daemon-thread probe
+    voice._probe_thread.join(timeout=2)
     assert voice.available() is True
     assert "import mlx_whisper" in " ".join(calls["cmd"])   # child, not us
     calls.clear()
     assert voice.available() is True and not calls          # cached
     voice._native_probe = None
+    voice._probe_thread = None
+
+
+# --- Audit round 3 ---------------------------------------------------------
+
+def test_stale_interval_catchup_lands_inside_the_window():
+    """The arithmetic jump must not resume a 10:00-21:00 series at 02:00."""
+    from datetime import time as _dtime
+    from kyraan.triggers.store import Reminder
+    stale = Reminder(id="r4", chat_id=1, text="water",
+                     when_iso=(local_now() - timedelta(days=90)).isoformat(),
+                     repeat="interval", interval_minutes=60,
+                     window_start="10:00", window_end="21:00")
+    nxt = scheduler.advance_past_now(stale)
+    assert nxt > local_now()
+    assert _dtime(10, 0) <= nxt.time() <= _dtime(21, 0)
+
+
+async def test_send_failure_stashes_result_and_redelivers(task_env, monkeypatch):
+    """Round 3: a failed send stashes the produced result; the retry
+    RESENDS it (labeled may-be-a-repeat) without re-running the model."""
+    from kyraan.control_plane import kernel
+    scheduled, sent = task_env
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda force=False: True)
+    task = agent_tasks.create(1, "one shot with flaky delivery",
+                              (local_now() + timedelta(minutes=5)).isoformat())
+    runs = []
+
+    async def counted(chat_id, instruction):
+        runs.append(1)
+        return "the precious result"
+
+    async def broken_send(chat_id, text):
+        raise RuntimeError("dns failure before anything was sent")
+
+    agent_tasks._run_fn = counted
+    agent_tasks._send_fn = broken_send
+    await agent_tasks.fire(task.id)
+    survivor = next(t for t in agent_tasks.list_active() if t.id == task.id)
+    assert survivor.pending_result == "the precious result"   # not lost
+    assert scheduler._parse_when(survivor.when_iso) > local_now()  # backoff persisted
+
+    async def working_send(chat_id, text):
+        sent.append(text)
+
+    agent_tasks._send_fn = working_send
+    await agent_tasks.fire(task.id)
+    assert runs == [1]                                        # model ran ONCE
+    assert "the precious result" in sent[-1] and "may be a repeat" in sent[-1]
+    assert not any(t.id == task.id for t in agent_tasks.list_active())  # now retired
+
+
+async def test_retry_backoff_survives_restart(task_env, monkeypatch):
+    """Round 3: retry deadlines persist in when_iso, so a restart's
+    _schedule honors the backoff instead of firing immediately."""
+    from kyraan.control_plane import kernel
+    scheduled, _ = task_env
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda force=False: True)
+    task = agent_tasks.create(1, "flaky one shot",
+                              (local_now() + timedelta(minutes=5)).isoformat())
+
+    async def broken(chat_id, instruction):
+        raise RuntimeError("model down")
+
+    agent_tasks._run_fn = broken
+    await agent_tasks.fire(task.id)
+    stored = next(t for t in agent_tasks.list_active() if t.id == task.id)
+    assert scheduler._parse_when(stored.when_iso) > local_now()  # persisted, not memory-only
+    scheduled.clear()
+    agent_tasks._schedule(stored)   # simulated restart
+    assert scheduled and scheduled[-1][1] > local_now()          # backoff honored
+    agent_tasks.cancel(task.id)
+
+
+def test_voice_probe_does_not_block(monkeypatch):
+    """Round 3: the probe runs in a daemon thread; until it reports,
+    available() answers False fast instead of blocking the loop."""
+    import time as _time
+    from kyraan.channels import voice
+    voice._native_probe = None
+    voice._probe_thread = None
+    started = {}
+
+    class _SlowProc:
+        returncode = 0
+
+    def slow_run(cmd, **kw):
+        started["yes"] = True
+        _time.sleep(0.3)
+        return _SlowProc()
+
+    import subprocess
+    monkeypatch.setattr(subprocess, "run", slow_run)
+    import importlib.util
+    monkeypatch.setattr(importlib.util, "find_spec", lambda n: object())
+    t0 = _time.monotonic()
+    first = voice.available()
+    assert _time.monotonic() - t0 < 0.2    # returned before the probe finished
+    assert first is False and started
+    voice._probe_thread.join(timeout=2)
+    assert voice.available() is True        # probe result landed
+    voice._native_probe = None
+    voice._probe_thread = None

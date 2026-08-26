@@ -254,7 +254,10 @@ def advance_past_now(record) -> "datetime":
         # the past AND stall the event loop); integer math does it in one.
         step = timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
         k = (local_now() - next_when) // step + 1
-        next_when += step * k
+        # The FINAL step goes through advance_for so the daily-window
+        # snap applies — a bare += landed a 10:00-21:00 series at 02:00
+        # after long downtime (audit round 3, P1).
+        next_when = advance_for(record, from_when=next_when + step * (k - 1))
         skipped += k
     while next_when <= local_now() and skipped < 5000:
         # remaining steps are calendar-sized (window realignment, daily/

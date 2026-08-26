@@ -44,6 +44,10 @@ class AgentTask:
     when_iso: str
     repeat: str = ""
     active: bool = True
+    # A produced-but-undelivered result (send failed): delivery retries
+    # resend THIS instead of re-running the model — results survive send
+    # failures without the duplicate-execution path (audit round 3, P1).
+    pending_result: str = ""
 
 
 def _load() -> list:
@@ -104,6 +108,24 @@ def _advance(task_id: str, next_iso: str) -> None:
         _save(records)
 
 
+def _retry_later(task: "AgentTask", minutes: int) -> None:
+    """Reschedule AND persist the retry time — an in-memory-only backoff
+    ran immediately after a restart (audit round 3, P2). Only for
+    one-shots: a recurring series' next occurrence is its retry."""
+    when = local_now() + timedelta(minutes=minutes)
+    _advance(task.id, when.isoformat())
+    _schedule_fn(f"task-{task.id}", when, {"task_id": task.id})
+
+
+def _set_pending_result(task_id: str, text: str) -> None:
+    with locked(TASKS_PATH):
+        records = _load()
+        for record in records:
+            if record["id"] == task_id:
+                record["pending_result"] = text
+        _save(records)
+
+
 def _schedule(task: AgentTask) -> None:
     assert _schedule_fn is not None, "agent_tasks.init() first"
     when = _parse_when(task.when_iso)
@@ -152,16 +174,29 @@ async def fire(task_id: str) -> None:
     if not kernel.can_send_proactively():
         log_event("agent_task_skipped_dnd", task_id=task_id)
         if not task.repeat:
-            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=30),
-                         {"task_id": task.id})  # held through quiet hours, not lost
+            _retry_later(task, 30)  # held through quiet hours, not lost
+        return
+    if task.pending_result and not task.repeat:
+        # A produced result awaits delivery — resend it, NEVER re-run the
+        # model. The label carries the ambiguity, exactly like reminders'
+        # stale-lease takeover.
+        try:
+            await _send_fn(task.chat_id,
+                           f"⏱ {task.pending_result}\n(may be a repeat — an "
+                           "earlier delivery attempt failed mid-send)")
+        except Exception as exc:
+            log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
+            _retry_later(task, 5)
+            return
+        log_event("agent_task_ran", task_id=task_id, redelivered=True)
+        cancel(task.id)
         return
     try:
         result = await _run_fn(task.chat_id, task.instruction)
     except Exception as exc:
         log_event("agent_task_failed", task_id=task_id, error=str(exc)[:200])
         if not task.repeat:
-            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=15),
-                         {"task_id": task.id})  # transient failure: retry, don't discard
+            _retry_later(task, 15)  # transient failure: retry, don't discard
         return
     if not result or not str(result).strip():
         # Both model tiers down surfaces as an EMPTY result, not an
@@ -169,19 +204,21 @@ async def fire(task_id: str) -> None:
         # (audit round 2, P1). Same retry path as a raise.
         log_event("agent_task_empty_result", task_id=task_id)
         if not task.repeat:
-            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=15),
-                         {"task_id": task.id})
+            _retry_later(task, 15)
         return
     try:
         await _send_fn(task.chat_id, f"⏱ {result}")
     except Exception as exc:
-        # A send failure is AMBIGUOUS — Telegram may have delivered before
-        # the connection died. Re-running the whole task to retry delivery
-        # is the duplication path (audit round 2, P2): the run DID happen,
-        # so a one-shot retires with the loss logged rather than executing
-        # twice.
+        # The send failed but the RUN happened. Stash the result and retry
+        # DELIVERY only — a definite pre-delivery failure is no longer a
+        # permanent loss (audit round 3, P1), and the duplicate-execution
+        # path stays closed; the may-be-a-repeat label covers the
+        # ambiguous case.
         log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
-    else:
-        log_event("agent_task_ran", task_id=task_id)
+        if not task.repeat:
+            _set_pending_result(task.id, str(result))
+            _retry_later(task, 5)
+        return
+    log_event("agent_task_ran", task_id=task_id)
     if not task.repeat:
         cancel(task.id)
