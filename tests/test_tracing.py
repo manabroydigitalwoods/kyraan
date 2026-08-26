@@ -68,3 +68,40 @@ def test_events_without_a_turn_carry_no_turn_id(monkeypatch):
     events = _lines(logging_setup.EVENT_LOG)
     probe = next(e for e in events if e["kind"] == "orphan_probe")
     assert "turn_id" not in probe
+
+
+async def test_stages_collect_into_the_turn_summary(monkeypatch):
+    """The complete-picture record: stages recorded during a turn land in
+    turn_end's summary with model/tool aggregates."""
+    import time
+
+    logging_setup.new_turn()
+    logging_setup.record_stage("model:frontier", 1200, provider="openai")
+    logging_setup.record_stage("tool:web.search", 850)
+    with logging_setup.stage("face_recognize"):
+        time.sleep(0.01)
+    summary = logging_setup.turn_summary()
+    assert summary["model_calls"] == 1
+    assert summary["model_ms"] == 1200
+    assert summary["tool_ms"] == 850
+    names = [s["stage"] for s in summary["stages"]]
+    assert names == ["model:frontier", "tool:web.search", "face_recognize"]
+    assert summary["stages"][2]["ms"] >= 10
+
+    traces = _lines(logging_setup.TRACE_LOG)
+    assert sum(1 for t in traces if t["kind"] == "stage") == 3
+
+
+async def test_kernel_tool_run_records_a_stage(monkeypatch):
+    async def fake_dispatch(spec, args):
+        return []
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    logging_setup.new_turn()
+    await kernel.run_tool(kernel.ToolCall("reminders.list", {})
+                          if "reminders.list" in reg.load() else
+                          kernel.ToolCall("calendar.list_events",
+                                          {"start": "2026-01-01T00:00:00",
+                                           "end": "2026-01-02T00:00:00"}))
+    stages = logging_setup.turn_summary()["stages"]
+    assert any(s["stage"].startswith("tool:") for s in stages)

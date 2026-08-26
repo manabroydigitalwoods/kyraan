@@ -75,8 +75,20 @@ def main() -> None:
             status = "ok" if r.get("ok") else f"FAILED: {_clip(r.get('error', ''), 120)}"
             dur = f" {r.get('duration_ms')}ms" if r.get("duration_ms") is not None else ""
             print(f"{ts}    result  {r.get('tool') or r.get('skill')}{dur} {status}")
+        elif kind == "stage":
+            print(f"{ts}    stage   {r.get('stage'):<22} {r.get('ms')}ms")
         elif kind == "turn_end":
             print(f"{ts}  REPLY     ({r.get('total_ms')}ms total) {_clip(r.get('reply', ''), 300)}")
+            stages = r.get("stages") or []
+            if stages and r.get("total_ms"):
+                total = r["total_ms"]
+                print("            —— timing ——")
+                for s in sorted(stages, key=lambda x: -x.get("ms", 0)):
+                    pct = s.get("ms", 0) * 100 // max(total, 1)
+                    extra = s.get("provider") or ""
+                    print(f"            {s.get('ms', 0):>7}ms {pct:>3}%  {s.get('stage')} {extra}")
+                accounted = sum(s.get("ms", 0) for s in stages)
+                print(f"            {max(total - accounted, 0):>7}ms {max(total - accounted, 0) * 100 // max(total, 1):>3}%  (transport/overhead)")
         elif kind in ("model_call", "tool_retry"):
             continue  # detail already shown via model_io / final result
         else:

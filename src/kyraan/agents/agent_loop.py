@@ -256,10 +256,12 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         log_event("blocked_kill_switch", skill="agent.loop", args={"chat_id": chat_id})
         raise kernel.KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
 
-    system = _AGENT_SYSTEM.format(
-        capabilities=capability_brief(),
-        tools=_tools_block(read_only=read_only),
-    )
+    from kyraan.control_plane.logging_setup import stage as _stage
+    with _stage("prompt_build"):
+        system = _AGENT_SYSTEM.format(
+            capabilities=capability_brief(),
+            tools=_tools_block(read_only=read_only),
+        )
     if read_only:
         system += ("\n\nSCHEDULED RUN: you are executing a scheduled task, "
                    "not chatting. Only READ tools exist here — any action "

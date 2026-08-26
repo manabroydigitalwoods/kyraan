@@ -277,8 +277,10 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         with tempfile.NamedTemporaryFile(suffix=".oga", delete=False) as handle:
             temp_path = Path(handle.name)
         try:
-            await tg_file.download_to_drive(custom_path=temp_path)
-            text = await voice.transcribe(temp_path)
+            from kyraan.control_plane.logging_setup import stage as _vstage
+            with _vstage("voice_transcribe"):
+                await tg_file.download_to_drive(custom_path=temp_path)
+                text = await voice.transcribe(temp_path)
         finally:
             temp_path.unlink(missing_ok=True)  # transient: no audio at rest
     finally:
@@ -307,7 +309,9 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     pin = update.message.location
     typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
     try:
-        described = await asyncio.to_thread(geo.describe, pin.latitude, pin.longitude)
+        from kyraan.control_plane.logging_setup import stage as _gstage
+        with _gstage("geocode_pin"):
+            described = await asyncio.to_thread(geo.describe, pin.latitude, pin.longitude)
     finally:
         typing.cancel()
     logger.info("Location pin resolved: %s", described)
@@ -359,8 +363,10 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
     try:
         # largest thumbnail Telegram offers — plenty for detail=low vision
-        tg_file = await update.message.photo[-1].get_file()
-        image_bytes = bytes(await tg_file.download_as_bytearray())
+        from kyraan.control_plane.logging_setup import stage as _stage
+        with _stage("photo_download"):
+            tg_file = await update.message.photo[-1].get_file()
+            image_bytes = bytes(await tg_file.download_as_bytearray())
         faces.stash_photo(chat_id, image_bytes)
 
         # Either form: the strict phrase ("remember this face as X") or
@@ -374,13 +380,15 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # bytes stay captured in the handler for the owner's yes.
             reply = await _enroll_face_gated(chat_id, enroll_name, image_bytes)
             orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
-            log_trace("turn_end", chat_id=chat_id, reply=reply)
+            from kyraan.control_plane.logging_setup import turn_summary
+            log_trace("turn_end", chat_id=chat_id, reply=reply, **turn_summary())
             await update.message.reply_text(_plain(reply), do_quote=True)
             return
 
-        recognized = (await asyncio.to_thread(faces.recognize, image_bytes)
-                      if faces.available()
-                      else {"names": [], "maybe": [], "unknown_faces": 0})
+        with _stage("face_recognize"):
+            recognized = (await asyncio.to_thread(faces.recognize, image_bytes)
+                          if faces.available()
+                          else {"names": [], "maybe": [], "unknown_faces": 0})
         data_url = ("data:image/jpeg;base64,"
                     + base64.b64encode(image_bytes).decode())
         reply, vision_enroll = await photo.answer(
@@ -415,7 +423,9 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     orchestrator.record_exchange(
         update.effective_chat.id,
         f"[sent a photo{': ' + caption if caption else ''}]", reply)
-    log_trace("turn_end", chat_id=update.effective_chat.id, reply=reply)
+    from kyraan.control_plane.logging_setup import turn_summary
+    log_trace("turn_end", chat_id=update.effective_chat.id, reply=reply,
+              **turn_summary())
     await update.message.reply_text(_plain(reply), do_quote=True)
 
 

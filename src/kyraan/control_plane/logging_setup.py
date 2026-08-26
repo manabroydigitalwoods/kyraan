@@ -28,15 +28,63 @@ TRACE_LOG = LOG_DIR / "traces.jsonl"
 _turn_id: contextvars.ContextVar = contextvars.ContextVar("turn_id", default=None)
 
 
+_turn_stages: contextvars.ContextVar = contextvars.ContextVar("turn_stages", default=None)
+
+
 def new_turn() -> str:
     """Open a turn: returns the id now stamped on this task's events."""
     tid = uuid.uuid4().hex[:12]
     _turn_id.set(tid)
+    _turn_stages.set([])
     return tid
 
 
 def turn_id():
     return _turn_id.get()
+
+
+def record_stage(name: str, ms: float, **fields) -> None:
+    """One timed pipeline step inside the current turn — model calls,
+    tool runs, photo downloads, face matching, geocoding, extraction.
+    Collected for the turn_end summary AND written as a trace record, so
+    'which step was slow?' is answerable per turn from the log alone."""
+    entry = {"stage": name, "ms": round(ms), **fields}
+    stages = _turn_stages.get()
+    if stages is not None:
+        stages.append(entry)
+    log_trace("stage", **entry)
+
+
+class stage:
+    """Context manager: `with logging_setup.stage("face_recognize"): ...`
+    times the block (awaits included — wall time is the point)."""
+
+    def __init__(self, name: str, **fields):
+        self.name, self.fields = name, fields
+
+    def __enter__(self):
+        import time as _t
+        self._t0 = _t.monotonic()
+        return self
+
+    def __exit__(self, *exc):
+        import time as _t
+        record_stage(self.name, (_t.monotonic() - self._t0) * 1000, **self.fields)
+        return False
+
+
+def turn_summary() -> dict:
+    """Aggregates for turn_end: every stage with its ms, plus model-call
+    and tool totals — the complete per-turn picture in one record."""
+    stages = _turn_stages.get() or []
+    model = [s for s in stages if s["stage"].startswith("model:")]
+    tools = [s for s in stages if s["stage"].startswith("tool:")]
+    return {
+        "stages": stages,
+        "model_calls": len(model),
+        "model_ms": sum(s["ms"] for s in model),
+        "tool_ms": sum(s["ms"] for s in tools),
+    }
 # Full chat transcript (user messages, replies, proactive sends) — the raw
 # material for debugging misroutes and, later, Phase 4's reflection loop
 # and eval harness. Local disk only, rotated like the event log. Replies

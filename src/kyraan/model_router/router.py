@@ -577,7 +577,8 @@ def call(
                 had_reasoning=raw.reasoning is not None,
                 cost_usd=cost_usd,
             )
-            from kyraan.control_plane.logging_setup import log_trace
+            from kyraan.control_plane.logging_setup import log_trace, record_stage
+            record_stage(f"model:{tier}", latency_ms, provider=provider, model=model)
             log_trace(
                 "model_io",
                 tier=tier, provider=provider, model=model,

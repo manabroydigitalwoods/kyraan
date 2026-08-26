@@ -332,13 +332,16 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     reply = await _dispatch(chat_id, raw_text)
     if not _skip_extraction.get():
         import asyncio as _aio
+
+        from kyraan.control_plane.logging_setup import stage as _stage
         try:
             # Extraction is bookkeeping — it must never hold the reply
             # hostage. Live 2026-08-27: a local-model reload made "ok
             # that great" take 23s because extraction sat on the reply
             # path. A slow turn skips extraction for ONE message.
-            reply += await _aio.wait_for(_extraction_note(chat_id, raw_text),
-                                         timeout=6)
+            with _stage("extraction"):
+                reply += await _aio.wait_for(_extraction_note(chat_id, raw_text),
+                                             timeout=6)
         except _aio.TimeoutError:
             log_event("extraction_skipped_slow", chat_id=chat_id)
     _skip_extraction.reset(skip_token)
@@ -376,8 +379,10 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     # without it, the redaction died at the first restart (review P1).
     log_chat(chat_id, "assistant", reply,
              **({"cloud_text": redacted} if redacted else {}))
+    from kyraan.control_plane.logging_setup import turn_summary
     log_trace("turn_end", chat_id=chat_id, reply=reply,
-              total_ms=round((time.monotonic() - turn_started) * 1000))
+              total_ms=round((time.monotonic() - turn_started) * 1000),
+              **turn_summary())
     return reply
 
 

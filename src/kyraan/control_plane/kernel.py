@@ -165,8 +165,11 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
     for attempt in range(spec.retries + 1):
         try:
             result = await asyncio.wait_for(registry.dispatch(spec, call.args), timeout=spec.timeout_s)
+            duration = round((_time.monotonic() - started) * 1000)
             log_event("tool_result", tool=spec.name, ok=True, attempt=attempt,
-                      duration_ms=round((_time.monotonic() - started) * 1000))
+                      duration_ms=duration)
+            from kyraan.control_plane.logging_setup import record_stage
+            record_stage(f"tool:{spec.name}", duration)
             return result
         except asyncio.TimeoutError as exc:
             if spec.side_effects == "write":
