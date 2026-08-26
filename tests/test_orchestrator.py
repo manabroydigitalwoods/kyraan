@@ -1962,3 +1962,61 @@ async def test_overflow_resume_preserves_the_title_filter(monkeypatch):
     receipt = await orchestrator.handle_message(chat_id=0, raw_text="yes")
     assert "3 event(s) still to cancel" in receipt
     assert '"cancel all yoga events next month"' in receipt # and in the receipt
+
+
+async def test_date_range_connectors_do_not_dead_end_cancellation(monkeypatch):
+    """Round-9: 'cancel all events from 3rd to 10th feb' — connectors and
+    date tokens are never title filters; the window sweeps."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-02-03T00:00:00+00:00", "end_iso": "2099-02-10T23:59:59+00:00", "label": "3-10 February"}'))
+    events = [{"id": "ev1", "title": "Board meeting", "start": "2099-02-05T10:00:00+00:00",
+               "end": "2099-02-05T11:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False}]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events from 3rd to 10th feb")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events from 3rd to 10th feb")
+    assert "About to DELETE 1 event(s)" in ask and "couldn't match" not in ask
+
+
+async def test_meal_titles_still_filter_instead_of_sweeping(monkeypatch):
+    """Round-9: 'cancel all dinner events' targets dinner events only —
+    treating meals as window words would have swept the whole calendar."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-02-01T00:00:00+00:00", "end_iso": "2099-02-28T23:59:59+00:00", "label": "next month"}'))
+    events = [
+        {"id": "d1", "title": "Dinner with Mira", "start": "2099-02-10T20:00:00+00:00",
+         "end": "2099-02-10T21:00:00+00:00", "all_day": False, "location": None, "recurring": False},
+        {"id": "b1", "title": "Board meeting", "start": "2099-02-05T10:00:00+00:00",
+         "end": "2099-02-05T11:00:00+00:00", "all_day": False, "location": None, "recurring": False},
+    ]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all dinner events next month")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all dinner events next month")
+    assert "Dinner with Mira" in ask
+    assert "Board meeting" not in ask

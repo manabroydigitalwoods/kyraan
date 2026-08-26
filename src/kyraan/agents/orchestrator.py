@@ -855,7 +855,9 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             "week", "weekend", "month", "months", "year", "next", "last",
             "coming", "morning", "evening", "afternoon", "tonight",
             "yes", "right", "now", "it", "them", "and", "of", "for",
-            "can", "you", "everything", "every"}
+            "can", "you", "everything", "every",
+            "to", "through", "thru", "during", "until", "till", "between",
+            "on", "in", "at", "after", "before", "starting", "ending"}
     words = {w.strip(".,!?\"'").lower() for w in text.split()}
     # Time vocabulary can never be a title filter (round-8: subtracting
     # the extractor's label words broke when the label was humanized —
@@ -1058,10 +1060,8 @@ async def _check_email(chat_id: int, text: str = "") -> str:
     # never fetches (§3a: metadata only). Say the boundary instead of
     # dumping the same list again (seen live: "can you open email?" got an
     # identical unread summary, as if it answered the question).
-    wants_body = any(w in text.lower() for w in (
-        "open", "read", "body", "content", "full", "detail", "more about",
-        "tell me about", "about the email", "what does", "says", "summar",
-    ))
+    from kyraan.agents.guards import wants_email_body
+    wants_body = wants_email_body(text)
 
     async def handler(_args: dict) -> str:
         # The reply the user sees carries senders/subjects; when any model

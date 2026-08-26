@@ -83,10 +83,9 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     messages = result.get("messages", [])
     if not messages:
         return {"__direct_reply__": "No unread emails."}
+    from kyraan.agents.guards import wants_email_body
     lines = []
-    if any(w in raw_text.lower() for w in (
-            "open", "read", "body", "content", "full", "detail", "more about",
-            "tell me about", "about the email", "what does", "says", "summar")):
+    if wants_email_body(raw_text):
         # The user asked for a BODY — the §3a boundary line leads the
         # reply (the direct-reply short-circuit had silently dropped it:
         # eval case email.boundary caught the regression).

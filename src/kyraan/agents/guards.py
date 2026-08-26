@@ -183,7 +183,7 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
             continue
         tail = raw_text[m.end():m.end() + 16].lower()
         if re.match(r"\s*(call|meeting|session|appointment|class|shift|standup)\b"
-                    r"|\s*\w+\s+(ends|finishes)\b", tail):
+                    r"|\s*(?:\w+\s+)?(ends|finishes|starts|begins)\b", tail):
             continue
         matches.append(m.groups())
 
@@ -229,16 +229,36 @@ _WINDOW_VOCAB = {
 }
 
 
+_WINDOW_ONLY = {
+    "today", "tomorrow", "tonight", "yesterday", "morning", "evening",
+    "afternoon", "noon", "midnight", "night", "week", "weekend", "month",
+    "months", "year", "next", "last", "this", "coming", "am", "pm",
+}
+
+
 def is_window_word(word: str) -> bool:
-    """Time-vocabulary words can never be event-title filters (round-8:
-    label subtraction broke whenever the extractor humanized the window —
-    user says 'feb', label says 'February 2099'). Deterministic on the
-    USER'S OWN tokens: months, weekdays, time-of-day words, ordinals,
-    numerics, am/pm."""
+    """UNAMBIGUOUS time vocabulary can never be an event-title filter
+    (round-8/9). Deliberately narrower than _TIME_WORDS: double-duty
+    words like dinner/lunch/breakfast are legitimate title filters
+    ('cancel all dinner events') and keeping them errs toward ASKING
+    rather than sweeping every event. Months, weekdays, relative-time
+    words, ordinals, numerics, am/pm only."""
     w = word.strip(".,!?'\"").lower()
     if not w:
         return True
-    if w in _WINDOW_VOCAB or w in _TIME_WORDS or w in ("am", "pm"):
+    if w in _WINDOW_VOCAB or w in _WINDOW_ONLY:
         return True
     core = w[:-2] if w.endswith(("st", "nd", "rd", "th")) else w
     return core.replace(":", "").replace("/", "").replace("-", "").isdigit()
+
+
+def wants_email_body(text: str) -> bool:
+    """The user is asking for an email's CONTENTS (round-9: substring
+    matching made 'read' hit 'unread' and mislabeled plain listing
+    requests — in BOTH brains; this is now the one shared detector)."""
+    import re
+    lowered = text.lower()
+    if re.search(r"\b(open|read|body|content|contents|full|detail|details|says|summar\w*)\b",
+                 lowered):
+        return True
+    return any(p in lowered for p in ("more about", "tell me about", "about the email", "what does"))

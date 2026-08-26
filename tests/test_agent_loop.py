@@ -579,3 +579,24 @@ def test_window_vocabulary_never_filters_titles():
         assert guards.is_window_word(w), w
     for w in ("yoga", "dentist", "board", "suman"):
         assert not guards.is_window_word(w), w
+
+
+def test_round9_precision_fixes(monkeypatch):
+    """Round-9: zero-noun end-verbs filter ('my call at 7:45pm ends');
+    meals stay title-eligible; 'read' no longer hits 'unread'."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    from kyraan.agents import guards
+
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    start, _ = guards.normalized_event_times(args, "My call at 7:45pm ends, add dinner at 8")
+    assert "T20:00:00" in start
+
+    assert not guards.is_window_word("dinner")
+    assert not guards.is_window_word("lunch")
+    assert guards.is_window_word("feb") and guards.is_window_word("tomorrow")
+
+    assert not guards.wants_email_body("any unread emails?")
+    assert not guards.wants_email_body("show my unread mail")
+    assert guards.wants_email_body("open the first email")
+    assert guards.wants_email_body("read the email from Suman")
+    assert guards.wants_email_body("summarize the latest email")
