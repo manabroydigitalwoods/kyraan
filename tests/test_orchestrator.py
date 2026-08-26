@@ -1286,9 +1286,12 @@ async def test_verbatim_repetition_retries_then_admits(monkeypatch):
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
 
+    import time as _time
+
     # Retry produces something fresh -> the fresh reply wins.
     orchestrator._history[51].clear()
     orchestrator._history[51].append(("assistant", "I can't book cabs yet."))
+    orchestrator._last_reply_at[51] = _time.monotonic()  # live exchange
     replies = iter([_FakeRouted(text="I can't book cabs yet."),
                     _FakeRouted(text="Sorry — what would you like help with?")])
     monkeypatch.setattr(orchestrator.router, "call", lambda **kw: next(replies))
@@ -1298,6 +1301,7 @@ async def test_verbatim_repetition_retries_then_admits(monkeypatch):
     # Retry repeats too -> honest admission, never the loop.
     orchestrator._history[52].clear()
     orchestrator._history[52].append(("assistant", "I can't book cabs yet."))
+    orchestrator._last_reply_at[52] = _time.monotonic()
     monkeypatch.setattr(orchestrator.router, "call",
                         lambda **kw: _FakeRouted(text="I can't book cabs yet."))
     result = await orchestrator.handle_message(chat_id=52, raw_text="on what")
@@ -1493,3 +1497,34 @@ def test_meta_detection_covers_complaints_and_questions():
     assert not orchestrator._is_meta_question("check emails")
     assert not orchestrator._is_meta_question("any new emails?")
     assert not orchestrator._is_meta_question("cancel all events today")
+
+
+async def test_repeated_greeting_is_not_a_repetition_loop(monkeypatch):
+    """Found live the morning after history seeding: 'helo' matched last
+    night's greeting reply and got the I'm-repeating-myself apology. A
+    greeting answered with the same greeting — especially with no live
+    exchange this process — is human, not a loop."""
+    _mock_normalize(monkeypatch, "qa.answer", "helo")
+    monkeypatch.setattr(orchestrator.router, "call",
+                        lambda **kw: _FakeRouted(text="Hello! How can I assist you today?"))
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+
+    # Seeded history holds the same greeting from last night; no reply has
+    # been sent by THIS process (no _last_reply_at entry).
+    orchestrator._history[54].clear()
+    orchestrator._history[54].append(("assistant", "Hello! How can I assist you today?"))
+    orchestrator._last_reply_at.pop(54, None)
+
+    result = await orchestrator.handle_message(chat_id=54, raw_text="helo")
+    assert result.startswith("Hello! How can I assist you today?")
+
+    # Even mid-conversation, a greeting repeat stays exempt.
+    import time as _time
+    orchestrator._last_reply_at[54] = _time.monotonic()
+    result = await orchestrator.handle_message(chat_id=54, raw_text="hello there")
+    assert result.startswith("Hello! How can I assist you today?")
+    orchestrator._history.pop(54, None)

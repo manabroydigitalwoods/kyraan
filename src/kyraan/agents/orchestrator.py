@@ -44,7 +44,11 @@ is {now}. Respond the way a capable, trusted human assistant would: direct,
 natural, matched in length to the question. A greeting gets a short friendly
 reply. If asked who you are: "I'm Kyraan, a personal assistant." Skip
 disclaimers, meta-commentary about being an AI, and unsolicited lists of
-what you can do.
+what you can do. But when the user ASKS what you can do ("what can you
+help with?", "what kind of assist you can do?"), that list IS the answer:
+give a short friendly summary of the live capabilities below (reminders,
+calendar, email, home devices, questions) — never deflect with "how can
+I help you today?".
 
 {capabilities}
 
@@ -213,8 +217,23 @@ def _is_meta_question(text: str) -> bool:
 
 
 # The exact last reply each chat received (unredacted — _history may hold
-# a redacted placeholder when a cloud tier is active).
+# a redacted placeholder when a cloud tier is active) and when this
+# process sent it (monotonic; absent after a restart, which is exactly
+# right — seeded history must never look like a live exchange).
 _last_sent_reply: dict = {}
+_last_reply_at: dict = {}
+
+_GREETING_WORDS = {
+    "hi", "hii", "hiii", "hello", "helo", "hallo", "hey", "heya", "yo",
+    "namaste", "good", "morning", "evening", "afternoon", "night", "there",
+    "kyraan",
+}
+
+
+def _is_greeting(text: str) -> bool:
+    words = [w.strip(".,!?…\"'").lower() for w in text.split()]
+    words = [w for w in words if w]
+    return bool(words) and all(w in _GREETING_WORDS for w in words)
 
 
 async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) -> str:
@@ -507,6 +526,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     _history[chat_id].append(("assistant", _history_redaction.get() or reply))
     _history_redaction.reset(redaction_token)
     _last_sent_reply[chat_id] = reply
+    _last_reply_at[chat_id] = time.monotonic()
     log_chat(chat_id, "user", raw_text)
     log_chat(chat_id, "assistant", reply)
     return reply
@@ -1168,7 +1188,15 @@ async def _answer(chat_id: int, text: str) -> str:
             tier = "cheap"
         reply = response.text
         recent = [t.strip() for role, t in list(_history[chat_id])[-6:] if role == "assistant"]
-        if reply.strip() and reply.strip() in recent:
+        # A pathological loop repeats within MINUTES to different
+        # questions; greeting a greeting identically hours later is just
+        # being human. Found live: after history seeding, "helo" the next
+        # morning matched last night's greeting reply and got the
+        # I'm-repeating-myself apology. The guard needs a live exchange
+        # this process (< 15 min) and never fires on a greeting.
+        recently_active = time.monotonic() - _last_reply_at.get(chat_id, float("-inf")) < 900
+        if (reply.strip() and reply.strip() in recent and recently_active
+                and not _is_greeting(args["text"])):
             # A human never sends the same sentence twice in a row —
             # verbatim repetition is a small-model failure mode (seen
             # live 2026-08-26: "I can't book cabs yet." to three
