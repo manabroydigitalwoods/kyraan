@@ -41,6 +41,10 @@ from kyraan.triggers import scheduler
 # default to it), so the path for the user to say "yes" must exist before
 # Phase 2 adds tools that rely on it.
 _pending_confirmations: dict = {}
+# Per-chat nonce for the CURRENT pending confirmation — inline buttons
+# embed it, so a stale "Yes" from an older message can never confirm a
+# newer action (security round P1).
+_confirmation_nonce: dict = {}
 # A pending confirmation goes stale: "About to turn the AC ON" asked at
 # noon must not execute on an unrelated "yes" hours later. Physical
 # actions deserve freshness.
@@ -105,8 +109,21 @@ async def _review_memory(chat_id: int, text: str) -> str:
 
 
 def _cloud_tier_in_use() -> bool:
-    tiers = kernel.config.load().get("model_tiers", {})
-    return any(t.get("provider") != "ollama" for t in tiers.values())
+    """A tier is local only if its ENDPOINT is local — trusting the
+    provider name let a remote Ollama server receive data treated as
+    machine-local (security round P2)."""
+    import os as _os
+    cfg = kernel.config.load()
+    providers = cfg.get("providers", {})
+    for tier in cfg.get("model_tiers", {}).values():
+        provider = providers.get(tier.get("provider"), {})
+        base = provider.get("base_url") or ""
+        if provider.get("kind") == "ollama_native":
+            base = _os.environ.get("OLLAMA_BASE_URL") or base or "http://localhost:11434"
+        host = base.split("//")[-1].split("/")[0].split(":")[0]
+        if not (host == "localhost" or host == "127.0.0.1" or host.endswith(".localhost")):
+            return True
+    return False
 
 
 # The exact last reply each chat received (unredacted — _history may hold
@@ -465,28 +482,38 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     _pending_reviews.pop(chat_id, None)
                     _skip_extraction.set(True)
                     approved_idx, rejected_idx = decision
-                    saved, discarded = [], []
-                    for i in approved_idx:
-                        path, target, fact = proposals[i]
-                        if path.exists():
-                            memory_store.promote(path)
-                            saved.append(fact)
-                            log_event("memory_promoted_via_chat", target=target, fact=fact[:80])
-                    for i in rejected_idx:
-                        path, target, fact = proposals[i]
-                        if path.exists():
-                            memory_store.reject(path)
-                            discarded.append(fact)
-                            log_event("memory_rejected_via_chat", target=target, fact=fact[:80])
-                    remaining = len(_load_review_proposals())
-                    parts = []
-                    if saved:
-                        parts.append("✅ Saved to memory: " + "; ".join(saved))
-                    if discarded:
-                        parts.append("🗑 Rejected: " + "; ".join(discarded))
-                    if remaining:
-                        parts.append(f"{remaining} still pending — say \"review memory\" to see them.")
-                    return "\n".join(parts) if parts else "Nothing changed."
+
+                    async def _apply_review(_a: dict) -> str:
+                        # Runs INSIDE the kernel (security round P1: the
+                        # decision used to promote/reject with the kill
+                        # switch engaged) — kill switch, audit, the works.
+                        saved, discarded = [], []
+                        for i in approved_idx:
+                            path, target, fact = proposals[i]
+                            if path.exists():
+                                memory_store.promote(path)
+                                saved.append(fact)
+                                log_event("memory_promoted_via_chat", target=target, fact=fact[:80])
+                        for i in rejected_idx:
+                            path, target, fact = proposals[i]
+                            if path.exists():
+                                memory_store.reject(path)
+                                discarded.append(fact)
+                                log_event("memory_rejected_via_chat", target=target, fact=fact[:80])
+                        remaining = len(_load_review_proposals())
+                        parts = []
+                        if saved:
+                            parts.append("✅ Saved to memory: " + "; ".join(saved))
+                        if discarded:
+                            parts.append("🗑 Rejected: " + "; ".join(discarded))
+                        if remaining:
+                            parts.append(f"{remaining} still pending — say \"review memory\" to see them.")
+                        return "\n".join(parts) if parts else "Nothing changed."
+
+                    return str(await kernel.run_skill(
+                        SkillCall("memory.review", {"approve": approved_idx,
+                                                    "reject": rejected_idx}, confirmed=True),
+                        _apply_review))
 
         # The model-driven tool loop is the PRIMARY brain (2026-08-26): a
         # frontier model reads the conversation + memory + tool menu and
@@ -695,6 +722,8 @@ async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> 
     try:
         return str(await kernel.run_skill(call, handler))
     except ConfirmationRequired:
+        import uuid as _uuid
+        _confirmation_nonce[chat_id] = _uuid.uuid4().hex[:12]
         _pending_confirmations[chat_id] = (call, handler, time.monotonic())
         what = describe or f"'{call.skill_name}' needs your confirmation first"
         return f"{what} — reply \"yes\" to confirm or \"no\" to cancel."

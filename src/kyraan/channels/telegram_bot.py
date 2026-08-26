@@ -65,9 +65,10 @@ def _confirm_keyboard(chat_id: int) -> InlineKeyboardMarkup | None:
     typed "yes" never is."""
     if chat_id not in orchestrator._pending_confirmations:
         return None
+    nonce = orchestrator._confirmation_nonce.get(chat_id, "")
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes", callback_data="kyraan_yes"),
-        InlineKeyboardButton("❌ No", callback_data="kyraan_no"),
+        InlineKeyboardButton("✅ Yes", callback_data=f"kyraan_yes:{nonce}"),
+        InlineKeyboardButton("❌ No", callback_data=f"kyraan_no:{nonce}"),
     ]])
 
 
@@ -77,14 +78,27 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await query.answer()
         return
     await query.answer()
-    word = "yes" if query.data == "kyraan_yes" else "no"
+    action, _, nonce = (query.data or "").partition(":")
+    chat_id = update.effective_chat.id
+    if nonce != orchestrator._confirmation_nonce.get(chat_id, ""):
+        # A button from an OLDER message must never confirm the current
+        # pending action (security round P1: the callback was static).
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="That button belongs to an earlier ask and is no longer "
+                 "active — reply to the latest confirmation instead.")
+        return
+    word = "yes" if action == "kyraan_yes" else "no"
     # Remove the buttons from the ask so a decided confirmation can't be
     # tapped twice, then run the exact same path a typed yes/no takes.
     try:
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
         pass  # message may be old/edited — the confirm flow still decides
-    chat_id = update.effective_chat.id
     async with _lock_for(chat_id):
         reply = await orchestrator.handle_message(chat_id, word)
     await context.bot.send_message(chat_id=chat_id, text=_plain(reply))
@@ -272,6 +286,25 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
     logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
 
 
+def _harden_data_permissions() -> None:
+    """Personal data is owner-only on disk (security round P2: 0644/0755
+    let any local account read the chat log and memory tree)."""
+    import stat
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    for name in ("logs", "memory", "data"):
+        root = repo / name
+        if not root.exists():
+            continue
+        os.chmod(root, 0o700)
+        for path in root.rglob("*"):
+            try:
+                os.chmod(path, 0o700 if path.is_dir() else 0o600)
+            except OSError:
+                pass
+
+
 def _validate_startup() -> None:
     """Fail LOUDLY at boot instead of latently at first use (review P2):
     the tool registry's load-time validation (unknown servers, auto
@@ -329,6 +362,7 @@ def _validate_startup() -> None:
 
 def run() -> None:
     _validate_startup()
+    _harden_data_permissions()
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
@@ -337,7 +371,7 @@ def run() -> None:
         | filters.Sticker.ALL | filters.Document.ALL,
         _on_unsupported,
     ))
-    app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)$"))
+    app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)"))
 
     _wire_scheduler(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)

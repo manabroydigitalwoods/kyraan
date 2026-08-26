@@ -41,9 +41,19 @@ class AgentUnavailable(Exception):
 # Each returns a JSON-serializable result for the model to read, or raises
 # kernel.ConfirmationRequired (writes) / kernel.ToolFailed (surfaced).
 
+# id -> title from each chat's most recent listing: deletion must prove
+# the confirmed title and the executed id are the SAME event (security
+# round P1 — a drifting model could show one title and delete another).
+_listing_cache: dict = {}
+
+
 async def _calendar_list(chat_id: int, args: dict, raw_text: str):
     events = await kernel.run_tool(kernel.ToolCall(
         "calendar.list_events", {"start": args["start"], "end": args["end"]}))
+    cache = _listing_cache.setdefault(chat_id, {})
+    for event in events:
+        if event.get("id"):
+            cache[event["id"]] = str(event.get("title", ""))
     return events[:20]
 
 
@@ -64,9 +74,19 @@ async def _calendar_create(chat_id: int, args: dict, raw_text: str):
 
 
 async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
+    known_title = _listing_cache.get(chat_id, {}).get(str(args["event_id"]))
+    if known_title is None:
+        raise kernel.ToolFailed(
+            "that event id is not from a listing in this conversation — call "
+            "calendar.list_events first, then delete by the listed id")
+    claimed = str(args.get("title", "")).strip().casefold()
+    if claimed and claimed != known_title.strip().casefold():
+        raise kernel.ToolFailed(
+            f"id/title mismatch: that id belongs to {known_title!r}, not "
+            f"{args.get('title')!r} — the confirmation must name the real event")
     return await kernel.run_tool(kernel.ToolCall(
         "calendar.delete_event",
-        {"event_id": args["event_id"], "title": args.get("title", "")}))
+        {"event_id": args["event_id"], "title": known_title}))
 
 
 async def _email_unread(chat_id: int, args: dict, raw_text: str):

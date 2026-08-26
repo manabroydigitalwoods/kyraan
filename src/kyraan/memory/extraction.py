@@ -94,10 +94,15 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
 
     async def handler(args: dict) -> list[str]:
         system = _EXTRACT_FACTS_SYSTEM.format(now=local_now().isoformat())
-        known_lines = store.known_fact_lines()  # word-sets, for the dedup guard
-        known_text = (store.load_all_facts(2000) + "\n"
+        known_lines = store.known_fact_lines()  # word-sets, LOCAL dedup guard
+        # The prompt gets the engine's FILTERED view (security round P1:
+        # the flat tree resurrected forgotten and discretion-hidden facts
+        # into a cloud prompt on every message). Full dedup stays in the
+        # local code guard above.
+        from kyraan.memory import engine
+        known_text = (engine.memory_context(args["text"]) + "\n"
                       + store.load_pending_facts(800)).strip()
-        if known_text:
+        if known_text and "(no facts stored yet)" not in known_text.split("\n")[0]:
             system += ("\n\nAlready known facts (for the duplicate rule and "
                        "the supersedes field):\n" + known_text)
         if context:

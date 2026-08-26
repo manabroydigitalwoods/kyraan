@@ -38,9 +38,11 @@ def scripted_model(monkeypatch):
 def clean_chat_state():
     orchestrator._history.pop(90, None)
     orchestrator._pending_confirmations.pop(90, None)
+    agent_loop._listing_cache.pop(90, None)
     yield
     orchestrator._history.pop(90, None)
     orchestrator._pending_confirmations.pop(90, None)
+    agent_loop._listing_cache.pop(90, None)
 
 
 async def test_plain_conversation_replies_without_tools(scripted_model, monkeypatch):
@@ -154,6 +156,9 @@ async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, m
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    # deletion requires an id from THIS conversation's listing (security
+    # round P1) — seed it as a prior calendar.list_events would have
+    agent_loop._listing_cache[90] = {"ev9": "Test Event"}
     scripted_model([
         '{"action": "call", "tool": "calendar.delete_event", '
         '"args": {"event_id": "ev9", "title": "Test Event"}}',
@@ -642,3 +647,38 @@ async def test_empty_inbox_body_request_still_states_the_boundary(scripted_model
     reply = await agent_loop.run(90, "read this email please")
     assert "can't open email contents" in reply
     assert "no unread emails" in reply.lower()
+
+
+async def test_delete_refuses_unlisted_ids_and_mismatched_titles(scripted_model, monkeypatch):
+    """Security round P1: the confirmed title and the executed id must
+    provably be the same event — unlisted ids are refused, and a
+    mismatched title never deletes what the id points at."""
+    dispatched = []
+
+    async def fake_dispatch(spec, args):
+        dispatched.append(args)
+        return {"id": args.get("event_id"), "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+
+    # unlisted id -> refused, model told to list first
+    prompts = scripted_model([
+        '{"action": "call", "tool": "calendar.delete_event", '
+        '"args": {"event_id": "evX", "title": "Anything"}}',
+        '{"action": "reply", "text": "Let me list your events first."}',
+    ])
+    await agent_loop.run(90, "delete it")
+    assert dispatched == []
+    assert "not from a listing" in prompts[1]
+
+    # listed id but WRONG title -> refused with the real title named
+    agent_loop._listing_cache[90] = {"ev1": "Board meeting"}
+    prompts = scripted_model([
+        '{"action": "call", "tool": "calendar.delete_event", '
+        '"args": {"event_id": "ev1", "title": "Yoga class"}}',
+        '{"action": "reply", "text": "Those do not match — let me re-check."}',
+    ])
+    base = len(prompts)  # the fixture accumulates across installs
+    await agent_loop.run(90, "delete the yoga class")
+    assert dispatched == []
+    assert "id/title mismatch" in prompts[base + 1] and "Board meeting" in prompts[base + 1]

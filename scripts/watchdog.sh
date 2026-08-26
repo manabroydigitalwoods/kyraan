@@ -12,7 +12,10 @@ if [[ "$pid" == "-" || -z "$pid" ]]; then
   last=0
   [[ -f "$MARK" ]] && last=$(stat -f %m "$MARK")
   if (( now - last > 3600 )); then
-    curl -s "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+    # token via curl config on stdin — never in argv, so it can't be read
+    # from the process list (security round P2)
+    printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" | \
+      curl -s -K - \
       -d chat_id="${TELEGRAM_OWNER_ID}" \
       -d text="⚠️ Kyraan watchdog: the bot process is not running. Restart with: launchctl kickstart -k gui/501/io.digitalwoods.kyraan" >/dev/null
     touch "$MARK"

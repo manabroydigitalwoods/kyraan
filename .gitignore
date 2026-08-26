@@ -6,6 +6,9 @@ venv/
 logs/*.log
 logs/*.jsonl
 memory/pending_review/
+memory/*/
+memory/index.json
+memory/*.lock
 .pytest_cache/
 *.egg-info/
 .DS_Store

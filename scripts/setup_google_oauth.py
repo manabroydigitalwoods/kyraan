@@ -34,7 +34,10 @@ from dotenv import load_dotenv
 REPO = Path(__file__).resolve().parents[1]
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.readonly",  # added 2026-08-25: email.unread (metadata only)
+    "https://www.googleapis.com/auth/gmail.metadata",  # security round: metadata-ONLY
+    # scope — bodies are impossible at Google's level, not just by our
+    # code's restraint (gmail.py fetches format=metadata, compatible).
+    # Switched from gmail.readonly 2026-08-26; re-run this script once.
 ]
 
 

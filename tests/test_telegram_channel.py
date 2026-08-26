@@ -36,12 +36,17 @@ def test_confirm_keyboard_only_when_a_confirmation_is_pending():
     assert telegram_bot._confirm_keyboard(77) is None
 
     orchestrator._pending_confirmations[77] = ("call", "handler", 0.0)
+    orchestrator._confirmation_nonce[77] = "abc123def456"
     try:
         kb = telegram_bot._confirm_keyboard(77)
         buttons = kb.inline_keyboard[0]
-        assert [b.callback_data for b in buttons] == ["kyraan_yes", "kyraan_no"]
+        # buttons carry the pending action's nonce (security round P1:
+        # a static callback let an old Yes confirm a newer action)
+        assert [b.callback_data for b in buttons] == [
+            "kyraan_yes:abc123def456", "kyraan_no:abc123def456"]
     finally:
         orchestrator._pending_confirmations.pop(77, None)
+        orchestrator._confirmation_nonce.pop(77, None)
 
 
 async def test_burst_messages_combine_into_one_answer(monkeypatch):
@@ -335,3 +340,38 @@ def test_startup_validation_rejects_keyless_remote_providers(monkeypatch):
         monkeypatch.setattr(config, "load", lambda m=mistyped: m)
         with pytest.raises(ValueError, match="allow_unauthenticated"):
             telegram_bot._validate_startup()
+
+
+async def test_stale_confirmation_button_is_rejected(monkeypatch):
+    """Security round P1: a Yes button from an earlier ask must never
+    confirm the current pending action."""
+    from types import SimpleNamespace
+    from kyraan.agents import orchestrator
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    orchestrator._confirmation_nonce[9] = "current-nonce"
+
+    async def must_not_run(chat_id, word):
+        raise AssertionError("a stale button must never reach the confirm flow")
+
+    monkeypatch.setattr(orchestrator, "handle_message", must_not_run)
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text):
+            sent.append(text)
+
+    async def answer():
+        pass
+
+    async def edit(reply_markup=None):
+        pass
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=9, type="private"),
+        callback_query=SimpleNamespace(data="kyraan_yes:OLD-nonce", answer=answer,
+                                       edit_message_reply_markup=edit))
+    await telegram_bot._on_callback(update, SimpleNamespace(bot=FakeBot()))
+    assert sent and "no longer active" in sent[0]
+    orchestrator._confirmation_nonce.pop(9, None)

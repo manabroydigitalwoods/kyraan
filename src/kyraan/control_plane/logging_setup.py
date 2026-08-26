@@ -44,9 +44,22 @@ def _rotate_if_large(path: Path) -> None:
 
 
 def _append(path: Path, record: dict) -> None:
+    existed = path.exists()
     _rotate_if_large(path)
+    if not existed:
+        import os
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
     with path.open("a") as f:
         f.write(json.dumps(record, default=str) + "\n")
+    if not existed:
+        import os
+        try:
+            os.chmod(path, 0o600)  # personal data is owner-only from birth
+        except OSError:
+            pass
 
 
 def log_event(kind: str, **fields) -> None:
