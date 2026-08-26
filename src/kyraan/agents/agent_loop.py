@@ -169,7 +169,14 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     when_iso = orchestrator._anchor_clock_time(raw_text, when_iso)
     if orchestrator.is_time_fragment(str(args["text"])):
         raise kernel.ToolFailed("the reminder text is just a time phrase — ask the user what the reminder is FOR")
-    repeat = str(args.get("repeat", "") or "")
+    repeat = str(args.get("repeat", "") or "").strip().lower()
+    # Normalize junk to one-shot instead of refusing the whole reminder:
+    # the richer spec made the model emit fillers like "once"/"omit" for
+    # plain reminders, and the validation rejected the user's request
+    # (eval regression, caught same-hour).
+    if repeat in ("none", "once", "no", "null", "omit", "one-shot", "oneshot",
+                  "off", "single", "-"):
+        repeat = ""
     if repeat and repeat not in scheduler.REPEAT_CHOICES:
         raise kernel.ToolFailed(
             f"repeat must be one of {scheduler.REPEAT_CHOICES} or omitted")
@@ -178,11 +185,12 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     window_end = str(args.get("window_end", "") or "")
     existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
     if existing:
-        return {"duplicate": True, "id": existing.id[:8], "text": existing.text,
-                "when": humanize(existing.when_iso),
-                "note": ("this reminder ALREADY existed — tell the user it was "
-                         "already set and nothing new was created; never say "
-                         "'done' or imply you just created it")}
+        # Deterministic honesty: an advisory note asking the model to say
+        # "already set" was ignored under nondeterminism ("Done — I'll
+        # remind you...") — the direct reply leaves it no discretion.
+        return {"__direct_reply__": (
+            f'Already set: "{existing.text}" at {humanize(existing.when_iso)} '
+            f"(id {existing.id[:8]}) — I didn't add a duplicate.")}
     try:
         reminder = scheduler.create_reminder(
             chat_id, args["text"], when_iso, repeat=repeat,
@@ -319,7 +327,7 @@ TOOLS = {
         "run": _home_get_state,
     },
     "reminders.create": {
-        "params": '{"text": "<what to remind>", "when_iso": "<first occurrence, ISO +05:30>", "repeat": "<omit|daily|weekdays|weekly|monthly|interval>", "interval_minutes": "<with repeat=interval; minimum 15>", "window_start": "<optional \'HH:MM\' daily window>", "window_end": "<optional \'HH:MM\'>"}',
+        "params": '{"text": "...", "when_iso": "<first occurrence, ISO +05:30>"} — plus ONLY for recurring requests: "repeat" (daily|weekdays|weekly|monthly|interval), and for interval: "interval_minutes" (min 15) with optional "window_start"/"window_end" ("HH:MM"). One-shot reminders: text and when_iso ONLY.',
         "about": "Set a reminder delivered as a Telegram message. Recurring supported, including intervals with a daily window ('every hour from 10:00 to 21:00, drink water' -> repeat=interval, interval_minutes=60, window 10:00-21:00; minimum interval 15 min — offer the closest legal one if the user asks for less). Only when the user asked to be reminded.",
         "run": _reminders_create,
     },
