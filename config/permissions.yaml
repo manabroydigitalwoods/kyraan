@@ -99,16 +99,18 @@ model_tiers:
                           # (planned ['hi!'] for the 5-msg burst), equal
                           # extraction, same 1.8s/case with think off.
   frontier:
-    provider: openai          # owner's call 2026-08-26 morning: the paid
-    model: gpt-5.4-mini       # seat back on (proven live the night before:
-                              # both live-failure replays fixed at 0.97).
-                              # ~$0.50/day at Kyraan's volume, metered by
-                              # the cost ledger + $5/day budget guard.
-                              # cheap = local qwen3:8b stays the fallback,
-                              # so a cloud outage degrades instead of dies.
+    provider: openai          # gpt-5.4-nano since 2026-08-26: benchmarked
+    model: gpt-5.4-nano       # head-to-head vs gpt-5.4-mini on the
+                              # production prompts — both 18/18 on
+                              # classification, ~1s/case; nano's only slip
+                              # was folding a greeting out of a burst plan.
+                              # ~3.6x cheaper (~$0.10/day). If conversation
+                              # quality ever feels thin, mini is one edit:
+                              #   model: gpt-5.4-mini
+                              #   pricing: {input_per_million: 0.75, output_per_million: 4.50}
     pricing:                  # per developers.openai.com/api/docs/pricing
-      input_per_million: 0.75
-      output_per_million: 4.50
+      input_per_million: 0.20
+      output_per_million: 1.25
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.
