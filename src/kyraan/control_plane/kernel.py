@@ -48,6 +48,13 @@ _MAX_TOOL_STEPS = 8
 _tool_steps: contextvars.ContextVar[list | None] = contextvars.ContextVar("tool_steps", default=None)
 
 
+def confirmed_context() -> bool:
+    """True while executing inside a skill the user explicitly confirmed —
+    lets agent-loop executors implement confirm-gated actions that aren't
+    registry tools (e.g. memory.forget)."""
+    return _skill_confirmed.get()
+
+
 async def run_skill(call: SkillCall, handler: Callable[[dict], Awaitable[object]]) -> object:
     """Gate + execute a skill. `handler` does the actual work."""
     if kill_switch.is_engaged():

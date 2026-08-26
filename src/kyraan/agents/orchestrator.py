@@ -483,17 +483,17 @@ def _classifier_context(chat_id: int, entries: int = 6, clip: int = 200) -> str:
     )
 
 
-def _structured_call(prompt: str, system: str):
+async def _structured_call(prompt: str, system: str):
     """Structured extraction (reminder times, event fields, calendar
     windows) is exactness-critical: frontier first, local fallback when
     the cloud tier is down/exhausted — walkthrough v3 (degraded mode)
     showed the local 8B extracting \"in 45mins\" as a PAST time and
     failing window JSON outright."""
     try:
-        return router.call(prompt=prompt, system=system, tier="frontier", force_json=True)
+        return await router.acall(prompt=prompt, system=system, tier="frontier", force_json=True)
     except router.ModelProviderError as exc:
         log_event("structured_fallback_cheap", error=str(exc))
-        return router.call(prompt=prompt, system=system, tier="cheap", force_json=True)
+        return await router.acall(prompt=prompt, system=system, tier="cheap", force_json=True)
 
 
 _SAVE_WORDS = ("remember", "save", "note that", "note this", "note it",
@@ -594,6 +594,16 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
     if len(texts) == 1:
         return [(0, await handle_message(chat_id, texts[0]))]
 
+    if AGENT_LOOP_ENABLED:
+        # G-03: the agent loop reads the whole conversation and handles a
+        # multi-part message natively — the separate frontier planning
+        # call (and its per-request loop runs) doubled latency for
+        # nothing. The joined burst goes through as ONE message; the
+        # planner below remains only for the classifier fallback path.
+        joined = "\n".join(texts)
+        log_event("burst_joined_for_agent", chat_id=chat_id, n=len(texts))
+        return [(len(texts) - 1, await handle_message(chat_id, joined))]
+
     requests = ["\n".join(texts)]  # last-resort: treat as one merged message
     # Deterministic pre-verdict: all complete questions = distinct asks,
     # no model needed (rate-limit-proof).
@@ -605,11 +615,11 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
             numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(texts))
             system = _BURST_PLAN_SYSTEM.format(n=len(texts), numbered=numbered)
             try:
-                raw = router.call(prompt="Plan the requests.", system=system,
-                                  tier="frontier", force_json=True)
+                raw = await router.acall(prompt="Plan the requests.", system=system,
+                                          tier="frontier", force_json=True)
             except router.ModelProviderError:
-                raw = router.call(prompt="Plan the requests.", system=system,
-                                  tier="cheap", force_json=True)
+                raw = await router.acall(prompt="Plan the requests.", system=system,
+                                         tier="cheap", force_json=True)
             candidate = json.loads(router.strip_code_fence(raw.text))
             planned = [str(r) for r in candidate.get("requests", []) if str(r).strip()]
             if 0 < len(planned) <= len(texts):
@@ -738,6 +748,23 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # decides — chaining reads, composing its own replies, hitting the
         # same kernel gates for every tool. The classifier path below is
         # its fallback: degraded mode (cloud down) or any loop failure.
+        word = raw_text.strip().lower().rstrip(".!")
+        if word in ("yes", "no"):
+            last_assistant = next((t for role, t in reversed(_history[chat_id])
+                                   if role == "assistant"), "")
+            if 'reply "yes"' in last_assistant:
+                # G-05: the last reply WAS a confirm ask, but nothing is
+                # pending (checked above) — the ask died with a restart,
+                # since pending confirmations live in process memory.
+                # Landing this yes/no in the agent loop produced confusing
+                # improvisation; honesty first. Conversational assent
+                # ("go ahead", a yes to a model's own question) falls
+                # through to the loop as normal conversation.
+                log_event("orphaned_confirmation_word", chat_id=chat_id, word=word)
+                return ("That ask didn't survive a restart, so nothing is "
+                        "waiting for your yes/no — please repeat the request "
+                        "and I'll ask again.")
+
         if _is_review_request(raw_text):
             # Deterministic: the review flow OWNS these phrases. Routed
             # through the agent loop, "review memory" listed the queue via
@@ -769,14 +796,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # dance anymore, just the reliable tier directly.
         context = _classifier_context(chat_id)
         try:
-            parsed = normalize(raw_text, tier="frontier", history=context)
+            import asyncio as _aio
+            parsed = await _aio.to_thread(normalize, raw_text, tier="frontier", history=context)
         except router.ModelProviderError as exc:
             # Frontier (Groq) is classification's single cloud dependency —
             # if it's down or rate-limited, degrade to the local cheap tier
             # (measured at 12-13/14 on the same test set) instead of
             # refusing to understand anything at all.
             log_event("intent_fallback_cheap", error=str(exc))
-            parsed = normalize(raw_text, tier="cheap", history=context)
+            parsed = await _aio.to_thread(normalize, raw_text, tier="cheap", history=context)
 
         # Sanity-guard the rewrite: a degraded classifier was seen turning
         # "Do you know my father?" into the ANSWER "I don't have any
@@ -923,7 +951,7 @@ async def _create_reminder(chat_id: int, text: str) -> str:
         # tier (frontier, or if this ever points at one again) spends
         # hidden tokens before the visible JSON, and a 200-token cap
         # truncated the output mid-string live (2026-08-25).
-        extracted = _structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
+        extracted = await _structured_call(text, _EXTRACT_WHEN_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(extracted.text))
             if is_time_fragment(str(data.get("text", ""))):
@@ -1005,7 +1033,7 @@ async def _cancel_reminder(chat_id: int, text: str) -> str:
 
 async def _list_calendar(chat_id: int, text: str) -> str:
     async def handler(args: dict) -> str:
-        window = _structured_call(args["text"], _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
+        window = await _structured_call(args["text"], _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
         try:
             data = json.loads(router.strip_code_fence(window.text))
             start, end = data["start_iso"], data["end_iso"]
@@ -1040,7 +1068,7 @@ async def _cancel_event(chat_id: int, text: str) -> str:
     Events' on the real calendar."""
     from datetime import timedelta
 
-    window = _structured_call(text, _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
+    window = await _structured_call(text, _EXTRACT_WINDOW_SYSTEM.format(now=local_now().isoformat()))
     try:
         data = json.loads(router.strip_code_fence(window.text))
         start, end = data["start_iso"], data["end_iso"]
@@ -1119,7 +1147,7 @@ async def _create_event(chat_id: int, text: str) -> str:
     # into the stashed SkillCall args — so what the user confirms is
     # byte-identical to what runs. Re-extracting on "yes" could produce a
     # different time than the one shown (model nondeterminism).
-    extracted = _structured_call(text, _EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()))
+    extracted = await _structured_call(text, _EXTRACT_EVENT_SYSTEM.format(now=local_now().isoformat()))
     def clean_iso(value: str) -> str:
         # _parse_when gives the same protections events as reminders get
         # (naive -> local tz, model's spurious Z -> local wall time), and
@@ -1359,7 +1387,7 @@ async def _answer(chat_id: int, text: str) -> str:
             history=_history_block(chat_id),
         )
         try:
-            response = router.call(prompt=args["text"], system=system, tier=tier)
+            response = await router.acall(prompt=args["text"], system=system, tier=tier)
         except router.ModelProviderError as exc:
             # Same degradation as intent classification: a frontier outage
             # (seen live: Groq's free 200k-token/day cap exhausted) drops
@@ -1378,7 +1406,7 @@ async def _answer(chat_id: int, text: str) -> str:
                 "model is temporarily rate-limited and reply quality is "
                 "reduced for a few minutes — don't argue or deflect."
             )
-            response = router.call(prompt=args["text"], system=system, tier="cheap")
+            response = await router.acall(prompt=args["text"], system=system, tier="cheap")
             tier = "cheap"
         reply = response.text
         recent = [t.strip() for role, t in list(_history[chat_id])[-6:] if role == "assistant"]
@@ -1397,7 +1425,7 @@ async def _answer(chat_id: int, text: str) -> str:
             # different questions). One retry with the problem named;
             # if it STILL repeats, admit it instead of looping.
             log_event("qa_repetition_detected", chat_id=chat_id, reply=reply[:80])
-            retry = router.call(prompt=args["text"], system=system + (
+            retry = await router.acall(prompt=args["text"], system=system + (
                 "\n\nIMPORTANT: your previous draft repeated one of your own "
                 "earlier replies word-for-word. Answer THIS message "
                 "specifically; do not reuse any earlier sentence."), tier=tier)

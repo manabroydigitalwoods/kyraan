@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store
+from kyraan.control_plane.filelock import locked
 
 INDEX_NAME = "index.json"
 
@@ -68,7 +69,14 @@ def _save(entries: list) -> None:
 
 
 def _words(text: str) -> set:
-    return {w.strip(".,!?'\"-—()").lower() for w in text.split() if len(w) > 3}
+    words = set()
+    for raw in text.split():
+        w = raw.strip(".,!?'\"-—()").lower()
+        if w.endswith("'s") or w.endswith("\u2019s"):
+            w = w[:-2]
+        if len(w) > 2:
+            words.add(w)
+    return words
 
 
 def migrate_from_tree() -> int:
@@ -119,13 +127,20 @@ def add_fact(content: str, target: str, source: str, kind: str = "other",
     """Register a promoted fact. `supersedes` (verbatim or near-verbatim
     text of an existing fact) deactivates the old entries — a rename stops
     being a contradiction and becomes history."""
-    entries = _load()
     kind = kind if kind in _VALID_KINDS else "other"
     term = term if term in _VALID_TERM else "long"
     importance = importance if importance in _VALID_IMPORTANCE else "normal"
     flags = sorted(set(flags) & _VALID_FLAGS)
     new_id = uuid.uuid4().hex[:8]
 
+    with locked(_index_path()):
+        entries = _load()
+        return _add_locked(entries, new_id, content, target, source, kind,
+                           term, importance, flags, supersedes, era, sphere)
+
+
+def _add_locked(entries, new_id, content, target, source, kind, term,
+                importance, flags, supersedes, era, sphere) -> str:
     if supersedes:
         old_words = _words(supersedes)
         for entry in entries:
@@ -226,3 +241,34 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
         if not fits(entry):
             break
     return "\n".join(lines)
+
+
+def find_matches(text: str) -> list:
+    """Active entries plausibly meant by `text` — word containment or a
+    2+-word overlap. Deterministic: no model decides what gets forgotten."""
+    wanted = _words(text)
+    if not wanted:
+        return []
+    matches = []
+    for entry in active_entries():
+        entry_words = _words(entry["content"])
+        overlap = wanted & entry_words
+        if entry_words and (wanted <= entry_words or entry_words <= wanted or len(overlap) >= 2
+                            or (len(wanted) == 1 and overlap)):
+            matches.append(entry)
+    return matches
+
+
+def forget(entry_ids: list) -> list:
+    """Deactivate entries by id (kept in the index as history, out of all
+    retrieval). Returns the forgotten contents."""
+    forgotten = []
+    with locked(_index_path()):
+        entries = _load()
+        for entry in entries:
+            if entry["id"] in entry_ids and entry["active"]:
+                entry["active"] = False
+                forgotten.append(entry["content"])
+                log_event("memory_forgotten", content=entry["content"][:80])
+        _save(entries)
+    return forgotten

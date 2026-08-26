@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kyraan.control_plane import config
+from kyraan.control_plane.filelock import locked
 from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
 
@@ -39,11 +40,12 @@ def today_cost_usd() -> float:
 def _record_cost(cost_usd: float) -> None:
     if cost_usd <= 0:
         return
-    ledger = _read_ledger()
-    key = local_now().date().isoformat()
-    ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
-    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+    with locked(COST_LEDGER_PATH):
+        ledger = _read_ledger()
+        key = local_now().date().isoformat()
+        ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
+        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
 
 def _provider_token_limit(provider: str) -> int:
@@ -59,11 +61,12 @@ def _record_tokens(provider: str, usage: "Usage") -> None:
     total = (usage.input_tokens or 0) + (usage.output_tokens or 0)
     if total <= 0:
         return
-    ledger = _read_ledger()
-    key = f"tokens:{provider}:{local_now().date().isoformat()}"
-    ledger[key] = int(ledger.get(key, 0)) + total
-    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+    with locked(COST_LEDGER_PATH):
+        ledger = _read_ledger()
+        key = f"tokens:{provider}:{local_now().date().isoformat()}"
+        ledger[key] = int(ledger.get(key, 0)) + total
+        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
 
 
 def quota_alert_due() -> str:
@@ -451,6 +454,18 @@ def _token_guard(prompt: str, system: str, tier: str) -> None:
             COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
             log_event("token_guard_warn", tier=tier, estimated_tokens=estimated,
                       warn_limit=_TOKEN_GUARD_WARN)
+
+
+async def acall(**kwargs) -> RoutedResponse:
+    """Async entry point: runs the synchronous call() in a worker thread so
+    a 1-10s model call never freezes the event loop (G-01: burst timers,
+    supersede events, typing heartbeats, and reminder jobs were all
+    stalling behind every model call). Looks `call` up at run time so test
+    monkeypatches keep working."""
+    import asyncio
+    import sys
+    module = sys.modules[__name__]
+    return await asyncio.to_thread(lambda: module.call(**kwargs))
 
 
 def call(

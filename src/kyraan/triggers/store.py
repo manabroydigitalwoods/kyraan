@@ -2,6 +2,8 @@
 on startup so a restart doesn't lose pending reminders.
 """
 import json
+
+from kyraan.control_plane.filelock import locked
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -31,6 +33,11 @@ def _save_all(records: list[dict]) -> None:
 
 
 def add(chat_id: int, text: str, when_iso: str) -> Reminder:
+    with locked(REMINDERS_PATH):
+        return _add_locked(chat_id, text, when_iso)
+
+
+def _add_locked(chat_id: int, text: str, when_iso: str) -> Reminder:
     reminder = Reminder(id=str(uuid.uuid4()), chat_id=chat_id, text=text, when_iso=when_iso)
     records = _load_all()
     records.append(asdict(reminder))
@@ -50,6 +57,11 @@ def get(reminder_id: str) -> Reminder | None:
 
 
 def mark_sent(reminder_id: str) -> None:
+    with locked(REMINDERS_PATH):
+        _mark_sent_locked(reminder_id)
+
+
+def _mark_sent_locked(reminder_id: str) -> None:
     records = _load_all()
     for r in records:
         if r["id"] == reminder_id:
@@ -58,6 +70,11 @@ def mark_sent(reminder_id: str) -> None:
 
 
 def cancel(reminder_id: str) -> bool:
+    with locked(REMINDERS_PATH):
+        return _cancel_locked(reminder_id)
+
+
+def _cancel_locked(reminder_id: str) -> bool:
     records = _load_all()
     remaining = [r for r in records if r["id"] != reminder_id]
     changed = len(remaining) != len(records)

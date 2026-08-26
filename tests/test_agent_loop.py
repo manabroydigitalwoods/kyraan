@@ -231,3 +231,33 @@ async def test_executor_errors_reach_the_model_verbatim(scripted_model, monkeypa
         assert "invalid literal" in prompts[1]
     finally:
         agent_loop.TOOLS["usage.report"]["run"] = original
+
+
+async def test_memory_forget_confirms_the_exact_facts_then_deactivates(scripted_model, monkeypatch):
+    """G-11: forgetting is a confirm-gated write — the ask NAMES the
+    matched facts, nothing deactivates before the yes, and the fact stays
+    in the index as history."""
+    from kyraan.memory import engine
+
+    engine.add_fact("Father's name is Deven Roy", "people/father.md", "s")
+    engine.add_fact("Wife's name is Mira", "people/wife.md", "s")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    scripted_model([
+        '{"action": "call", "tool": "memory.forget", "args": {"fact": "father Deven Roy"}}',
+    ])
+
+    ask = await agent_loop.run(90, "forget the Deven Roy fact")
+    assert "About to FORGET" in ask and "Deven Roy" in ask
+    assert any(e["content"] == "Father's name is Deven Roy" for e in engine.active_entries())
+
+    result = await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    assert "Forgotten" in result and "Deven Roy" in result
+    active = [e["content"] for e in engine.active_entries()]
+    assert "Father's name is Deven Roy" not in active
+    assert "Wife's name is Mira" in active          # unrelated fact untouched
+    assert any(e["content"] == "Father's name is Deven Roy" and not e["active"]
+               for e in engine._load())             # history, not deletion

@@ -726,7 +726,14 @@ async def test_email_failure_surfaces_and_history_stays_clean(monkeypatch):
 async def test_unconverged_switch_reply_is_honest(monkeypatch):
     _mock_normalize(monkeypatch, "home.control", "turn on the AC")
 
+    calls = {"n": 0}
+
     async def fake_run_tool(call, **kwargs):
+        # Production gating: the first (unconfirmed) attempt raises; the
+        # confirmed re-run executes and reports unconverged.
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise orchestrator.ConfirmationRequired(call.tool_name, call.args)
         return {"entity": "switch.ac", "state": "off", "converged": False, "unit": None, "name": "AC"}
 
     monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)

@@ -130,10 +130,10 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
         # working when the cloud tier is exhausted — same pattern as the
         # structured extractions. Quota tracking warns before it runs dry.
         try:
-            response = router.call(prompt=args["text"], system=system, tier="frontier", force_json=True)
+            response = await router.acall(prompt=args["text"], system=system, tier="frontier", force_json=True)
         except router.ModelProviderError as exc:
             log_event("extraction_fallback_cheap", error=str(exc))
-            response = router.call(prompt=args["text"], system=system, tier="cheap", force_json=True)
+            response = await router.acall(prompt=args["text"], system=system, tier="cheap", force_json=True)
         try:
             data = json.loads(router.strip_code_fence(response.text))
             facts = data.get("facts") or []

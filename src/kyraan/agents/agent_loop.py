@@ -116,6 +116,21 @@ async def _usage_report(chat_id: int, args: dict, raw_text: str):
     return usage_report.usage_summary(days=days)
 
 
+async def _memory_forget(chat_id: int, args: dict, raw_text: str):
+    from kyraan.memory import engine
+    wanted = str(args.get("fact", "")).strip()
+    if len(wanted) < 3:
+        raise kernel.ToolFailed("say which fact to forget, quoting it roughly")
+    matches = engine.find_matches(wanted)
+    if not matches:
+        raise kernel.ToolFailed(
+            f"no saved fact matches {wanted!r} — show the user what IS saved and ask which to forget")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("memory.forget", {"fact": wanted})
+    forgotten = engine.forget([m["id"] for m in matches])
+    return {"forgotten": forgotten}
+
+
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents import orchestrator
     return [{"n": i + 1, "fact": fact, "target": target}
@@ -130,7 +145,7 @@ TOOLS = {
     },
     "calendar.create_event": {
         "params": '{"title": "...", "start": "<ISO>", "end": "<ISO>", "location": "optional"}',
-        "about": "Create a calendar event. Asks the owner to confirm first — that is automatic.",
+        "about": "Create a calendar event. Asks the owner to confirm first — that is automatic. A start date in the PAST is refused — point it out instead of asking for details. Missing end time: default to one hour, don't ask.",
         "run": _calendar_create,
     },
     "calendar.delete_event": {
@@ -167,6 +182,11 @@ TOOLS = {
         "params": '{"days": 7}',
         "about": "Kyraan's own AI usage: per-day model calls, input/output/cached tokens, cost in USD, and the live daily budget picture. For 'how much did we spend', 'token usage this week', 'are we near the budget'. days is a NUMBER (vague ranges: use 7) — call directly, never ask which.",
         "run": _usage_report,
+    },
+    "memory.forget": {
+        "params": '{"fact": "<roughly the fact to forget, e.g. \'father Deven Roy\'>"}',
+        "about": "Forget a saved fact (deactivates it; kept as history). Matching is deterministic; the owner confirms the exact facts before anything is forgotten. For corrections prefer stating the new fact — supersession handles it.",
+        "run": _memory_forget,
     },
     "memory.pending_list": {
         "params": "{}",
@@ -244,6 +264,9 @@ DECIDE with ONE JSON object, nothing else:
   {{"action": "call", "consider": "<one short line: why this tool now>", "tool": "<tool name>", "args": {{...}}}}
 
 Style rules:
+- The USER message may contain several lines sent as a rapid burst — read
+  them as ONE thought (greetings fold in; fragments continue each other)
+  and answer everything in ONE reply.
 - Live data (calendar, email, reminders, home) must come from a tool call
   in THIS exchange — never from memory of earlier listings, never invented.
 - Known facts in the CONTEXT are owner-reviewed — treat as true; never
@@ -270,10 +293,15 @@ def _describe_call(tool: str, args: dict) -> str:
                 f"{humanize(str(args.get('start')))} → {humanize(str(args.get('end')))}")
     if tool == "calendar.delete_event":
         return f"About to DELETE \"{args.get('title') or args.get('event_id')}\" from your Google Calendar"
-    if tool == "home.turn_on":
-        return f"Turn ON {str(args.get('entity', '')).split('.')[-1].replace('_', ' ')}?"
-    if tool == "home.turn_off":
-        return f"Turn OFF {str(args.get('entity', '')).split('.')[-1].replace('_', ' ')}?"
+    if tool == "memory.forget":
+        from kyraan.memory import engine
+        matched = engine.find_matches(str(args.get("fact", "")))
+        listing = "\n".join(f"- {m['content']}" for m in matched) or "(nothing)"
+        return f"About to FORGET from memory:\n{listing}\nKept as history, out of every answer"
+    if tool in ("home.turn_on", "home.turn_off"):
+        name = str(args.get("entity", "")).split(".")[-1].replace("_", " ")
+        name = name.upper() if len(name) <= 3 else name
+        return f"About to turn the {name} {'ON' if tool.endswith('on') else 'OFF'}"
     return f"Run {tool} with {json.dumps(args)}?"
 
 
@@ -315,8 +343,8 @@ async def run(chat_id: int, raw_text: str) -> str:
 
     for step in range(_MAX_STEPS):
         try:
-            response = router.call(prompt=transcript, system=system,
-                                   tier="frontier", force_json=True)
+            response = await router.acall(prompt=transcript, system=system,
+                                           tier="frontier", force_json=True)
         except router.ModelProviderError as exc:
             raise AgentUnavailable(str(exc)) from exc
 
@@ -416,6 +444,9 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         if isinstance(outcome, dict) and outcome.get("already_gone"):
             return f"\"{args.get('title') or args.get('event_id')}\" was already gone."
         return f"Deleted from your calendar: \"{args.get('title') or args.get('event_id')}\""
+    if tool == "memory.forget" and isinstance(outcome, dict):
+        gone = outcome.get("forgotten") or []
+        return "Forgotten: " + "; ".join(gone) if gone else "Nothing matched — nothing forgotten."
     if tool in ("home.turn_on", "home.turn_off"):
         wanted = "on" if tool.endswith("on") else "off"
         if isinstance(outcome, dict) and outcome.get("converged") is False:
