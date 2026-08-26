@@ -24,15 +24,22 @@ def test_enroll_match_and_forget(monkeypatch):
     assert "only on this machine" in receipt
     assert faces.enrolled_names() == ["Maan"]
 
-    # same direction → cosine 1.0 → match
+    # same direction → cosine 1.0 → confident match
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[0.9, 0.0, 0.0]])
     result = faces.recognize(b"img2")
-    assert result == {"names": ["Maan"], "unknown_faces": 0}
+    assert result == {"names": ["Maan"], "maybe": [], "unknown_faces": 0}
 
-    # orthogonal → below threshold → unknown
+    # borderline (between MAYBE and SURE thresholds) → hedged, not named
+    import math
+    angle_emb = [0.42, math.sqrt(1 - 0.42**2), 0.0]  # cosine ≈ 0.42 vs [1,0,0]
+    monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [angle_emb])
+    result = faces.recognize(b"img_borderline")
+    assert result == {"names": [], "maybe": ["Maan"], "unknown_faces": 0}
+
+    # orthogonal → below both thresholds → unknown
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[0.0, 1.0, 0.0]])
     result = faces.recognize(b"img3")
-    assert result == {"names": [], "unknown_faces": 1}
+    assert result == {"names": [], "maybe": [], "unknown_faces": 1}
 
     assert faces.forget("Maan") is True
     assert faces.forget("Maan") is False
@@ -108,7 +115,7 @@ def test_recognize_failure_is_empty_not_broken(monkeypatch):
     def boom(b):
         raise RuntimeError("cv2 exploded")
     monkeypatch.setattr(faces, "_detect_and_embed", boom)
-    assert faces.recognize(b"img") == {"names": [], "unknown_faces": 0}
+    assert faces.recognize(b"img") == {"names": [], "maybe": [], "unknown_faces": 0}
 
 
 async def test_recognized_names_ride_into_the_vision_prompt(monkeypatch):

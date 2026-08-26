@@ -48,7 +48,8 @@ class VisionUnavailable(Exception):
 
 
 async def answer(chat_id: int, image_data_url: str, caption: str,
-                 recognized: list | None = None) -> str:
+                 recognized: list | None = None,
+                 maybe: list | None = None) -> str:
     if kill_switch.is_engaged():
         return ("The kill switch is engaged — no autonomous action will run "
                 "until it's disengaged.")
@@ -56,9 +57,15 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
     faces_line = ""
     if recognized:
         # Names only — matched ON-DEVICE; the face template never leaves.
-        faces_line = ("LOCALLY RECOGNIZED FACES (on-device match, can be "
-                      f"wrong): {', '.join(recognized)} — use the name(s) "
-                      "naturally.\n")
+        faces_line += ("LOCALLY RECOGNIZED FACES (confident on-device "
+                       f"match): {', '.join(recognized)} — use the name(s) "
+                       "naturally.\n")
+    if maybe:
+        faces_line += ("UNCERTAIN FACE MATCH (borderline score — often "
+                       f"wrong, especially between babies): {', '.join(maybe)} "
+                       "— if you name them at all, hedge plainly (\"might be "
+                       f"{maybe[0]}, I'm not sure\") and never state it as "
+                       "fact.\n")
     prompt = (f"Current date/time: {local_now().isoformat()}\n{faces_line}"
               f"OWNER'S CAPTION: {question}")
     try:

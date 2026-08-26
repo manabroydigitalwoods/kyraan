@@ -383,11 +383,13 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         recognized = (await asyncio.to_thread(faces.recognize, image_bytes)
-                      if faces.available() else {"names": [], "unknown_faces": 0})
+                      if faces.available()
+                      else {"names": [], "maybe": [], "unknown_faces": 0})
         data_url = ("data:image/jpeg;base64,"
                     + base64.b64encode(image_bytes).decode())
         reply = await photo.answer(chat_id, data_url, caption,
-                                   recognized=recognized["names"])
+                                   recognized=recognized["names"],
+                                   maybe=recognized.get("maybe") or [])
         hint_name = faces.enroll_hint(caption) if faces.available() else None
         if hint_name:
             reply += (f'\n\n(Want me to recognize this face later? Send a solo '

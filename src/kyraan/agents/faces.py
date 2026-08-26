@@ -28,7 +28,13 @@ FACES_DIR = _ROOT / "data" / "faces"
 MODELS_DIR = _ROOT / "data" / "models"
 _YUNET = "face_detection_yunet_2023mar.onnx"
 _SFACE = "face_recognition_sface_2021dec.onnx"
-_COSINE_THRESHOLD = 0.363  # SFace's documented match threshold
+# SFace's documented adult threshold is 0.363 — live testing (2026-08-26)
+# showed it FALSE-POSITIVES on infants (adult-trained embeddings cluster
+# baby faces tightly; a different baby matched the enrolled one three
+# photos running). Two bands now: a confident match names outright, a
+# borderline one only hedges ("might be").
+_COSINE_SURE = 0.50
+_COSINE_MAYBE = 0.363
 
 _ENROLL_RE = re.compile(
     r"^\s*remember\s+(?:this|my)\s+face\s+as\s+(.{2,40}?)\s*[.!]?\s*$",
@@ -134,15 +140,17 @@ def _load_enrolled() -> dict:
 
 
 def recognize(image_bytes: bytes) -> dict:
-    """{'names': [...matched...], 'unknown_faces': N} — empty-safe, and
-    any failure means 'no faces' rather than a broken photo turn."""
+    """{'names': [...confident...], 'maybe': [...borderline...],
+    'unknown_faces': N} — empty-safe; any failure means 'no faces'
+    rather than a broken photo turn. Every match logs its score so the
+    thresholds can be tuned from soak evidence."""
     try:
         found = _detect_and_embed(image_bytes)
     except Exception as exc:
         log_event("face_recognize_error", error=str(exc)[:150])
-        return {"names": [], "unknown_faces": 0}
+        return {"names": [], "maybe": [], "unknown_faces": 0}
     enrolled = _load_enrolled()
-    names, unknown = [], 0
+    names, maybe, unknown, scores = [], [], 0, []
     for emb in found:
         best_name, best_score = None, 0.0
         for name, stored in enrolled.items():
@@ -150,13 +158,17 @@ def recognize(image_bytes: bytes) -> dict:
                 score = _cosine(emb, s)
                 if score > best_score:
                     best_name, best_score = name, score
-        if best_name is not None and best_score >= _COSINE_THRESHOLD and best_name not in names:
-            names.append(best_name)
-        elif best_score < _COSINE_THRESHOLD:
+        scores.append({"best": best_name, "score": round(best_score, 3)})
+        if best_name is None or best_score < _COSINE_MAYBE:
             unknown += 1
-    if names:
-        log_event("faces_recognized", names=names, unknown=unknown)
-    return {"names": names, "unknown_faces": unknown}
+        elif best_score >= _COSINE_SURE and best_name not in names:
+            names.append(best_name)
+        elif best_score < _COSINE_SURE and best_name not in maybe and best_name not in names:
+            maybe.append(best_name)
+    if found:
+        log_event("faces_recognized", names=names, maybe=maybe,
+                  unknown=unknown, scores=scores)
+    return {"names": names, "maybe": maybe, "unknown_faces": unknown}
 
 
 def enroll(name: str, image_bytes: bytes) -> str:
