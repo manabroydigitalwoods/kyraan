@@ -181,9 +181,15 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
         clause_lead = re.split(r"[,.;!?]", clause_lead)[-1]
         if re.search(r"\b(after|before|until|till|by|past|once|when|following)\b", clause_lead):
             continue
-        tail = raw_text[m.end():m.end() + 16].lower()
-        if re.match(r"\s*(call|meeting|session|appointment|class|shift|standup)\b"
-                    r"|\s*(?:\w+\s+)?(ends|finishes|starts|begins)\b", tail):
+        tail = raw_text[m.end():m.end() + 24].lower()
+        if re.match(r"\s*(call|meeting|session|appointment|class|shift|standup)\b", tail):
+            continue
+        verb = re.match(r"\s*(?:\w+\s+)?(ends|finishes|starts|begins)\b(.{0,8})", tail)
+        if verb and not re.match(r"\s*at\s*\d", verb.group(2)):
+            # "my 7:45pm call ends" — another event's boundary: discard.
+            # "dinner at 8pm and ends at 9pm" — the verb introduces the
+            # RANGE'S end time: the preceding time is the true start and
+            # must be kept (round-10).
             continue
         matches.append(m.groups())
 
@@ -233,6 +239,9 @@ _WINDOW_ONLY = {
     "today", "tomorrow", "tonight", "yesterday", "morning", "evening",
     "afternoon", "noon", "midnight", "night", "week", "weekend", "month",
     "months", "year", "next", "last", "this", "coming", "am", "pm",
+    "day", "days", "weeks", "years", "fortnight",
+    "one", "two", "three", "four", "five", "six", "seven", "eight",
+    "nine", "ten", "couple", "few",
 }
 
 
@@ -258,7 +267,7 @@ def wants_email_body(text: str) -> bool:
     requests — in BOTH brains; this is now the one shared detector)."""
     import re
     lowered = text.lower()
-    if re.search(r"\b(open|read|body|content|contents|full|detail|details|says|summar\w*)\b",
-                 lowered):
+    if re.search(r"\b(open|read|body|content|contents|full|detail|details|"
+                 r"say|says|said|inside|summar\w*)\b", lowered):
         return True
     return any(p in lowered for p in ("more about", "tell me about", "about the email", "what does"))

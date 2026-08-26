@@ -600,3 +600,45 @@ def test_round9_precision_fixes(monkeypatch):
     assert guards.wants_email_body("open the first email")
     assert guards.wants_email_body("read the email from Suman")
     assert guards.wants_email_body("summarize the latest email")
+
+
+def test_round10_precision_fixes(monkeypatch):
+    """Round-10: an end-verb followed by a time describes the RANGE and
+    keeps the true start; duration words are window vocabulary; singular
+    'say' triggers the body boundary."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    from kyraan.agents import guards
+
+    # "dinner at 8pm and ends at 9pm" with drifted model values: pair
+    # anchors to 8-9, never 9-10.
+    drift = {"start": "2099-01-02T20:11:00+05:30", "end": "2099-01-02T21:11:00+05:30"}
+    start, end = guards.normalized_event_times(drift, "dinner at 8pm and ends at 9pm")
+    assert "T20:00:00" in start and "T21:00:00" in end
+
+    # "my 7:45pm call ends" (no following time) still filters the decoy
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    start, _ = guards.normalized_event_times(args, "my call at 7:45pm ends, add dinner at 8")
+    assert "T20:00:00" in start
+
+    for w in ("weeks", "days", "years", "two", "few"):
+        assert guards.is_window_word(w), w
+    assert not guards.is_window_word("second")   # positional, stays a filter
+
+    assert guards.wants_email_body("what did the email say?")
+    assert guards.wants_email_body("open the latest email")
+    assert not guards.wants_email_body("any unread emails?")
+
+
+async def test_empty_inbox_body_request_still_states_the_boundary(scripted_model, monkeypatch):
+    """Round-10: 'read this email' with an empty inbox must lead with the
+    metadata-only boundary, not imply opening is possible in principle."""
+    async def fake_dispatch(spec, args):
+        return {"unread_estimate": 0, "messages": []}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+    scripted_model(['{"action": "call", "tool": "email.unread", "args": {}}'])
+
+    reply = await agent_loop.run(90, "read this email please")
+    assert "can't open email contents" in reply
+    assert "no unread emails" in reply.lower()

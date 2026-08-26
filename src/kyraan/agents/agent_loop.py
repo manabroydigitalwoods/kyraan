@@ -81,11 +81,20 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     # email but never sees what's in it.
     total = result.get("unread_estimate", 0)
     messages = result.get("messages", [])
-    if not messages:
-        return {"__direct_reply__": "No unread emails."}
     from kyraan.agents.guards import wants_email_body
+    body_wanted = wants_email_body(raw_text)
+    if not messages:
+        # The boundary leads even with an empty inbox (round-10: "read
+        # this email" answered "No unread emails." as if opening were
+        # possible in principle).
+        if body_wanted:
+            return {"__direct_reply__": (
+                "I can't open email contents — by design I only see senders "
+                "and subjects, never bodies. And there are no unread emails "
+                "right now.")}
+        return {"__direct_reply__": "No unread emails."}
     lines = []
-    if wants_email_body(raw_text):
+    if body_wanted:
         # The user asked for a BODY — the §3a boundary line leads the
         # reply (the direct-reply short-circuit had silently dropped it:
         # eval case email.boundary caught the regression).
