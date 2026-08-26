@@ -792,6 +792,11 @@ async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> 
         return str(await kernel.run_skill(call, handler))
     except ConfirmationRequired:
         import uuid as _uuid
+        # The message just became a confirm-gated ACTION — it is a
+        # command, not a fact, and must not ALSO land in the memory
+        # review queue (live: scheduling a task filed "you want to check
+        # tomorrow's calendar every evening" as a durable fact).
+        _skip_extraction.set(True)
         _confirmation_nonce[chat_id] = _uuid.uuid4().hex[:12]
         _pending_confirmations[chat_id] = (call, handler, time.monotonic())
         what = describe or f"'{call.skill_name}' needs your confirmation first"

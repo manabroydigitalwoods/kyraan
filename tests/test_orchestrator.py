@@ -2106,3 +2106,26 @@ async def test_history_overflow_rolls_into_a_session_summary(monkeypatch):
     assert orchestrator.session_summary(85)  # persisted, not just in-memory
     orchestrator._history.pop(85, None)
     orchestrator._summary_backlog.pop(85, None)
+
+
+async def test_confirm_gated_commands_do_not_become_memory_proposals(monkeypatch):
+    """Live: scheduling a task ALSO filed the command as a pending memory
+    fact. A message that produced a confirmation ask is a command — the
+    action store is its home, not the review queue."""
+    _mock_normalize(monkeypatch, "home.control", "turn on the AC")
+
+    async def gated_run_tool(call, **kwargs):
+        raise orchestrator.ConfirmationRequired(call.tool_name, call.args)
+
+    calls = []
+
+    async def counting_extraction(raw_text, context="", insist=False):
+        calls.append(raw_text)
+        return ["- junk fact"]
+
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", gated_run_tool)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", counting_extraction)
+    reply = await orchestrator.handle_message(chat_id=0, raw_text="turn on the AC")
+    assert 'reply "yes"' in reply
+    assert calls == []                       # extraction never ran
+    assert "Noted for review" not in reply
