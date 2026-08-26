@@ -247,21 +247,39 @@ async def test_dnd_reschedule_releases_the_claim(isolated_store, monkeypatch):
     assert store.get(r.id).claimed_at == ""  # the 15-min retry can claim again
 
 
-async def test_failed_send_releases_the_claim_and_reschedules(isolated_store):
-    """Review P1: a Telegram hiccup must not strand a claimed reminder."""
+async def test_ambiguous_send_failure_keeps_the_claim_and_labels_the_retry(isolated_store, monkeypatch):
+    """Round-5 P1: a client-side send exception is AMBIGUOUS — Telegram
+    may have accepted before the connection died. The claim is kept (so
+    the retry is a stale-lease takeover) and the retry therefore carries
+    the 'may be a repeat' label. The uncertainty is never erased."""
+    from datetime import datetime, timedelta, timezone
+
     r = store.add(chat_id=0, text="fragile", when_iso="2099-01-01T10:00:00+00:00")
     rescheduled = []
+    sends = []
+    fail_first = {"on": True}
 
-    async def broken_send(chat_id, text):
-        raise RuntimeError("telegram timeout")
+    async def flaky_send(chat_id, text):
+        if fail_first["on"]:
+            fail_first["on"] = False
+            raise RuntimeError("connection reset AFTER server may have accepted")
+        sends.append(text)
 
     scheduler.init(schedule_fn=lambda name, run_at, payload: rescheduled.append(run_at),
-                   cancel_fn=lambda *a, **k: None, send_fn=broken_send)
+                   cancel_fn=lambda *a, **k: None, send_fn=flaky_send)
     rescheduled.clear()  # init schedules the pending record itself
     await scheduler.fire(r.id, 0, r.text)
     assert store.get(r.id).sent is False
-    assert store.get(r.id).claimed_at == ""     # claim released
-    assert len(rescheduled) == 1                # retry scheduled
+    assert store.get(r.id).claimed_at != ""     # the uncertainty is PRESERVED
+    assert len(rescheduled) == 1                # retry scheduled past the lease
+
+    # The retry (lease now stale) must resend WITH the repeat label.
+    records = store._load_all()
+    for rec in records:
+        rec["claimed_at"] = (datetime.now(timezone.utc) - timedelta(seconds=300)).isoformat()
+    store._save_all(records)
+    await scheduler.fire(r.id, 0, r.text)
+    assert len(sends) == 1 and "may be a repeat" in sends[0]
 
 
 async def test_live_claim_defers_instead_of_stranding(isolated_store):

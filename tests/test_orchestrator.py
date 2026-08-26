@@ -1821,3 +1821,78 @@ def test_pre_upgrade_email_logs_are_redacted_at_seed_time(tmp_path, monkeypatch)
     assert "[showed the unread email summary]" in block
     assert "Hello! How can I assist" in block   # ordinary replies untouched
     orchestrator._history.pop(81, None)
+
+
+async def test_timed_out_delete_reports_unknown_not_untouched(monkeypatch):
+    """Round-5 P2: a timed-out delete may have succeeded — the receipt
+    separates deleted / outcome-UNKNOWN / untouched instead of inviting a
+    double-delete."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-01-02T00:00:00+00:00", "end_iso": "2099-01-02T23:59:59+00:00", "label": "today"}'))
+    events = [{"id": f"ev{i}", "title": f"Event {i}", "start": f"2099-01-02T{8+i:02d}:00:00+00:00",
+               "end": f"2099-01-02T{9+i:02d}:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False} for i in range(3)]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        if args["event_id"] == "ev1":
+            raise reg.TransientToolError("slow")  # will become a timeout-ish failure
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    calls = {"n": 0}
+
+    async def fake_run_tool(call, **kwargs):
+        if call.tool_name == "calendar.list_events":
+            return events
+        if call.args["event_id"] == "ev1":
+            raise orchestrator.kernel.ToolFailed(
+                "calendar.delete_event timed out — the command MAY still have gone through; "
+                "check the actual state before retrying")
+        return {"id": call.args["event_id"], "deleted": True, "already_gone": False}
+
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events today")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    monkeypatch.setattr(orchestrator.kernel, "run_tool", fake_run_tool)
+    # run_tool is faked without the confirm gate (gate behavior is covered
+    # by the batch tests) — the first reply IS the receipt.
+    receipt = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
+    assert 'Deleted from your calendar: "Event 0"' in receipt
+    assert 'Outcome UNKNOWN for "Event 1"' in receipt and "may have succeeded" in receipt
+    assert 'NOT touched' in receipt and '"Event 2"' in receipt
+    assert '"Event 1"' not in receipt.split("NOT touched")[1]  # unknown is not listed untouched
+
+
+async def test_successful_capped_batch_names_the_overflow(monkeypatch):
+    """Round-5 P2: after a clean 8-batch the receipt must name the
+    remainder — silence reads as done."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-01-02T00:00:00+00:00", "end_iso": "2099-01-02T23:59:59+00:00", "label": "today"}'))
+    events = [{"id": f"ev{i}", "title": f"Event {i}", "start": f"2099-01-02T{8+i:02d}:00:00+00:00",
+               "end": f"2099-01-02T{9+i:02d}:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False} for i in range(11)]
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all events today")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    await orchestrator.handle_message(chat_id=0, raw_text="cancel all events today")
+    receipt = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "3 more matched beyond this batch" in receipt
+    assert '"cancel all events"' in receipt

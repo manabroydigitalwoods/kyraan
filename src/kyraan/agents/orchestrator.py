@@ -889,10 +889,12 @@ async def _cancel_event(chat_id: int, text: str) -> str:
         unique = unique[:8]
 
     async def handler(args: dict) -> str:
-        # Per-event isolation + a COMPLETE receipt (external review P1: a
-        # batch beyond the kernel's 8-step rail deleted partially with a
-        # generic error and no account of what happened).
+        # Per-event isolation + a COMPLETE receipt: deleted /
+        # outcome-unknown / untouched are three DIFFERENT truths — a
+        # timed-out delete may have succeeded, and calling it "not
+        # touched" invites a double-delete (round-5 P2).
         deleted, already_gone, untouched = [], [], []
+        unknown = ""
         stop_reason = ""
         for i, e in enumerate(unique):
             try:
@@ -900,7 +902,11 @@ async def _cancel_event(chat_id: int, text: str) -> str:
                     "calendar.delete_event", {"event_id": e["id"], "title": e["title"]}))
             except kernel.ToolFailed as exc:
                 stop_reason = str(exc)
-                untouched = [x["title"] for x in unique[i:]]
+                if "MAY still have gone" in stop_reason:
+                    unknown = e["title"]
+                    untouched = [x["title"] for x in unique[i + 1:]]
+                else:
+                    untouched = [x["title"] for x in unique[i:]]
                 break
             (already_gone if result.get("already_gone") else deleted).append(e["title"])
         parts = []
@@ -908,10 +914,17 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             parts.append("Deleted from your calendar: " + ", ".join(f'"{t}"' for t in deleted))
         if already_gone:
             parts.append("Already gone: " + ", ".join(f'"{t}"' for t in already_gone))
+        if unknown:
+            parts.append(f'Outcome UNKNOWN for "{unknown}" — the delete timed out and may '
+                         "have succeeded; check the calendar before retrying it")
         if untouched:
             parts.append(f"NOT touched ({stop_reason.split(':')[0]}): "
                          + ", ".join(f'"{t}"' for t in untouched)
                          + ' — say "cancel all events" again for the rest')
+        if overflow and not untouched and not unknown:
+            parts.append(f'{overflow} more matched beyond this batch — say '
+                         '"cancel all events" again to cancel them (the fresh listing '
+                         "keeps this loop safe even if the calendar changed)")
         return ". ".join(parts) if parts else "Nothing was deleted."
 
     described = "\n".join(

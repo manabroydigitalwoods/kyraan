@@ -480,3 +480,32 @@ def test_partial_deletion_receipt_names_the_working_resume_phrase():
     source = inspect.getsource(o._cancel_event)
     assert 'say \"cancel all events\" again' in source
     assert '— say \"cancel\" again' not in source
+
+
+def test_anchor_tolerance_rejects_hours_away_hijacks(monkeypatch):
+    """Round-5 P2: anchoring corrects minutes of drift, never hours — an
+    unrelated time in the message ("after my 9am meeting...") must not
+    drag the event across the day. And end<=start is refused outright."""
+    import pytest
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+
+    # single unrelated time, hours away: model values stand
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    start, end = agent_loop._normalized_event_times(
+        args, "after my 9am meeting, add dinner tomorrow evening")
+    assert "T20:00:00" in start and "T21:00:00" in end
+
+    # minutes of drift: still corrected
+    drift = {"start": "2099-01-02T19:49:00+05:30", "end": "2099-01-02T20:49:00+05:30"}
+    start, end = agent_loop._normalized_event_times(drift, "dinner at 8pm please")
+    assert "T20:00:00" in start
+
+    # chronological but unrelated PAIR, hours away: rejected
+    start, end = agent_loop._normalized_event_times(
+        args, "my 9am meeting ran long, and the 10am too — dinner as planned")
+    assert "T20:00:00" in start and "T21:00:00" in end
+
+    # a model range with end <= start is refused, never dispatched
+    bad = {"start": "2099-01-02T21:00:00+05:30", "end": "2099-01-02T20:00:00+05:30"}
+    with pytest.raises(kernel.ToolFailed, match="end is not after"):
+        agent_loop._normalized_event_times(bad, "add the thing")

@@ -295,8 +295,14 @@ def _validate_startup() -> None:
             raise ValueError(f"provider {pname!r} has unknown kind {kind!r}")
         if kind in ("anthropic", "gemini") and not provider.get("api_key_env"):
             raise ValueError(f"provider {pname!r} ({kind}) declares no api_key_env")
-        if kind == "openai_compatible" and not provider.get("api_key_env") and not provider.get("base_url"):
-            raise ValueError(f"provider {pname!r} has neither api_key_env nor base_url")
+        if kind == "openai_compatible" and not provider.get("api_key_env"):
+            base = provider.get("base_url") or ""
+            host = base.split("//")[-1].split("/")[0].split(":")[0]
+            if not (host == "localhost" or host == "127.0.0.1" or host.endswith(".localhost")):
+                # A remote endpoint with no credential config would pass
+                # boot and die at first use (round-5 P2).
+                raise ValueError(
+                    f"provider {pname!r} points at remote {base!r} with no api_key_env")
     for name, tier in tiers.items():
         provider = providers.get(tier.get("provider"))
         if provider is None:

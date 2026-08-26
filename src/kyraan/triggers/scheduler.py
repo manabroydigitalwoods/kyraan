@@ -99,12 +99,15 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
     try:
         delivered = await _send_fn(chat_id, f"Reminder: {text}{suffix}")
     except Exception as exc:
-        # A Telegram hiccup must not strand the reminder inside its claim
-        # lease with nothing scheduled (review P1): release and retry.
-        store.release_claim(reminder_id)
+        # A client-side send exception is AMBIGUOUS — Telegram may have
+        # accepted the message before the connection died (round-5 P1).
+        # So the claim is deliberately NOT released: it goes stale, the
+        # retry takes it over, and the stale-lease takeover applies the
+        # "may be a repeat" label through the one mechanism built for
+        # exactly this. Retry lands after the lease expires.
         log_event("reminder_send_failed", reminder_id=reminder_id, error=str(exc)[:200])
         assert _schedule_fn is not None
-        _schedule_fn(reminder_id, local_now() + timedelta(minutes=2),
+        _schedule_fn(reminder_id, local_now() + timedelta(seconds=150),
                      {"chat_id": chat_id, "text": text, "reminder_id": reminder_id})
         return
     store.mark_sent(reminder_id)

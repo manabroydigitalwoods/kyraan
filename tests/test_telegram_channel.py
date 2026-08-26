@@ -296,3 +296,18 @@ def test_startup_validation_rejects_unknown_kinds_and_missing_tiers(monkeypatch)
     monkeypatch.setattr(config, "load", lambda: no_cheap)
     with pytest.raises(ValueError, match="must define 'cheap'"):
         telegram_bot._validate_startup()
+
+
+def test_startup_validation_rejects_keyless_remote_providers(monkeypatch):
+    """Round-5 P2: a remote openai_compatible endpoint with no credential
+    config must fail the boot, while localhost stays keyless-legal."""
+    import pytest
+    from kyraan.control_plane import config
+
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "1")
+    base = config.load()
+    keyless_remote = {**base, "providers": {**base["providers"],
+        "sketchy": {"kind": "openai_compatible", "base_url": "https://api.example.com/v1"}}}
+    monkeypatch.setattr(config, "load", lambda: keyless_remote)
+    with pytest.raises(ValueError, match="no api_key_env"):
+        telegram_bot._validate_startup()
