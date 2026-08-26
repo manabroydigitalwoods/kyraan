@@ -12,7 +12,7 @@ from kyraan.tools import gmail, registry
 def fake_gmail(monkeypatch):
     monkeypatch.setattr(gmail, "access_token", lambda: "tok")
     responses = {
-        "/messages?q=is:unread&maxResults=2": {
+        "/messages?labelIds=UNREAD&maxResults=2": {
             "resultSizeEstimate": 7,
             "messages": [{"id": "m1"}, {"id": "m2"}],
         },

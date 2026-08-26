@@ -56,7 +56,10 @@ def _header(message: dict, name: str) -> str:
 
 
 def _unread(limit: int) -> dict:
-    listing = _api(f"/messages?q=is:unread&maxResults={int(limit)}")
+    # labelIds=UNREAD, not q=is:unread — the gmail.metadata scope (the
+    # boundary-enforcing scope adopted in the security review) rejects
+    # the q parameter outright; label filtering is permitted.
+    listing = _api(f"/messages?labelIds=UNREAD&maxResults={int(limit)}")
     total = listing.get("resultSizeEstimate", 0)
     items = []
     for ref in listing.get("messages", [])[: int(limit)]:
