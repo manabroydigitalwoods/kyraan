@@ -51,7 +51,7 @@ def capability_brief() -> str:
         try:
             from kyraan.agents import faces as _faces
             if _faces.available():
-                lines.append('- Recognize ENROLLED faces in photos — matching happens on this machine only; the face data never leaves it. Enroll: send a photo captioned "remember this face as <name>" (needs a yes). Delete: "forget the face <name>".')
+                lines.append('- Recognize ENROLLED faces in photos — matching happens on this machine only; the face data never leaves it. When the user asks to remember/save a face (any wording) after sending a photo, call the faces.remember tool — never tell them to resend with a special caption. Delete: "forget the face <name>".')
         except Exception:
             pass
     lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')

@@ -35,7 +35,7 @@ from kyraan.triggers import scheduler
 # re-decide, then the model's second answer stands (see the guard in run()).
 _DEFLECTION_RE = re.compile(
     r"\b(?:do you want me to|would you like me to|shall i\b"
-    r"|should i (?:schedule|set|create|add|go ahead)"
+    r"|should i (?:schedule|set|create|add|go ahead|remember|save)"
     r"|want me to (?:schedule|set|create|add)"
     # "if you want, I can list them — just say 'list reminders'": telling
     # the user to issue another command for something a tool does right
