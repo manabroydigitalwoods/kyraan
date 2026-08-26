@@ -27,6 +27,13 @@ def _owner_id() -> int:
     return int(os.environ["TELEGRAM_OWNER_ID"])
 
 
+def _plain(text: str) -> str:
+    """Models emit markdown bold/italic; replies are sent without
+    parse_mode (entity-parse errors on unbalanced markers would eat whole
+    messages), so Telegram shows the raw asterisks — strip them."""
+    return text.replace("**", "").replace("__", "")
+
+
 async def _typing_loop(bot, chat_id: int) -> None:
     """Keep the "Kyraan is typing…" indicator alive while a reply is being
     produced — Telegram expires a chat action after ~5s, and model + tool
@@ -69,7 +76,7 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     chat_id = update.effective_chat.id
     async with _lock_for(chat_id):
         reply = await orchestrator.handle_message(chat_id, word)
-    await context.bot.send_message(chat_id=chat_id, text=reply)
+    await context.bot.send_message(chat_id=chat_id, text=_plain(reply))
 
 
 # Burst coalescing, modeled on how two humans chat: B watches A's typing
@@ -165,7 +172,7 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             for position, (idx, reply) in enumerate(results):
                 source = fragments[min(idx, len(fragments) - 1)][0]
                 markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
-                await source.reply_text(reply, reply_markup=markup, do_quote=True)
+                await source.reply_text(_plain(reply), reply_markup=markup, do_quote=True)
             # A fragment that arrived after composition passed its safe
             # point couldn't retract this reply — it starts the next round
             # now (with this reply already in context) instead of sitting
