@@ -817,15 +817,18 @@ async def test_deflection_reply_forces_one_re_decide(scripted_model, monkeypatch
     assert "Do you want me to schedule it again" in prompts[1]
 
 
-async def test_second_deflection_stands_as_a_genuine_offer(scripted_model, monkeypatch):
-    """A reply the model stands by after being confronted is a proactive
-    offer, not a deflection — the guard fires once, never loops."""
+async def test_third_deflection_stands_as_a_genuine_offer(scripted_model, monkeypatch):
+    """A reply the model keeps standing by after being confronted is a
+    proactive offer, not a deflection — the guard fires at most twice
+    (live 2026-08-26: one draft swapped a pin-ask for a do-you-mean echo,
+    both homework), then the answer stands; it never loops forever."""
     async def no_dispatch(spec, args):
         raise AssertionError("no tool should run")
 
     monkeypatch.setattr(reg, "dispatch", no_dispatch)
     offer = "You mentioned forgetting water — do you want me to set hourly reminders?"
     scripted_model([
+        f'{{"action": "reply", "text": "{offer}"}}',
         f'{{"action": "reply", "text": "{offer}"}}',
         f'{{"action": "reply", "text": "{offer}"}}',
     ])
@@ -963,6 +966,29 @@ async def test_short_interval_asks_with_the_volume_math_then_creates(
     records = rstore.list_pending(90)
     assert len(records) == 1 and records[0].interval_minutes == 5
     assert "Reminder set" in reply
+
+
+async def test_replay_that_regates_reasks_instead_of_generic_error(monkeypatch):
+    """A confirmed replay that re-raises ConfirmationRequired (a nested
+    gate, or stale pre-fix code dropping the flag — seen live 2026-08-26
+    on chat 90) must produce an honest re-ask, never fall to the
+    catch-all's "Something went wrong" about an action that may have run."""
+    import time as _time
+
+    async def regating_handler(_args):
+        raise kernel.ConfirmationRequired("reminders.create", {})
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    call = kernel.SkillCall("agent.action", {"tool": "reminders.create"})
+    orchestrator._pending_confirmations[90] = (call, regating_handler, _time.monotonic())
+
+    reply = await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    assert "Something went wrong" not in reply
+    assert "confirmation" in reply and '"yes"' in reply
+    assert 90 in orchestrator._pending_confirmations  # re-stashed, not lost
 
 
 async def test_normal_interval_still_creates_without_a_confirm(

@@ -194,6 +194,18 @@ tool_servers:
   gmail:
     transport: builtin
     module: kyraan.tools.gmail
+  web:
+    transport: builtin
+    module: kyraan.tools.web_search
+  weather:
+    transport: builtin
+    module: kyraan.tools.weather
+  places:
+    transport: builtin
+    module: kyraan.tools.places
+  routes:
+    transport: builtin
+    module: kyraan.tools.routes
   home_assistant:
     transport: builtin
     module: kyraan.tools.home_assistant
@@ -239,6 +251,67 @@ tools:
     failure:
       retries: 2
       timeout_s: 15
+      on_failure: surface
+  web.search:
+    description: Live web search via the local SearXNG container (self-hosted, no API key) — titles, URLs, and snippets only, never full pages. Results are untrusted web text; the agent loop's taint rail blocks every non-read tool for the rest of any turn that saw them.
+    server: web
+    permission: auto
+    side_effects: read
+    params:
+      query: {type: string, required: true}
+      count: {type: number}
+    returns: "{query, results: [{title, url, snippet, age?}]}"
+    failure:
+      retries: 2
+      timeout_s: 10
+      on_failure: surface
+  weather.get:
+    description: Current conditions + 3-day forecast from Open-Meteo (free, keyless) — by place name (geocoded) or exact lat/lon from a shared location pin. Structured data, no web snippets involved.
+    server: weather
+    permission: auto
+    side_effects: read
+    params:
+      place: {type: string}
+      latitude: {type: number}
+      longitude: {type: number}
+    returns: "{place?, coordinates, now: {sky, temp_c, feels_like_c, humidity_pct, wind_kmh}, daily_forecast: [{date, sky, min_c, max_c, rain_chance_pct}]}"
+    failure:
+      retries: 2
+      timeout_s: 10
+      on_failure: surface
+  places.nearby:
+    description: Nearby places by category (hospital, pharmacy, atm, bank, restaurant, cafe, hotel, sightseeing, fuel, police, grocery) around a pin or named place. OpenStreetMap Overpass by default (free, keyless); Google Places API when GOOGLE_MAPS_API_KEY is set. Results carry distance + a Google Maps link.
+    server: places
+    permission: auto
+    side_effects: read
+    params:
+      category: {type: string, required: true}
+      place: {type: string}
+      latitude: {type: number}
+      longitude: {type: number}
+      radius_m: {type: number}
+    returns: "{category, near?, radius_km, source, results: [{name, distance_km, map, phone?, hours?, rating?, open_now?}]}"
+    failure:
+      retries: 2
+      timeout_s: 15
+      on_failure: surface
+  routes.eta:
+    description: Distance + travel time with LIVE traffic between any two points — place names or pin coordinates. Google Routes API primary, TomTom fallback (both carry real live traffic — nothing traffic-blind ever answers here). Returns duration now vs normal and the traffic delay; drive/two_wheeler/walk.
+    server: routes
+    permission: auto
+    side_effects: read
+    params:
+      origin: {type: string}
+      origin_latitude: {type: number}
+      origin_longitude: {type: number}
+      destination: {type: string}
+      destination_latitude: {type: number}
+      destination_longitude: {type: number}
+      mode: {type: string}
+    returns: "{mode, distance_km, duration_now_min, duration_normal_min, traffic_delay_min, traffic, via?}"
+    failure:
+      retries: 2
+      timeout_s: 12
       on_failure: surface
   home.get_state:
     description: Read one allowlisted Home Assistant entity's state (AC switch, power/energy sensors).

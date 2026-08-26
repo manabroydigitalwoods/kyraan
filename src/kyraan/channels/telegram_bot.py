@@ -277,6 +277,29 @@ async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _ingest(update, context, text)
 
 
+async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A shared location pin becomes text — place name via reverse
+    geocoding (best-effort, coordinates as the fallback) — and flows
+    through the same pipeline as a typed message, so a pin plus a caption
+    like "weather here?" bursts into one thought. Live-location EDITS are
+    not tracked; the initial pin is what the assistant gets. (Seen live
+    2026-08-26: a shared pin matched no handler, was silently dropped,
+    and the model kept asking which area the owner was in.)"""
+    if not _owner_private(update):
+        return
+    from kyraan.channels import location as geo
+
+    pin = update.message.location
+    typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
+    try:
+        described = await asyncio.to_thread(geo.describe, pin.latitude, pin.longitude)
+    finally:
+        typing.cancel()
+    logger.info("Location pin resolved: %s", described)
+    await _ingest(update, context,
+                  f"[I'm sharing my current location: {described}]")
+
+
 async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Photos, voice notes, stickers, files — the text-only handler never
     fires for these, and the owner got SILENCE (live 2026-08-26: an image
@@ -492,6 +515,7 @@ def run() -> None:
     app.add_handler(CommandHandler(["start", "help"], _on_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
+    app.add_handler(MessageHandler(filters.LOCATION, _on_location))
     app.add_handler(MessageHandler(
         filters.PHOTO | filters.VIDEO | filters.AUDIO
         | filters.Sticker.ALL | filters.Document.ALL,

@@ -38,6 +38,14 @@ def capability_brief() -> str:
 
     not_connected = []
 
+    lines.append("- Live weather and a 3-day forecast for any named place or shared location pin (exact data, not web snippets).")
+    if _has_env("GOOGLE_MAPS_API_KEY") or _has_env("TOMTOM_API_KEY"):
+        lines.append('- Distance and travel time with LIVE traffic between any two places, or from a shared pin ("how far is Jalpaiguri?", "how\'s traffic to the airport?") — by car, two-wheeler, or on foot.')
+    else:
+        not_connected.append("Travel times / traffic (needs GOOGLE_MAPS_API_KEY with the Routes API enabled, or TOMTOM_API_KEY)")
+    lines.append("- Find nearby places by category — hospitals, pharmacies, ATMs, banks, restaurants, cafes, hotels, sightseeing, fuel, police, groceries — around a shared pin or any named place, with distances and map links.")
+    lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')
+
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
         lines.append('- Read the Google Calendar ("what\'s on my calendar tomorrow?").')
     else:
@@ -48,6 +56,11 @@ def capability_brief() -> str:
         lines.append('- Check unread email: senders and subjects ONLY, never message bodies (a deliberate privacy boundary — say so if asked to open/summarize an email, and point to Gmail).')
     else:
         not_connected.append("Calendar event creation and email checking (needs the Google OAuth setup)")
+
+    if _has_env("SEARXNG_URL"):
+        lines.append('- Search the web for current information — news, prices, weather, facts ("what\'s the latest on X?"); answers cite their source links.')
+    else:
+        not_connected.append("Web search (needs the local SearXNG container — SEARXNG_URL in .env)")
 
     if _has_env("HASS_URL", "HASS_TOKEN"):
         server = (config.load().get("tool_servers") or {}).get("home_assistant") or {}
@@ -66,12 +79,24 @@ def capability_brief() -> str:
     if at is not None:
         lines.append(f"- A morning brief arrives daily at {at.strftime('%H:%M')} (calendar, reminders, home status).")
     lines.append("")
-    lines.append(
-        "YOU HAVE NO INTERNET ACCESS: no web search, no browsing, no news, no "
-        "live data of any kind — your tools reach only the calendar, email "
-        "metadata, and home devices listed above, and your general knowledge "
-        "ends at your training cutoff. Never claim to look anything up online."
-    )
+    if _has_env("SEARXNG_URL"):
+        # The tool exists — but the honesty rule survives it: internet
+        # access ends at search snippets, and saying otherwise is the same
+        # hallucination the original hard "no internet" block prevented.
+        lines.append(
+            "INTERNET ACCESS IS EXACTLY the web.search tool: result titles and "
+            "snippets only. You cannot open pages, click links, browse sites, "
+            "fetch URLs, or check anything a search snippet doesn't show — and "
+            "any live claim not backed by a search THIS exchange is your "
+            "training data talking; say so or search first."
+        )
+    else:
+        lines.append(
+            "YOU HAVE NO INTERNET ACCESS: no web search, no browsing, no news, no "
+            "live data of any kind — your tools reach only the calendar, email "
+            "metadata, and home devices listed above, and your general knowledge "
+            "ends at your training cutoff. Never claim to look anything up online."
+        )
     # The privacy answer must track the ACTUAL tier config — after the
     # 2026-08-26 switch to local-only qwen3, "Groq's cloud API" would have
     # been a false claim in the other direction.
@@ -107,8 +132,10 @@ def capability_brief() -> str:
         voice_cannot = "" if _voice2.available() else "voice notes, "
     except Exception:
         voice_cannot = "voice notes, "
+    browsing_cannot = ("opening full web pages (search snippets are the limit), "
+                       if _has_env("SEARXNG_URL") else "web browsing, ")
     lines.append(
-        "EVERYTHING ELSE — web browsing, bookings, calls, music, payments, "
+        f"EVERYTHING ELSE — {browsing_cannot}bookings, calls, music, payments, "
         "opening email bodies, editing/rescheduling calendar events, "
         "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
         f"analyze any image or photo — do not offer to), {voice_cannot}devices not "
