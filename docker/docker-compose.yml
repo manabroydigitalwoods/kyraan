@@ -1,0 +1,39 @@
+# Kyraan's supporting containers — the whole Docker footprint, versioned.
+# Run from this directory:   docker compose up -d
+# One-time setup: copy .env.example to .env here (the SearXNG secret).
+#
+# State vs config: SearXNG's config is small and secret-free, so it lives
+# in the repo (./searxng) — a config change is a commit + `docker compose
+# up -d`. Home Assistant's /config lives at ./homeassistant but is mostly
+# stateful DATA (database, device registry, auth store) — the repo-root
+# .gitignore allowlists only its declarative YAML; everything else stays
+# untracked. NEVER run `git clean -fdx` here: it would delete HA's
+# untracked state. Migrating machines = copy the whole repo directory
+# (untracked state included), then `docker compose up -d`.
+
+name: kyraan
+
+services:
+  homeassistant:
+    image: ghcr.io/home-assistant/home-assistant:stable
+    container_name: homeassistant
+    environment:
+      - TZ=Asia/Kolkata
+    ports:
+      - "8123:8123"
+    volumes:
+      - ./homeassistant:/config
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    environment:
+      # Overrides server.secret_key so the committed settings.yml stays
+      # secret-free; value comes from docker/.env (gitignored).
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+    ports:
+      - "127.0.0.1:8888:8080"   # localhost-only: Kyraan is the sole client
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped

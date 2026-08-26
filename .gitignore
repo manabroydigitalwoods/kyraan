@@ -14,3 +14,10 @@ memory/*.lock
 .DS_Store
 .claude/
 data/
+# Home Assistant's /config is mostly runtime STATE (database, .storage
+# auth/device registry, secrets.yaml) — track only the declarative YAML.
+docker/homeassistant/*
+!docker/homeassistant/configuration.yaml
+!docker/homeassistant/automations.yaml
+!docker/homeassistant/scripts.yaml
+!docker/homeassistant/scenes.yaml

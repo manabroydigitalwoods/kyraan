@@ -6,7 +6,7 @@
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 MARK="/tmp/kyraan_watchdog_alerted"
 export $(grep -E '^(TELEGRAM_BOT_TOKEN|TELEGRAM_OWNER_ID)=' "$REPO/.env" | xargs)
-pid=$(launchctl list | awk '$3 == "io.digitalwoods.kyraan" {print $1}')
+pid=$(launchctl list | awk '$3 == "ai.kyraan" {print $1}')
 if [[ "$pid" == "-" || -z "$pid" ]]; then
   now=$(date +%s)
   last=0
@@ -17,7 +17,7 @@ if [[ "$pid" == "-" || -z "$pid" ]]; then
     printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" | \
       curl -s -K - \
       -d chat_id="${TELEGRAM_OWNER_ID}" \
-      -d text="⚠️ Kyraan watchdog: the bot process is not running. Restart with: launchctl kickstart -k gui/501/io.digitalwoods.kyraan" >/dev/null
+      -d text="⚠️ Kyraan watchdog: the bot process is not running. Restart with: launchctl kickstart -k gui/501/ai.kyraan" >/dev/null
     touch "$MARK"
   fi
 else

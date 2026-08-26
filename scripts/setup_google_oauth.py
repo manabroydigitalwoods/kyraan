@@ -84,7 +84,7 @@ def main() -> None:
     with os.fdopen(fd, "w") as handle:
         handle.write(text)
     print("Refresh token saved to .env (permissions 0600) — restart the bot service:")
-    print("  launchctl kickstart -k gui/$(id -u)/io.digitalwoods.kyraan")
+    print("  launchctl kickstart -k gui/$(id -u)/ai.kyraan")
 
 
 if __name__ == "__main__":

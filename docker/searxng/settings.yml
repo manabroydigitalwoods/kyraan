@@ -1,0 +1,28 @@
+# SearXNG config for Kyraan's web.search tool (docs/design/tool_registry.md).
+# The secret_key is NOT here — docker-compose passes SEARXNG_SECRET from
+# docker/.env (gitignored), so this file is safe to commit.
+use_default_settings:
+  engines:
+    remove:  # never loaded: wikidata 403s at init, ahmia/torch need Tor
+      - wikidata
+      - ahmia
+      - torch
+
+engines:
+  # disabled (not removed — brave.news etc. reference the base engines'
+  # shared network defs, and removing `brave` crash-looped the container
+  # with KeyError 'brave'): these captcha-wall or rate-limit this IP on
+  # nearly every query (live, 2026-08-26), a warning + wasted wait each.
+  # Google/Bing/mojeek etc. carried every result anyway.
+  - name: duckduckgo
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: brave
+    disabled: true
+server:
+  limiter: false  # local-only instance; Kyraan is the sole client
+search:
+  formats:
+    - html
+    - json  # the API format Kyraan uses
