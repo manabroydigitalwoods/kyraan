@@ -48,6 +48,22 @@ def enroll_request(caption: str):
     return m.group(1).strip() if m else None
 
 
+_TEXT_ENROLL_RE = re.compile(
+    r"^\s*remember\s+(?:this|that|it|him|her)\s+(?:face\s+)?(?:is|as)\s+"
+    r"([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$", re.IGNORECASE)
+
+
+def enroll_from_text(text: str):
+    """A follow-up TEXT like "remember this is kiaan" right after a photo
+    (seen live 2026-08-26: the natural phrasing, typed as its own message
+    once the photo was already sent). Returns the name or None. Narrow on
+    purpose: "remember that my wife is Ruma" doesn't match — 'this/that'
+    must sit directly against 'is/as', which is how people refer to the
+    photo they just sent, not how they state a family fact."""
+    m = _TEXT_ENROLL_RE.match(text or "")
+    return m.group(1).strip() if m else None
+
+
 def enroll_hint(caption: str):
     """A caption that NAMES someone ("this kiaan", "this is Ruma") without
     the enrollment phrase — seen live 2026-08-26: the owner captioned

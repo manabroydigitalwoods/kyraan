@@ -50,6 +50,51 @@ def test_enroll_hint_on_naming_captions(monkeypatch):
     assert faces.enroll_hint("this is kiaan") is None  # already enrolled
 
 
+def test_enroll_from_text_matches_photo_followups_not_family_facts():
+    assert faces.enroll_from_text("remember this is kiaan") == "kiaan"
+    assert faces.enroll_from_text("Remember this face as Maan Roy") == "Maan Roy"
+    assert faces.enroll_from_text("remember her as Ruma") == "Ruma"
+    # ordinary memory statements must NOT read as biometric requests
+    assert faces.enroll_from_text("remember that my wife is Ruma") is None
+    assert faces.enroll_from_text("remember to call mom") is None
+    assert faces.enroll_from_text("what is this?") is None
+
+
+async def test_text_followup_enrolls_the_recent_photo(monkeypatch):
+    """Live 2026-08-26: photo sent, then the TEXT "remember this is
+    kiaan" — the photo was gone and the owner was told to resend it. The
+    channel now stashes the last photo (in memory, 10-min TTL) so the
+    follow-up enrolls it, still through the confirm gate."""
+    import time as _time
+
+    from kyraan.channels import telegram_bot
+    from kyraan.agents import orchestrator
+
+    orchestrator._pending_confirmations.pop(97, None)
+    monkeypatch.setattr(faces, "available", lambda: True)
+    monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[1.0, 0.0]])
+    telegram_bot._recent_photos[97] = (b"the-photo-bytes", _time.monotonic())
+
+    replies = []
+
+    async def reply_text(text, **kw):
+        replies.append(text)
+
+    update = __import__("types").SimpleNamespace(
+        effective_user=__import__("types").SimpleNamespace(id=1),
+        effective_chat=__import__("types").SimpleNamespace(id=97, type="private"),
+        message=__import__("types").SimpleNamespace(
+            text="remember this is kiaan", reply_text=reply_text),
+    )
+    monkeypatch.setenv("TELEGRAM_OWNER_ID", "1")
+    await telegram_bot._on_message(update, __import__("types").SimpleNamespace(bot=None))
+    assert replies and "FACE TEMPLATE" in replies[0] and "kiaan" in replies[0]
+    assert 97 in orchestrator._pending_confirmations   # awaiting the yes
+    assert faces.enrolled_names() == []                # nothing stored yet
+    orchestrator._pending_confirmations.pop(97, None)
+    telegram_bot._recent_photos.pop(97, None)
+
+
 def test_enroll_needs_exactly_one_face(monkeypatch):
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [])
     with pytest.raises(ValueError, match="no face"):

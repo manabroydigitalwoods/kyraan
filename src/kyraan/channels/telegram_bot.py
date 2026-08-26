@@ -129,11 +129,34 @@ def _lock_for(chat_id: int) -> asyncio.Lock:
     return _chat_locks[chat_id]
 
 
+# The most recent photo per chat, held IN MEMORY only (never persisted)
+# so a follow-up text like "remember this is kiaan" can enroll the face
+# the owner just sent — nobody resends a photo they sent 20 seconds ago.
+_recent_photos: dict = {}
+_RECENT_PHOTO_TTL_S = 600
+
+
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not _owner_private(update):
         logger.warning("Ignored non-owner or non-private update (user=%s chat=%s)",
                        update.effective_user, update.effective_chat)
         return
+
+    from kyraan.agents import faces, orchestrator
+    name = faces.enroll_from_text(update.message.text or "")
+    if name:
+        import time as _time
+        chat_id = update.effective_chat.id
+        stashed = _recent_photos.get(chat_id)
+        if stashed and _time.monotonic() - stashed[1] < _RECENT_PHOTO_TTL_S:
+            reply = await _enroll_face_gated(chat_id, name, stashed[0])
+            orchestrator.record_exchange(chat_id, update.message.text or "", reply)
+            await update.message.reply_text(
+                _plain(reply), do_quote=True,
+                reply_markup=_confirm_keyboard(chat_id))
+            return
+        # No recent photo: fall through — it may be an ordinary memory
+        # statement, and the normal pipeline handles those.
 
     await _ingest(update, context, update.message.text or "")
 
@@ -346,6 +369,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # largest thumbnail Telegram offers — plenty for detail=low vision
         tg_file = await update.message.photo[-1].get_file()
         image_bytes = bytes(await tg_file.download_as_bytearray())
+        import time as _time
+        _recent_photos[chat_id] = (image_bytes, _time.monotonic())
 
         enroll_name = faces.enroll_request(caption)
         if enroll_name is not None:
