@@ -35,10 +35,40 @@ because it was stated relatively. Each fact must be self-contained and understan
 without the original message — "- Wife's name is Mira", never just "- Mira".
 Most messages contain no durable facts — then return an empty list.
 Respond with ONLY JSON:
-{{"facts": [{{"path": "<category>/<slug>.md", "content": "- <one concise fact>"}}]}}
+{{"facts": [{{"path": "<category>/<slug>.md", "content": "- <one concise fact>",
+"term": "long|short", "importance": "normal|high|critical",
+"era": "current|past", "sphere": "personal|work|both",
+"flags": [], "supersedes": null}}]}}
 where <category> is one of: people, routines, work, preferences — and <slug>
 is lowercase letters, digits, and underscores (e.g. people/wife.md,
-work/woodsportal.md). Empty: {{"facts": []}}"""
+work/woodsportal.md). Classify each fact:
+- term: "short" for situational facts that stop mattering in weeks (a trip,
+  a temporary schedule); "long" for identity, relationships, preferences.
+- importance: "critical" ONLY for facts that could matter in an emergency
+  or must never be forgotten (allergies, medical conditions, blood group,
+  emergency contacts); "high" for core identity (names of immediate
+  family, birthdays); else "normal".
+- flags: subset of ["health", "safety", "emergency", "danger"] when the
+  fact is relevant to wellbeing or emergencies (medication, allergy,
+  a danger the user mentioned); usually [].
+- era: "past" for things that WERE true ("I used to smoke", "I worked at
+  X before") — old memories are kept, not discarded: they can still shape
+  the present (an ex-smoker fact matters to health). "current" otherwise.
+- sphere: "work" for job/company/project facts, "personal" for family and
+  life, "both" when a fact genuinely crosses over (a colleague who is
+  also a friend).
+- flags may also include "fun", "sentimental", or "milestone" for happy
+  memories, anniversaries, achievements — kept separate from operational
+  facts so they surface when reminiscing, not in task answers.
+- flags "emotional" (grief, loss, heartache, fears — memories that carry
+  feeling) and "sensitive" (private matters: diagnoses, finances,
+  conflicts, secrets) mark facts the assistant must handle with care:
+  they are recalled only when directly relevant, never volunteered.
+- supersedes: when the new fact REPLACES one in the "Already known" list
+  (a rename, a correction, an update), copy that OLD fact line verbatim
+  here; otherwise null. A fact identical in meaning to a known one is a
+  duplicate — do not output it at all.
+Empty: {{"facts": []}}"""
 
 # A single chat message stating more than a few durable facts is almost
 # always the model over-extracting, not the user info-dumping.
@@ -64,6 +94,12 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
 
     async def handler(args: dict) -> list[str]:
         system = _EXTRACT_FACTS_SYSTEM.format(now=local_now().isoformat())
+        known_lines = store.known_fact_lines()  # word-sets, for the dedup guard
+        known_text = (store.load_all_facts(2000) + "\n"
+                      + store.load_pending_facts(800)).strip()
+        if known_text:
+            system += ("\n\nAlready known facts (for the duplicate rule and "
+                       "the supersedes field):\n" + known_text)
         if context:
             # Referent resolution: "His name is Deven" right after a
             # question about the user's father must become a SELF-CONTAINED
@@ -111,7 +147,7 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
         # Context words are legitimate fact material too (the referent —
         # "father" — comes from the previous turn, not the message).
         message_words |= {w.strip(".,!?'\"").lower() for w in context.split() if len(w) > 3}
-        known = store.known_fact_lines()
+        known = known_lines
         queued = []
         for fact in facts[:_MAX_FACTS_PER_MESSAGE]:
             # Anti-fabrication: a real extraction reuses the message's own
@@ -128,8 +164,16 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
             if store.is_known_fact(str(fact.get("content", "")), known):
                 log_event("extraction_duplicate_skipped", fact=fact)
                 continue
+            meta = {
+                "term": fact.get("term", "long"),
+                "importance": fact.get("importance", "normal"),
+                "era": fact.get("era", "current"),
+                "sphere": fact.get("sphere", "personal"),
+                "flags": fact.get("flags") or [],
+                "supersedes": fact.get("supersedes") or None,
+            }
             try:
-                store.propose_fact(fact["path"], fact["content"], source=args["text"])
+                store.propose_fact(fact["path"], fact["content"], source=args["text"], meta=meta)
             except (KeyError, TypeError, ValueError) as exc:
                 # Bad shape or a path outside the allowed memory layout —
                 # drop that fact, keep the rest.

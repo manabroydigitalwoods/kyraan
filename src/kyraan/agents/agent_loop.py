@@ -249,6 +249,11 @@ Style rules:
 - Known facts in the CONTEXT are owner-reviewed — treat as true; never
   invent personal facts beyond them and the conversation. Facts listed as
   awaiting review are usable in conversation but not yet permanent.
+- Facts tagged [SENSITIVE] or [EMOTIONAL] demand care: bring them up only
+  when the user's message is directly about them, always with warmth and
+  discretion — never casually, never in a task answer, never as a joke.
+  [HEALTH]/[SAFETY]/[EMERGENCY] facts exist to protect the user — weigh
+  them whenever health or safety is at stake.
 - Reply in the user's tone: brief, warm, direct. No markdown bold.
 - If a tool errors, tell the user honestly what failed; don't retry blindly."""
 
@@ -272,6 +277,16 @@ def _describe_call(tool: str, args: dict) -> str:
     return f"Run {tool} with {json.dumps(args)}?"
 
 
+def _memory_block(message: str) -> str:
+    """Engine-ranked memory (safety-critical + identity always, the rest
+    by relevance and recency, budgeted) — falls back to the flat dump
+    until the index exists."""
+    from kyraan.memory import engine
+    return (engine.build_context(message)
+            or memory_store.load_all_facts()
+            or "(no facts stored yet)")
+
+
 async def run(chat_id: int, raw_text: str) -> str:
     """One agentic exchange. Returns the reply; raises AgentUnavailable to
     hand the message to the classifier fallback."""
@@ -287,8 +302,8 @@ async def run(chat_id: int, raw_text: str) -> str:
     transcript = (
         "CONTEXT:\n"
         f"Current date/time: {local_now().isoformat()}\n"
-        "Known facts (owner-reviewed):\n"
-        f"{memory_store.load_all_facts() or '(no facts stored yet)'}\n"
+        "Known facts (owner-reviewed; [FLAGS] mark safety-relevant ones):\n"
+        f"{_memory_block(raw_text)}\n"
         "Awaiting owner review:\n"
         f"{memory_store.load_pending_facts() or '(none)'}\n"
         "Conversation so far:\n"

@@ -277,6 +277,8 @@ def run() -> None:
     # from chat.jsonl so follow-ups ("are those the latest emails?") still
     # have their context.
     orchestrator.seed_history_from_log()
+    from kyraan.memory import engine
+    engine.migrate_from_tree()  # one-time index backfill; no-op after
 
     logger.info("Kyraan Telegram bot starting (owner-only, Phase 1)")
     app.run_polling()

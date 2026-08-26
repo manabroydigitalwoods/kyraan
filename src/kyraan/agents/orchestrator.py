@@ -210,6 +210,11 @@ _pending_reviews: dict = {}
 AGENT_LOOP_ENABLED = True
 
 
+def _is_review_request(text: str) -> bool:
+    t = text.lower()
+    return "review" in t and any(w in t for w in ("memory", "fact", "pending"))
+
+
 def _load_review_proposals() -> list:
     items = []
     for path in sorted(memory_store.PENDING_DIR.glob("*.md")):
@@ -733,6 +738,14 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # decides — chaining reads, composing its own replies, hitting the
         # same kernel gates for every tool. The classifier path below is
         # its fallback: degraded mode (cloud down) or any loop failure.
+        if _is_review_request(raw_text):
+            # Deterministic: the review flow OWNS these phrases. Routed
+            # through the agent loop, "review memory" listed the queue via
+            # a read-only tool and the owner's "approve all" then had no
+            # session to act on (live) — the approval path must never
+            # depend on a model's routing choice.
+            return await _review_memory(chat_id, raw_text)
+
         if AGENT_LOOP_ENABLED:
             try:
                 from kyraan.agents import agent_loop
@@ -1336,10 +1349,12 @@ async def _answer(chat_id: int, text: str) -> str:
         # is exactly where it's weakest (Ollama's default context also
         # truncates big prompts silently).
         tier = kernel.config.skill_config("qa.answer")["model_tier"]
+        from kyraan.memory import engine
         system = _ANSWER_SYSTEM.format(
             now=local_now().isoformat(),
             capabilities=capability_brief(),
-            facts=memory_store.load_all_facts() or "(no facts stored yet)",
+            facts=engine.build_context(args["text"])
+                  or memory_store.load_all_facts() or "(no facts stored yet)",
             pending_facts=memory_store.load_pending_facts() or "(none)",
             history=_history_block(chat_id),
         )

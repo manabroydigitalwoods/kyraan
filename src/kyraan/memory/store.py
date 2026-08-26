@@ -6,6 +6,7 @@ never touch the live memory/ tree directly — they land in
 memory/pending_review/ as a proposed patch, and a human promotes or
 discards them. `write_fact` never calls `promote`.
 """
+import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,31 +46,42 @@ def list_fact_files(category: str = "") -> list[str]:
     )
 
 
-def propose_fact(relative_path: str, content: str, source: str) -> Path:
+def propose_fact(relative_path: str, content: str, source: str, meta: dict | None = None) -> Path:
     """Queue a fact for human review instead of writing memory directly.
 
     `source` should be the verbatim user statement the fact was extracted
-    from, so a reviewer can check it was stated, not inferred.
+    from, so a reviewer can check it was stated, not inferred. `meta`
+    carries the extraction's classification (term/importance/flags/
+    supersedes) for the engine index at promote time.
     """
     relative_path = relative_path.strip().lower()  # 'Preferences/x.md' == 'preferences/x.md' — seen live rejected for a capital P
     _validate_path(relative_path)
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_name = relative_path.replace("/", "__")
     proposal_path = PENDING_DIR / f"{ts}__{safe_name}"
+    meta_line = f"meta: {json.dumps(meta, ensure_ascii=False)}\n" if meta else ""
     proposal_path.write_text(
-        f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n---\n\n{content}\n"
+        f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n{meta_line}---\n\n{content}\n"
     )
     return proposal_path
 
 
 def promote(proposal_path: Path) -> Path:
     """Human-approved: move a proposal into the live memory tree, appending
-    to the target file if it already exists."""
+    to the target file if it already exists, and register it with the
+    engine index (classification + supersession)."""
     text = proposal_path.read_text()
     _, _, rest = text.partition("---\n")
     frontmatter, _, body = rest.partition("---\n")
     target_line = next(line for line in frontmatter.splitlines() if line.startswith("target:"))
     target_rel = target_line.split("target:", 1)[1].strip()
+    meta = {}
+    meta_line = next((line for line in frontmatter.splitlines() if line.startswith("meta:")), "")
+    if meta_line:
+        try:
+            meta = json.loads(meta_line.split("meta:", 1)[1].strip())
+        except json.JSONDecodeError:
+            meta = {}
     # Re-validate at promote time too — a proposal file could have been
     # hand-edited between propose and promote.
     _validate_path(target_rel)
@@ -78,6 +90,20 @@ def promote(proposal_path: Path) -> Path:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     with target_path.open("a") as f:
         f.write(body.strip() + "\n\n")
+
+    from kyraan.memory import engine  # late: engine imports store
+    engine.add_fact(
+        content=body.strip(),
+        target=target_rel,
+        source=text[:200],
+        kind=engine._KIND_BY_CATEGORY.get(target_rel.split("/", 1)[0], "other"),
+        term=meta.get("term", "long"),
+        importance=meta.get("importance", "normal"),
+        flags=meta.get("flags") or (),
+        supersedes=meta.get("supersedes"),
+        era=meta.get("era", "current"),
+        sphere=meta.get("sphere", "personal"),
+    )
 
     proposal_path.unlink()
     return target_path

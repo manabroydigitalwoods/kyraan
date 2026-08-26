@@ -24,3 +24,15 @@ def _classifier_path_by_default(monkeypatch):
     per test via monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)."""
     from kyraan.agents import orchestrator
     monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_memory_tree(monkeypatch, tmp_path):
+    """No test may ever touch the REAL memory tree — a promote test once
+    leaked "likes tea" into the owner's live index.json. Tests that need
+    their own layout still re-patch on top of this."""
+    from kyraan.memory import store as memory_store
+    root = tmp_path / "memory_root"
+    (root / "pending_review").mkdir(parents=True)
+    monkeypatch.setattr(memory_store, "MEMORY_ROOT", root)
+    monkeypatch.setattr(memory_store, "PENDING_DIR", root / "pending_review")
