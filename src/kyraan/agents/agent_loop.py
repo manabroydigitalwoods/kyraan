@@ -106,7 +106,14 @@ async def _reminders_cancel(chat_id: int, args: dict, raw_text: str):
 
 async def _usage_report(chat_id: int, args: dict, raw_text: str):
     from kyraan.model_router import usage_report
-    return usage_report.usage_summary(days=int(args.get("days", 7)))
+    # Robust coercion — the model was seen sending days="few days" after a
+    # too-clever param description. Any unparseable value means the default.
+    raw_days = args.get("days", 7)
+    try:
+        days = int(float(raw_days))
+    except (TypeError, ValueError):
+        days = 7
+    return usage_report.usage_summary(days=days)
 
 
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
@@ -157,8 +164,8 @@ TOOLS = {
         "run": _reminders_cancel,
     },
     "usage.report": {
-        "params": '{"days": "<1-31; vague ranges map here: few days/this week=7, month=30. Never ask which>"}',
-        "about": "Kyraan's own AI usage: per-day model calls, input/output/cached tokens, cost in USD, and the live daily budget picture. For 'how much did we spend', 'token usage this week', 'are we near the budget'. days defaults to 7 — call directly, don't ask.",
+        "params": '{"days": 7}',
+        "about": "Kyraan's own AI usage: per-day model calls, input/output/cached tokens, cost in USD, and the live daily budget picture. For 'how much did we spend', 'token usage this week', 'are we near the budget'. days is a NUMBER (vague ranges: use 7) — call directly, never ask which.",
         "run": _usage_report,
     },
     "memory.pending_list": {
@@ -289,6 +296,7 @@ async def run(chat_id: int, raw_text: str) -> str:
         f"USER: {raw_text}"
     )
     malformed_retries = 0
+    calls_seen: dict = {}
 
     for step in range(_MAX_STEPS):
         try:
@@ -326,6 +334,19 @@ async def run(chat_id: int, raw_text: str) -> str:
 
         tool = decision["tool"]
         args = decision.get("args") or {}
+        signature = f"{tool}:{json.dumps(args, sort_keys=True)}"
+        repeats = calls_seen.get(signature, 0)
+        if repeats >= 2:
+            # Third identical call: the model is stuck — the classifier
+            # fallback beats burning the whole step cap (seen live:
+            # usage.report called 5x in a row past its own results).
+            raise AgentUnavailable(f"stuck repeating {tool}")
+        if repeats == 1:
+            calls_seen[signature] = 2
+            transcript += (f"\nSYSTEM: you already called {tool} with those exact args — "
+                           "its result is above. Use it and reply to the user NOW.")
+            continue
+        calls_seen[signature] = 1
         log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1,
                   consider=consider)
         try:
@@ -350,7 +371,10 @@ async def run(chat_id: int, raw_text: str) -> str:
         except Exception as exc:  # an executor bug must not brick the chat
             log_event("agent_tool_error", tool=tool, error=str(exc),
                       error_type=type(exc).__name__)
-            result = {"error": f"{tool} failed unexpectedly"}
+            # The REAL error goes back to the model — hiding it behind
+            # "failed unexpectedly" left it retrying identical bad args
+            # (seen live: days="few days", three blind retries).
+            result = {"error": f"{tool}: {str(exc)[:200]}"}
 
         if tool == "email.unread":
             # Data boundary: with a cloud tier active, the history records

@@ -181,3 +181,53 @@ async def test_step_cap_raises_unavailable(scripted_model, monkeypatch, tmp_path
     scripted_model(['{"action": "call", "tool": "reminders.list", "args": {}}'] * 6)
     with pytest.raises(agent_loop.AgentUnavailable):
         await agent_loop.run(90, "loop forever")
+
+
+async def test_repeated_identical_call_gets_nudged_then_cut_off(scripted_model, monkeypatch, tmp_path):
+    """Seen live: usage.report called 5x in a row past its own results,
+    burning the step cap. Second identical call gets a system nudge to
+    reply; a third raises AgentUnavailable (classifier beats a stuck loop)."""
+    from kyraan.triggers import store as rstore
+
+    monkeypatch.setattr(rstore, "REMINDERS_PATH", tmp_path / "reminders.json")
+    same = '{"action": "call", "tool": "reminders.list", "args": {}}'
+
+    prompts = scripted_model([same, same,
+                              '{"action": "reply", "text": "No reminders pending."}'])
+    reply = await agent_loop.run(90, "any reminders?")
+    assert reply == "No reminders pending."
+    assert "already called reminders.list" in prompts[2]  # the nudge landed
+
+    scripted_model([same, same, same])
+    with pytest.raises(agent_loop.AgentUnavailable, match="stuck"):
+        await agent_loop.run(90, "any reminders?")
+
+
+async def test_bad_days_value_falls_back_to_default(monkeypatch, tmp_path):
+    """days='few days' crashed the executor live; any junk now means 7."""
+    from kyraan.control_plane import logging_setup
+    from kyraan.model_router import router as r
+
+    monkeypatch.setattr(logging_setup, "EVENT_LOG", tmp_path / "e.jsonl")
+    monkeypatch.setattr(r, "COST_LEDGER_PATH", tmp_path / "ledger.json")
+    result = await agent_loop.TOOLS["usage.report"]["run"](90, {"days": "few days"}, "usage?")
+    assert "budget" in result and isinstance(result["days"], list)
+
+
+async def test_executor_errors_reach_the_model_verbatim(scripted_model, monkeypatch):
+    """The model can only self-correct if it sees the REAL error."""
+    async def broken(chat_id, args, raw_text):
+        raise ValueError("invalid literal for int() with base 10: 'few days'")
+
+    monkeypatch.setattr(agent_loop.TOOLS["usage.report"], "run", broken) if False else None
+    original = agent_loop.TOOLS["usage.report"]["run"]
+    agent_loop.TOOLS["usage.report"]["run"] = broken
+    try:
+        prompts = scripted_model([
+            '{"action": "call", "tool": "usage.report", "args": {"days": "few days"}}',
+            '{"action": "reply", "text": "Let me redo that with a number."}',
+        ])
+        await agent_loop.run(90, "usage last few days")
+        assert "invalid literal" in prompts[1]
+    finally:
+        agent_loop.TOOLS["usage.report"]["run"] = original
