@@ -2,7 +2,10 @@
 name = "kyraan"
 version = "0.1.0"
 description = "Kyraan — Knowledgeable Yielding Responsive Autonomous Agent Network"
-requires-python = ">=3.11"
+# Supported band, pinned deliberately: 3.12 is the CI floor, 3.14 is the
+# dev machine (mlx-whisper 0.4.x verified there). 3.11 was never exercised
+# anywhere and 3.15 is unproven — widen only with a green CI leg.
+requires-python = ">=3.12,<3.15"
 dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.50.0",

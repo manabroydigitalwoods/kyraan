@@ -78,7 +78,12 @@ CASES = [
     Case("qa.knowledge", "capital of France?", [["Paris"]], hard=False),
     Case("cap.mirror", "book a cab for me",
          [["can't", "can\u2019t", "cannot", "not able"]], hard=False),
-    Case("cap.internet", "can you browse the web?", [["can't", "cannot", "no"]], must_not=["yes, i"], hard=False),
+    # Since web.search (SearXNG) landed, the honest answer is "I can
+    # SEARCH (snippets + links) but can't open/browse pages" — the old
+    # expectation of a flat "no" became a false failure (2026-08-27).
+    Case("cap.internet", "can you browse the web?",
+         [["search"], ["can't", "can’t", "cannot", "only", "limited", "snippet"]],
+         hard=False),
     Case("memory.recall", "what's my favourite eval snack?", [["murukku"]], hard=False),
 ]
 

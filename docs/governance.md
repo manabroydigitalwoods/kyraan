@@ -1,6 +1,6 @@
 # Kyraan Governance — §3a Decisions
 
-Status: **DRAFT for the owner's red pen** (2026-08-26). Every section is a
+Status: **ACCEPTED for the owner's red pen** (2026-08-26). Every section is a
 PROPOSED position with rationale, ending in a **Decide:** line. Editing
 this file and committing it IS the decision record — plan.md §3a says
 these gate Phase 3, and once accepted, Phase 3's data model must conform
@@ -16,84 +16,91 @@ stays intact.
 
 Policy has to start from facts. As of 2026-08-26, live-verified:
 
-| Destination | What it receives | When |
-|---|---|---|
-| OpenAI (frontier tier) | Conversation text, owner-REVIEWED memory facts, tool results (except the exclusions below) | Every agent-loop turn |
-| Local qwen3 (cheap tier) | Everything the frontier sees PLUS pending-review facts and email bodies | Extraction, summaries, degraded mode |
-| Google (Calendar/Gmail APIs) | Calendar events, email metadata queries, email bodies (fetch only — content is then processed locally) | Calendar/email tools |
-| Google (Places/Routes APIs) | Coordinates or place names of owner-initiated queries, incl. shared location pins | places.nearby, routes.eta |
-| TomTom | Same as above, on Google failure | routes.eta fallback |
-| OpenAI (vision) | Photos the owner sends to the bot (analysis only; no tools on photo turns) | Photo messages |
-| OSM Nominatim | Coordinates of shared location pins | Pin reverse-geocoding |
-| Open-Meteo | Coordinates/place names | weather.get |
-| Public search engines (via local SearXNG) | Search queries only | web.search |
-| **Never leaves** | Email body text and summaries, voice audio, FACE TEMPLATES (recognition is fully on-device; only a matched name enters a prompt), pending-review facts (cloud paths), HA device data beyond the prompt's readings, logs/traces | By construction, test-pinned |
+
+| Destination                               | What it receives                                                                                                                                                                                                               | When                                 |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| OpenAI (frontier tier)                    | Conversation text, owner-REVIEWED memory facts, tool results (except the exclusions below)                                                                                                                                     | Every agent-loop turn                |
+| Local qwen3 (cheap tier)                  | Everything the frontier sees PLUS pending-review facts and email bodies                                                                                                                                                        | Extraction, summaries, degraded mode |
+| Google (Calendar/Gmail APIs)              | Calendar events, email metadata queries, email bodies (fetch only — content is then processed locally)                                                                                                                         | Calendar/email tools                 |
+| Google (Places/Routes APIs)               | Coordinates or place names of owner-initiated queries, incl. shared location pins                                                                                                                                              | places.nearby, routes.eta            |
+| TomTom                                    | Same as above, on Google failure                                                                                                                                                                                               | routes.eta fallback                  |
+| OpenAI (vision)                           | Photos the owner sends to the bot (analysis only; no tools on photo turns)                                                                                                                                                     | Photo messages                       |
+| OSM Nominatim                             | Coordinates of shared location pins                                                                                                                                                                                            | Pin reverse-geocoding                |
+| Open-Meteo                                | Coordinates/place names                                                                                                                                                                                                        | weather.get                          |
+| Public search engines (via local SearXNG) | Search queries only                                                                                                                                                                                                            | web.search                           |
+| **Never leaves**                          | Email body text and summaries, voice audio, FACE TEMPLATES (recognition is fully on-device; only a matched name enters a prompt), pending-review facts (cloud paths), HA device data beyond the prompt's readings, logs/traces | By construction, test-pinned         |
+
 
 ---
+
+
 
 ## 1. Family consent
 
 **Proposed policy:**
-- Kyraan may store facts about a family member only with that person's
-  informed agreement. "Informed" = they know facts are stored as local
-  files, sent to a cloud model inside prompts, reviewed by the owner,
-  and deletable on request.
-- The **spouse**: ask directly before Phase 3 rollout; until they agree,
-  facts about them stay limited to what the owner states in passing
-  (current behavior) and are flagged for their review at rollout.
-- The **child** is an infant: consent is the parents' joint decision
-  until he can meaningfully give his own. Store only what parents agree
-  to; revisit when he is old enough to ask.
-- **Parents**: same direct-ask rule as the spouse, at THEIR rollout time
-  (which is later — see §8).
-- Any family member can say "delete what you know about me" — that maps
-  to the existing forget flow and is honored without debate.
 
-**Decide:** adopt as written? / spouse conversation done on (date): ____
+- Kyraan may store facts about a family member only with that person's
+informed agreement. "Informed" = they know facts are stored as local
+files, sent to a cloud model inside prompts, reviewed by the owner,
+and deletable on request.
+- The **spouse**: ask directly before Phase 3 rollout; until they agree,
+facts about them stay limited to what the owner states in passing
+(current behavior) and are flagged for their review at rollout.
+- The **child** is an infant: consent is the parents' joint decision
+until he can meaningfully give his own. Store only what parents agree
+to; revisit when he is old enough to ask.
+- **Parents**: same direct-ask rule as the spouse, at THEIR rollout time
+(which is later — see §8).
+- Any family member can say "delete what you know about me" — that maps
+to the existing forget flow and is honored without debate.
+
+**Decide:** adopt as written? / spouse conversation done on (date): 27-08-2026
 
 ## 2. Work / personal data boundary
 
 **Proposed policy — the strict version:**
+
 - **Kyraan is a personal system. Company data stays out.** No Portalapp
-  deploy states, tickets, client names, client communication, or
-  company credentials in memory, tools, or prompts — because every
-  frontier prompt goes to OpenAI under the OWNER's personal account,
-  which no company data-processing policy covers.
+deploy states, tickets, client names, client communication, or
+company credentials in memory, tools, or prompts — because every
+frontier prompt goes to OpenAI under the OWNER's personal account,
+which no company data-processing policy covers.
 - What IS allowed: the owner's own work *schedule* (meetings on the
-  personal calendar, "leave by 5 for the client call") and career facts
-  about the owner ("CTO at the company") — facts about the owner's life,
-  not the company's data.
+personal calendar, "leave by 5 for the client call") and career facts
+about the owner ("CTO at the company") — facts about the owner's life,
+not the company's data.
 - If work tooling is ever wanted (Phase 3's Work agent), it enters only
-  after: (a) the company's explicit sign-off on routing its data through
-  the chosen model provider, (b) a separate provider account/agreement
-  covering it, (c) a hard scope separation so a family-context question
-  can never pull work data into its prompt. Until all three exist, the
-  Work agent of plan.md §5 is DEFERRED, not designed-around.
+after: (a) the company's explicit sign-off on routing its data through
+the chosen model provider, (b) a separate provider account/agreement
+covering it, (c) a hard scope separation so a family-context question
+can never pull work data into its prompt. Until all three exist, the
+Work agent of plan.md §5 is DEFERRED, not designed-around.
 
 **Decide:** strict version as written, or name specific work items to
-allow now: ____
+allow now: 27-08-2026
 
 ## 3. Third-party model & API data exposure
 
 **Proposed policy — codifying the boundary that already exists in code:**
+
 - **Never to any cloud endpoint:** email body text or summaries of it,
-  voice audio, pending (unreviewed) memory facts, anything a family
-  member marked private, credentials/tokens of any kind.
+voice audio, pending (unreviewed) memory facts, anything a family
+member marked private, credentials/tokens of any kind.
 - **To the model provider (currently OpenAI) only:** conversation text,
-  owner-reviewed facts, and tool results needed to answer — accepting
-  that reviewed facts include sensitive personal ones ([HEALTH] etc.);
-  the review step IS the consent gate for that.
+owner-reviewed facts, and tool results needed to answer — accepting
+that reviewed facts include sensitive personal ones ([HEALTH] etc.);
+the review step IS the consent gate for that.
 - **To maps/weather providers:** owner-initiated place names and pin
-  coordinates only — sharing a pin is the consent, and Kyraan never
-  requests or tracks location.
+coordinates only — sharing a pin is the consent, and Kyraan never
+requests or tracks location.
 - **Provider changes are policy events:** repointing a tier or adding a
-  data-receiving tool backend requires updating §0's table in the same
-  commit. The capability brief's privacy answer must keep matching it.
+data-receiving tool backend requires updating §0's table in the same
+commit. The capability brief's privacy answer must keep matching it.
 - Standing preference: when a keyless/local option exists at comparable
-  quality, prefer it (the SearXNG/Open-Meteo/OSM pattern).
+quality, prefer it (the SearXNG/Open-Meteo/OSM pattern).
 
 **Decide:** adopt? / any category to pull back from OpenAI (e.g. route
-[HEALTH]-flagged facts to the local tier only): ____
+[HEALTH]-flagged facts to the local tier only): 27-08-2026
 
 ## 4. Voice & recording consent (flagged for Phase 5)
 
@@ -104,76 +111,82 @@ explicit consent from every household member present, jurisdiction check
 for recording laws, and a visible hardware indicator. Not before
 Phase 5, and this line item blocks it until then.
 
-**Decide:** adopt as written? ____
+**Decide:** adopt as written? 27-08-2026
 
 ## 5. Maintenance ownership
 
 **Proposed policy:**
-- The owner (a working CTO) budgets **~2 hours/week** during active
-  phases: memory review, soak-log skim, the nightly critique, and small
-  fixes. Anything larger waits for a deliberate session.
-- **"Safe when unmaintained" definition:** if untouched for a month,
-  Kyraan must degrade to at worst a stale-but-honest assistant — no
-  writes without confirmation (already true), budget hard-cap ($5/day,
-  already true), watchdog restart (already true), 90-day log retention
-  (already true). No component may REQUIRE weekly tuning to stay safe.
-- The kill switch is the family-facing "off": anyone in the household
-  may ask the owner to engage it, no justification needed.
 
-**Decide:** 2h/week realistic? / different number: ____
+- The owner (a working CTO) budgets **~2 hours/week** during active
+phases: memory review, soak-log skim, the nightly critique, and small
+fixes. Anything larger waits for a deliberate session.
+- **"Safe when unmaintained" definition:** if untouched for a month,
+Kyraan must degrade to at worst a stale-but-honest assistant — no
+writes without confirmation (already true), budget hard-cap ($5/day,
+already true), watchdog restart (already true), 90-day log retention
+(already true). No component may REQUIRE weekly tuning to stay safe.
+- The kill switch is the family-facing "off": anyone in the household
+may ask the owner to engage it, no justification needed.
+
+**Decide:** 2h/week realistic? / different number: 27-08-2026
 
 ## 6. Review scaling
 
 **Proposed policy:**
-- Memory extraction review stays **100% manual** until 200 total
-  proposals have been reviewed AND the trailing-50 approval rate is
-  ≥90%. Then: sample-review (every 3rd proposal auto-holds for review,
-  the rest auto-approve after a 24h objection window in which they show
-  as "awaiting" in answers, as today).
-- **Full review re-triggers** on any of: a wrong auto-approved fact
-  discovered, a model-tier change, or an extraction-prompt change.
-- The nightly prompt-critic stays proposals-only indefinitely; there is
-  no auto-apply milestone. Accepted edits gate on scripts/eval.py
-  (already the rule).
 
-**Decide:** thresholds (200 / 90% / every-3rd) feel right? ____
+- Memory extraction review stays **100% manual** until 200 total
+proposals have been reviewed AND the trailing-50 approval rate is
+≥90%. Then: sample-review (every 3rd proposal auto-holds for review,
+the rest auto-approve after a 24h objection window in which they show
+as "awaiting" in answers, as today).
+- **Full review re-triggers** on any of: a wrong auto-approved fact
+discovered, a model-tier change, or an extraction-prompt change.
+- The nightly prompt-critic stays proposals-only indefinitely; there is
+no auto-apply milestone. Accepted edits gate on scripts/eval.py
+(already the rule).
+
+**Decide:** thresholds (200 / 90% / every-3rd) feel right? 27-08-2026
 
 ## 7. Direct correction / undo
 
 **Proposed policy (mostly exists — naming it makes it a guarantee):**
+
 - "Forget X" — deletes a fact (exists, confirm-gated).
 - Stating a correction supersedes the old fact (exists).
 - "That was wrong" in chat must always work as feedback WITHOUT the
-  owner needing to know which subsystem misfired; if it maps to no
-  deterministic path it lands in the self-review's signal digest.
+owner needing to know which subsystem misfired; if it maps to no
+deterministic path it lands in the self-review's signal digest.
 - **Gap to close in Phase 3:** a single `undo` for the LAST write action
-  (delete the event just created, cancel the reminder just set) without
-  naming it. Until built, the per-type cancels are the path.
+(delete the event just created, cancel the reminder just set) without
+naming it. Until built, the per-type cancels are the path.
 
-**Decide:** adopt, with `undo` as a Phase 3 deliverable? ____
+**Decide:** adopt, with `undo` as a Phase 3 deliverable? 27-08-2026
 
 ## 8. Staged rollout
 
 **Proposed sequence (each stage gates the next):**
+
 1. **Owner only** — today. Exit: 30 consecutive soak days with no
-   privacy-boundary bug and no unconfirmed write.
+  privacy-boundary bug and no unconfirmed write.
 2. **Spouse, read-mostly** — after her consent (§1): her own chat,
-   Q&A/reminders/calendar-read only; no home control, no memory
+  Q&A/reminders/calendar-read only; no home control, no memory
    extraction from her messages for the first month (deliberate: prove
    usefulness before profiling).
 3. **Spouse, full personal scope** — extraction on (her facts route to
-   HER review, not the owner's — Phase 3's per-person visibility).
+  HER review, not the owner's — Phase 3's per-person visibility).
 4. **Parents** — read-mostly indefinitely; reminders and Q&A are the
-   value; home control stays owner+spouse.
+  value; home control stays owner+spouse.
 5. **Child** — not before he can talk to it; parents decide then.
 
 Multi-user identity, per-person visibility rules, and conflict
 resolution (plan §3) are REQUIRED before stage 2 — that is the real
 technical gate between Phase 2 and any family rollout.
 
-**Decide:** sequence and stage-1 exit bar (30 clean days)? ____
+**Decide:** sequence and stage-1 exit bar (30 clean days)?27-08-2026
 
 ---
+
+
 
 ## Adoption
 

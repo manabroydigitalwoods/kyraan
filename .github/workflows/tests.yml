@@ -1,6 +1,11 @@
 # CI: the full suite on every push/PR. Tests fake all providers and the
 # conftest isolates every data store, so no secrets are needed here —
 # a leaked-secret surface of zero is deliberate.
+#
+# The matrix pins the supported runtime band (3.12 = CI floor, 3.14 = the
+# dev machine) and runs one leg under a hostile non-UTC host timezone:
+# conftest pins KYRAAN_TIMEZONE itself, so a green run here proves the
+# suite is timezone-independent, not just lucky on UTC runners.
 name: tests
 
 on:
@@ -12,13 +17,21 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python-version: "3.12"
+            tz: "UTC"
+          - python-version: "3.14"
+            tz: "America/New_York"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
       - run: pytest -q
         env:
-          KYRAAN_TIMEZONE: Asia/Kolkata
+          TZ: ${{ matrix.tz }}

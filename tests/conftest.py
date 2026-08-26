@@ -6,9 +6,20 @@ fixture, every pytest run sprayed its tool_call/model_call events into the
 production file, which made forensics on real sessions (like the 15:00
 double-send investigation) measurably harder.
 """
+import os
+
 import pytest
 
-from kyraan.control_plane import logging_setup
+# The suite must pass on ANY machine in ANY timezone (CI runs in UTC, the
+# dev laptop in IST, a reviewer's box wherever). Pin the app's zone before
+# any kyraan import can read it: tests that assert wall-clock behavior get
+# one deterministic zone, and an ambient KYRAAN_TIMEZONE from a dev .env
+# can never leak in. Host-TZ independence is separate — nothing in code
+# may use naive datetimes or the system zone (CI proves it by running the
+# suite under TZ=America/New_York).
+os.environ["KYRAAN_TIMEZONE"] = "UTC"
+
+from kyraan.control_plane import logging_setup  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
