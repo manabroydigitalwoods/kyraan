@@ -176,6 +176,13 @@ skills:
     permission: auto      # read-only metadata; replies are kept out of the
                           # history fed to cloud models (data boundary)
     model_tier: cheap
+  faces.enroll:
+    permission: confirm   # a BIOMETRIC template write — the heaviest
+                          # personal fact stored; template stays on-machine
+    model_tier: cheap
+  faces.forget:
+    permission: confirm   # deleting a biometric is also deliberate
+    model_tier: cheap
   home.query:
     permission: auto      # read-only: AC state + power/energy readout
     model_tier: cheap

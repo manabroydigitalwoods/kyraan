@@ -27,7 +27,7 @@ Policy has to start from facts. As of 2026-08-26, live-verified:
 | OSM Nominatim | Coordinates of shared location pins | Pin reverse-geocoding |
 | Open-Meteo | Coordinates/place names | weather.get |
 | Public search engines (via local SearXNG) | Search queries only | web.search |
-| **Never leaves** | Email body text and summaries, voice audio, pending-review facts (cloud paths), HA device data beyond the prompt's readings, logs/traces | By construction, test-pinned |
+| **Never leaves** | Email body text and summaries, voice audio, FACE TEMPLATES (recognition is fully on-device; only a matched name enters a prompt), pending-review facts (cloud paths), HA device data beyond the prompt's readings, logs/traces | By construction, test-pinned |
 
 ---
 

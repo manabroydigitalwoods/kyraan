@@ -48,6 +48,12 @@ def capability_brief() -> str:
     vision_ok = tiers_now.get("frontier", {}).get("provider") == "openai"
     if vision_ok:
         lines.append("- See and analyze PHOTOS sent in the chat — describe them, read text in them, answer questions about them (each photo is handled in its own turn; actions still need a normal text message).")
+        try:
+            from kyraan.agents import faces as _faces
+            if _faces.available():
+                lines.append('- Recognize ENROLLED faces in photos — matching happens on this machine only; the face data never leaves it. Enroll: send a photo captioned "remember this face as <name>" (needs a yes). Delete: "forget the face <name>".')
+        except Exception:
+            pass
     lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):

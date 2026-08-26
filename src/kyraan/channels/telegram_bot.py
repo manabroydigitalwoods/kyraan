@@ -300,6 +300,30 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                   f"[I'm sharing my current location: {described}]")
 
 
+async def _enroll_face_gated(chat_id: int, name: str, image_bytes: bytes) -> str:
+    """Face enrollment through the standard confirm flow — the owner's
+    "yes" (typed, or the inline button) runs the stashed enrollment with
+    these exact bytes. The template is written only after that yes."""
+    from kyraan.agents import faces, orchestrator
+    from kyraan.control_plane.kernel import SkillCall
+
+    if not faces.available():
+        return ("Face recognition isn't set up on this machine yet — run "
+                "scripts/setup_faces.py once, then send the photo again.")
+
+    async def handler(_args):
+        try:
+            return await asyncio.to_thread(faces.enroll, name, image_bytes)
+        except ValueError as exc:
+            return f"Couldn't enroll that face: {exc}"
+
+    return await orchestrator._gated(
+        chat_id, SkillCall("faces.enroll", {"name": name}), handler,
+        describe=(f'About to store a FACE TEMPLATE for "{name}" — biometric '
+                  "data, kept ONLY on this machine (never sent anywhere), "
+                  f'deletable anytime with "forget the face {name}"'))
+
+
 async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """A photo becomes one frontier vision call — analysis only, no tools
     on this path (see agents/photo.py). The reply plus a text record land
@@ -311,18 +335,34 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from kyraan.agents import orchestrator, photo
     from kyraan.control_plane.logging_setup import log_trace, new_turn
 
+    from kyraan.agents import faces
+
     new_turn()
+    chat_id = update.effective_chat.id
     caption = update.message.caption or ""
-    log_trace("turn_start", chat_id=update.effective_chat.id,
-              user_text=f"[photo] {caption}")
-    typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
+    log_trace("turn_start", chat_id=chat_id, user_text=f"[photo] {caption}")
+    typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
     try:
         # largest thumbnail Telegram offers — plenty for detail=low vision
         tg_file = await update.message.photo[-1].get_file()
         image_bytes = bytes(await tg_file.download_as_bytearray())
+
+        enroll_name = faces.enroll_request(caption)
+        if enroll_name is not None:
+            # Biometric write → the standard confirm gate; the photo's
+            # bytes stay captured in the handler for the owner's yes.
+            reply = await _enroll_face_gated(chat_id, enroll_name, image_bytes)
+            orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
+            log_trace("turn_end", chat_id=chat_id, reply=reply)
+            await update.message.reply_text(_plain(reply), do_quote=True)
+            return
+
+        recognized = (await asyncio.to_thread(faces.recognize, image_bytes)
+                      if faces.available() else {"names": [], "unknown_faces": 0})
         data_url = ("data:image/jpeg;base64,"
                     + base64.b64encode(image_bytes).decode())
-        reply = await photo.answer(update.effective_chat.id, data_url, caption)
+        reply = await photo.answer(chat_id, data_url, caption,
+                                   recognized=recognized["names"])
     except photo.VisionUnavailable:
         reply = ("I can't see photos right now (the vision model is "
                  "unavailable) — tell me in words for now.")

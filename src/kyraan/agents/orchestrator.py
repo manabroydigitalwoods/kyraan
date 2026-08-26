@@ -50,6 +50,12 @@ _confirmation_nonce: dict = {}
 # actions deserve freshness.
 _CONFIRMATION_TTL_S = 300
 _CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead"}
+
+import re as _re
+
+_FORGET_FACE_RE = _re.compile(
+    r"^\s*forget\s+(?:the\s+)?face\s+(?:of\s+)?(.{2,40}?)\s*[.!]?\s*$",
+    _re.IGNORECASE)
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 
 # Rolling per-chat conversation window: the qa.answer prompt's only session
@@ -645,6 +651,26 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 return ("That ask didn't survive a restart, so nothing is "
                         "waiting for your yes/no — please repeat the request "
                         "and I'll ask again.")
+
+        forget_face = _FORGET_FACE_RE.match(raw_text)
+        if forget_face:
+            # Deterministic, like the review phrases: deleting a biometric
+            # must never depend on a model's routing choice.
+            from kyraan.agents import faces as _faces
+            wanted = forget_face.group(1).strip()
+
+            async def _forget_face(_a: dict) -> str:
+                if _faces.forget(wanted):
+                    return f'Deleted the stored face template for "{wanted}".'
+                known = _faces.enrolled_names()
+                return (f'No stored face named "{wanted}".'
+                        + (f" Enrolled: {', '.join(known)}" if known else
+                           " No faces are enrolled."))
+
+            _skip_extraction.set(True)
+            return await _gated(
+                chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
+                describe=f'About to DELETE the stored face template for "{wanted}"')
 
         if _is_review_request(raw_text):
             # Deterministic: the review flow OWNS these phrases. Routed

@@ -42,12 +42,19 @@ class VisionUnavailable(Exception):
     'can't see photos right now' instead."""
 
 
-async def answer(chat_id: int, image_data_url: str, caption: str) -> str:
+async def answer(chat_id: int, image_data_url: str, caption: str,
+                 recognized: list | None = None) -> str:
     if kill_switch.is_engaged():
         return ("The kill switch is engaged — no autonomous action will run "
                 "until it's disengaged.")
     question = caption.strip() or "(no caption — describe the photo usefully)"
-    prompt = (f"Current date/time: {local_now().isoformat()}\n"
+    faces_line = ""
+    if recognized:
+        # Names only — matched ON-DEVICE; the face template never leaves.
+        faces_line = ("LOCALLY RECOGNIZED FACES (on-device match, can be "
+                      f"wrong): {', '.join(recognized)} — use the name(s) "
+                      "naturally.\n")
+    prompt = (f"Current date/time: {local_now().isoformat()}\n{faces_line}"
               f"OWNER'S CAPTION: {question}")
     try:
         response = await router.acall(prompt=prompt, system=_SYSTEM,

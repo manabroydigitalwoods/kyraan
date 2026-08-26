@@ -15,6 +15,7 @@ dependencies = [
     "textual>=0.80.0",
     "icalendar>=6.0",
     "recurring-ical-events>=3.0",
+    "opencv-python>=4.10",  # local face recognition (agents/faces.py)
 ]
 
 [project.optional-dependencies]
