@@ -136,6 +136,12 @@ skills:
                           # review step IS the gate, so proposing is safe to
                           # run on every message (still kill-switch-gated)
     model_tier: cheap
+  memory.review:
+    permission: auto      # lists pending facts; the promote/reject itself
+                          # runs only on the owner's explicit deterministic
+                          # "approve ..."/"reject ..." reply in the
+                          # owner-only chat — that reply IS the review
+    model_tier: cheap
   memory.write:
     permission: confirm   # reserved for anything that would touch the live
                           # memory tree directly; promotion is human-only via

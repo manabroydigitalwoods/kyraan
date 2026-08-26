@@ -15,6 +15,7 @@ KNOWN_INTENTS = [
     "calendar.create",
     "calendar.cancel",
     "email.check",
+    "memory.review",
     "home.query",
     "home.control",
     "incomplete",
@@ -59,6 +60,11 @@ Valid intents: {", ".join(KNOWN_INTENTS)}.
   reminders.cancel; cancelling an EVENT/meeting is calendar.cancel.
 - email.check: asking about email/inbox. E.g. "any new emails?", "do I have
   unread mail?", "check my inbox", "who emailed me?".
+- memory.review: the user wants to see or act on the facts awaiting the
+  owner's review — listing them, approving, confirming, or rejecting.
+  E.g. "review memory", "review the pending facts", "what review you need
+  still?", "reviewed and confirmed", "approve the pending facts", "confirm
+  the facts you noted". Saving facts happens ONLY through this flow.
 - home.query: asking about the home's smart devices or climate — state,
   power, runtime, temperature. E.g. "is the AC on?", "did I leave the AC
   running?", "how long has the AC been on?", "how much power is the AC

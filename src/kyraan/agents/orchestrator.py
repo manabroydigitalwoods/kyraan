@@ -61,6 +61,10 @@ HONESTY RULES, absolute:
 - Facts the user tells you are saved only after the owner's review — say
   "it'll be saved after a quick review", never that it's already permanently
   saved. Never deny being able to remember.
+- You CANNOT save, mark, or promote facts from this answer — saying "I'll
+  mark them as saved now" is a lie (it happened live). When the user wants
+  to confirm or review the pending facts, tell them to say "review memory"
+  — that shows the list and takes approve/reject for real.
 - If a request maps to a live capability but landed here by mistake,
   suggest the phrasing that works ("what's on my calendar today", "is the
   AC on?", "any new emails?") instead of denying the capability.
@@ -187,6 +191,72 @@ _REMIND_WORDS = (
     "remind", "remember", "alarm", "alert", "wake me", "notify",
     "forget", "ping me", "timer", "tell me", "let me know",
 )
+
+# In-chat memory review: chat_id -> (proposals, stashed_at). Born live
+# 2026-08-26: the owner said "reviewed and confirmed" and Kyraan claimed
+# "I'll mark the remaining items as saved now" — a false action claim; the
+# review gate only existed as a desktop CLI. The owner-only chat is as
+# legitimate a place to review as the terminal, so the flow lives here
+# too: list the pending facts, take approve/reject deterministically.
+_pending_reviews: dict = {}
+
+
+def _load_review_proposals() -> list:
+    items = []
+    for path in sorted(memory_store.PENDING_DIR.glob("*.md")):
+        text = path.read_text()
+        _, _, rest = text.partition("---\n")
+        frontmatter, _, body = rest.partition("---\n")
+        target = next((line.split("target:", 1)[1].strip()
+                       for line in frontmatter.splitlines() if line.startswith("target:")), "?")
+        items.append((path, target, body.strip().lstrip("- ").strip()))
+    return items
+
+
+def _parse_review_decision(text: str, count: int):
+    """Deterministic approve/reject parsing — no model sits between the
+    owner's decision and a memory write. Returns (approved, rejected)
+    index lists, or None when the message isn't a review decision."""
+    import re
+    words = re.findall(r"[a-z]+|\d+", text.lower())
+    if not words or words[0] not in ("approve", "promote", "confirm", "save",
+                                     "keep", "reject", "remove", "discard"):
+        return None
+    mode = None
+    approved: set = set()
+    rejected: set = set()
+    for w in words:
+        if w in ("approve", "promote", "confirm", "save", "keep"):
+            mode = "a"
+        elif w in ("reject", "remove", "discard", "delete", "drop"):
+            mode = "r"
+        elif w == "all" and mode:
+            (approved if mode == "a" else rejected).update(range(count))
+        elif w.isdigit() and mode:
+            i = int(w) - 1
+            if 0 <= i < count:
+                (approved if mode == "a" else rejected).add(i)
+    if not approved and not rejected:
+        return None
+    approved -= rejected  # an index named on both sides stays unsaved
+    return (sorted(approved), sorted(rejected))
+
+
+async def _review_memory(chat_id: int, text: str) -> str:
+    async def handler(args: dict) -> str:
+        proposals = _load_review_proposals()
+        if not proposals:
+            _pending_reviews.pop(chat_id, None)
+            return "Nothing is pending review — every fact you've approved is already saved."
+        _pending_reviews[chat_id] = (proposals, time.monotonic())
+        lines = [f"{i + 1}. {fact}  ({target})"
+                 for i, (_, target, fact) in enumerate(proposals)]
+        return ("Facts awaiting your review:\n" + "\n".join(lines) +
+                "\n\nReply \"approve all\", \"approve 1,3\", \"reject 2\", or a mix "
+                "(\"approve 1 reject 2\"). Anything else leaves them pending.")
+
+    return await _gated(chat_id, SkillCall("memory.review", {"text": text}), handler)
+
 
 def _cloud_tier_in_use() -> bool:
     tiers = kernel.config.load().get("model_tiers", {})
@@ -567,6 +637,44 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 # message normally.
                 log_event("confirmation_dropped", skill=call.skill_name)
 
+        review = _pending_reviews.get(chat_id)
+        if review:
+            proposals, stashed_at = review
+            if time.monotonic() - stashed_at > _CONFIRMATION_TTL_S:
+                _pending_reviews.pop(chat_id, None)  # stale — fall through
+            else:
+                decision = _parse_review_decision(raw_text, len(proposals))
+                if decision is None:
+                    # The user moved on — facts stay pending, never
+                    # implicitly approved.
+                    _pending_reviews.pop(chat_id, None)
+                else:
+                    _pending_reviews.pop(chat_id, None)
+                    _skip_extraction.set(True)
+                    approved_idx, rejected_idx = decision
+                    saved, discarded = [], []
+                    for i in approved_idx:
+                        path, target, fact = proposals[i]
+                        if path.exists():
+                            memory_store.promote(path)
+                            saved.append(fact)
+                            log_event("memory_promoted_via_chat", target=target, fact=fact[:80])
+                    for i in rejected_idx:
+                        path, target, fact = proposals[i]
+                        if path.exists():
+                            memory_store.reject(path)
+                            discarded.append(fact)
+                            log_event("memory_rejected_via_chat", target=target, fact=fact[:80])
+                    remaining = len(_load_review_proposals())
+                    parts = []
+                    if saved:
+                        parts.append("✅ Saved to memory: " + "; ".join(saved))
+                    if discarded:
+                        parts.append("🗑 Rejected: " + "; ".join(discarded))
+                    if remaining:
+                        parts.append(f"{remaining} still pending — say \"review memory\" to see them.")
+                    return "\n".join(parts) if parts else "Nothing changed."
+
         # Structured JSON intent classification needs more reliability than
         # the cheap tier's local 3B model consistently gives — verified
         # live (2026-08-25): the cheap tier misclassified a clear reminder
@@ -659,6 +767,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         if parsed.intent == "email.check":
             return await _read_or_meta(chat_id, raw_text, parsed.intent,
                                        await _check_email(chat_id, parsed.normalized_text))
+        if parsed.intent == "memory.review":
+            return await _review_memory(chat_id, parsed.normalized_text)
         if parsed.intent == "home.query":
             wording = f"{raw_text} {parsed.normalized_text}"
             if not _mentions_home(wording):

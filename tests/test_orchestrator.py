@@ -1528,3 +1528,78 @@ async def test_repeated_greeting_is_not_a_repetition_loop(monkeypatch):
     result = await orchestrator.handle_message(chat_id=54, raw_text="hello there")
     assert result.startswith("Hello! How can I assist you today?")
     orchestrator._history.pop(54, None)
+
+
+def _seed_review_queue(monkeypatch, tmp_path):
+    """Two real-shaped proposals in an isolated pending dir + memory tree."""
+    from kyraan.memory import store as mstore
+
+    memory_root = tmp_path / "memory"
+    pending = memory_root / "pending_review"
+    pending.mkdir(parents=True)
+    monkeypatch.setattr(mstore, "MEMORY_ROOT", memory_root)
+    monkeypatch.setattr(mstore, "PENDING_DIR", pending)
+    (pending / "a__people__father.md").write_text(
+        "---\ntarget: people/father.md\nsource_statement: 'x'\n---\n\nFather's name is Tarun Roy\n")
+    (pending / "b__people__reminder.md").write_text(
+        "---\ntarget: people/reminder.md\nsource_statement: 'y'\n---\n\nUser asked to call the plumber\n")
+    return memory_root, pending
+
+
+async def test_review_memory_lists_then_mixed_decision_promotes_and_rejects(monkeypatch, tmp_path):
+    """The live failure this replaces: 'reviewed and confirmed' got 'I'll
+    mark the remaining items as saved now' — a false claim with no save
+    behind it. Now the review flow lists the queue and the deterministic
+    approve/reject reply actually moves the files."""
+    from kyraan.memory import store as mstore
+
+    memory_root, pending = _seed_review_queue(monkeypatch, tmp_path)
+    _mock_normalize(monkeypatch, "memory.review", "review memory")
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    orchestrator._pending_reviews.pop(0, None)
+
+    listing = await orchestrator.handle_message(chat_id=0, raw_text="review memory")
+    assert "1. Father's name is Tarun Roy" in listing
+    assert "2. User asked to call the plumber" in listing
+
+    result = await orchestrator.handle_message(chat_id=0, raw_text="approve 1 reject 2")
+    assert "Saved to memory: Father's name is Tarun Roy" in result
+    assert "Rejected: User asked to call the plumber" in result
+    assert "Tarun Roy" in (memory_root / "people" / "father.md").read_text()
+    assert list(pending.glob("*.md")) == []  # queue drained
+
+
+async def test_unrelated_reply_leaves_the_review_queue_untouched(monkeypatch, tmp_path):
+    _memory_root, pending = _seed_review_queue(monkeypatch, tmp_path)
+    _mock_normalize(monkeypatch, "memory.review", "review memory")
+
+    async def no_facts(raw_text, context=""):
+        return []
+
+    async def fake_answer(chat_id, text):
+        return "Sure — the weather, you say?"
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    orchestrator._pending_reviews.pop(0, None)
+
+    await orchestrator.handle_message(chat_id=0, raw_text="review memory")
+    _mock_normalize(monkeypatch, "qa.answer", "what about the weather")
+    await orchestrator.handle_message(chat_id=0, raw_text="what about the weather")
+    assert len(list(pending.glob("*.md"))) == 2  # nothing implicitly approved
+    assert 0 not in orchestrator._pending_reviews  # session dropped
+
+
+def test_review_decision_parser_boundaries():
+    parse = orchestrator._parse_review_decision
+    assert parse("approve all", 3) == ([0, 1, 2], [])
+    assert parse("approve 1, 3", 3) == ([0, 2], [])
+    assert parse("reject 2", 3) == ([], [1])
+    assert parse("approve 1 reject 2", 3) == ([0], [1])
+    assert parse("approve 2 reject 2", 3) == ([], [1])  # conflict: stays unsaved
+    assert parse("yes", 3) is None            # plain yes is a confirm word, not a review decision
+    assert parse("what about 2?", 3) is None  # not a decision at all
