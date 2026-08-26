@@ -421,6 +421,38 @@ def budget_alert_threshold_pct() -> float:
     return config.load()["cost_monitor"]["alert_threshold_pct"]
 
 
+# Token governor — the dedicated per-call guard in front of every model
+# call. Every prompt in Kyraan is bounded BY CONSTRUCTION (fact/pending
+# char caps, history clips, tool-result slices, the loop's step cap), so
+# these limits are tripwires for BUGS, not working constraints: warn is
+# logged once per day per tier the first time a call runs unusually
+# heavy; hard is a refusal — an unbounded prompt must surface as a loud
+# error, not as a silent bill. Nothing here ever trims content: by the
+# owner's rule, useful tokens are never dropped — oversized means broken.
+_TOKEN_GUARD_WARN = 8_000
+_TOKEN_GUARD_HARD = 24_000
+
+
+def _token_guard(prompt: str, system: str, tier: str) -> None:
+    estimated = (len(prompt) + len(system)) // 4
+    if estimated > _TOKEN_GUARD_HARD:
+        log_event("token_guard_blocked", tier=tier, estimated_tokens=estimated,
+                  hard_limit=_TOKEN_GUARD_HARD)
+        raise ModelProviderError(
+            f"input of ~{estimated:,} tokens exceeds the {_TOKEN_GUARD_HARD:,}-token "
+            "guard — a context assembler is leaking; check token_guard_blocked in events.jsonl"
+        )
+    if estimated > _TOKEN_GUARD_WARN:
+        ledger = _read_ledger()
+        marker = f"token_warned:{tier}:{local_now().date().isoformat()}"
+        if not ledger.get(marker):
+            ledger[marker] = True
+            COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+            COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+            log_event("token_guard_warn", tier=tier, estimated_tokens=estimated,
+                      warn_limit=_TOKEN_GUARD_WARN)
+
+
 def call(
     prompt: str,
     system: str = "",
@@ -441,6 +473,8 @@ def call(
             f"daily model budget exhausted (${spent_today:.2f} of ${budget:.2f} spent today) — "
             "raise cost_monitor.daily_budget_usd in config/permissions.yaml or wait for tomorrow"
         )
+
+    _token_guard(prompt, system, tier)
 
     tier_cfg = config.load()["model_tiers"][tier]
     model = tier_cfg["model"]

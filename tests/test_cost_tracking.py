@@ -96,3 +96,27 @@ def test_cached_prompt_tokens_bill_at_the_discount_rate():
     tier_nocache = {"pricing": {"input_per_million": 0.20, "output_per_million": 1.25}}
     full = router._cost_usd(tier_nocache, usage)
     assert abs(full - ((2000 / 1e6) * 0.20 + (100 / 1e6) * 1.25)) < 1e-9
+
+
+def test_token_guard_blocks_runaway_prompts_and_warns_once(monkeypatch, tmp_path):
+    """The dedicated per-call token guard: normal prompts pass untouched
+    (nothing is ever trimmed), an unusually heavy call logs one warning a
+    day, and a runaway prompt is refused loudly instead of billed
+    silently."""
+    import pytest
+    from kyraan.control_plane import logging_setup
+
+    monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "ledger.json")
+
+    router._token_guard("small prompt", "small system", "frontier")  # passes silently
+
+    heavy = "x" * (9_000 * 4)
+    router._token_guard(heavy, "", "frontier")   # first heavy call: warns
+    router._token_guard(heavy, "", "frontier")   # same day: silent
+    log = logging_setup.EVENT_LOG.read_text()
+    assert log.count("token_guard_warn") == 1
+
+    runaway = "x" * (25_000 * 4)
+    with pytest.raises(router.ModelProviderError, match="token"):
+        router._token_guard(runaway, "", "frontier")
+    assert "token_guard_blocked" in logging_setup.EVENT_LOG.read_text()
