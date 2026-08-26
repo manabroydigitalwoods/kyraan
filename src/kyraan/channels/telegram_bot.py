@@ -134,8 +134,14 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                        update.effective_user, update.effective_chat)
         return
 
+    await _ingest(update, context, update.message.text or "")
+
+
+async def _ingest(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+    """Everything after the ownership gate — shared by typed messages and
+    transcribed voice notes (which ARE text by the time they get here)."""
     chat_id = update.effective_chat.id
-    _burst_buffers.setdefault(chat_id, []).append((update.message, update.message.text or ""))
+    _burst_buffers.setdefault(chat_id, []).append((update.message, text))
     if chat_id in _burst_flushing:
         # A window is open or a reply is being composed. The new fragment
         # supersedes any draft: composition checks the event at its safe
@@ -210,6 +216,42 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             typing.cancel()
 
 
+async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A voice note becomes text locally (audio never leaves the Mac) and
+    then flows through the exact same pipeline as a typed message."""
+    if not _owner_private(update):
+        return
+    from kyraan.channels import voice
+
+    if not voice.available():
+        await update.message.reply_text(
+            "I can't listen to voice notes yet on this machine — tell me in "
+            "words for now.", do_quote=True)
+        return
+    import tempfile
+    from pathlib import Path
+
+    typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
+    try:
+        tg_file = await update.message.voice.get_file()
+        with tempfile.NamedTemporaryFile(suffix=".oga", delete=False) as handle:
+            temp_path = Path(handle.name)
+        try:
+            await tg_file.download_to_drive(custom_path=temp_path)
+            text = await voice.transcribe(temp_path)
+        finally:
+            temp_path.unlink(missing_ok=True)  # transient: no audio at rest
+    finally:
+        typing.cancel()
+    if not text:
+        await update.message.reply_text(
+            "I couldn't make out that voice note — mind trying again, or "
+            "typing it?", do_quote=True)
+        return
+    logger.info("Voice note transcribed (%d chars)", len(text))
+    await _ingest(update, context, text)
+
+
 async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Photos, voice notes, stickers, files — the text-only handler never
     fires for these, and the owner got SILENCE (live 2026-08-26: an image
@@ -267,21 +309,38 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
 
 
 def _wire_brief(job_queue: JobQueue, bot) -> None:
-    at = briefs.brief_time()
-    if at is None:
-        return
+    async def _send(context, chat_id: int, text: str) -> None:
+        await context.bot.send_message(chat_id=chat_id, text=text)
+        orchestrator.record_proactive(chat_id, text)
 
-    async def _brief_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-        async def send_fn(chat_id: int, text: str) -> None:
-            await context.bot.send_message(chat_id=chat_id, text=text)
-            orchestrator.record_proactive(chat_id, text)
+    at = briefs.brief_time("morning")
+    if at is not None:
+        async def _morning_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await briefs.fire(_owner_id(), lambda c, t: _send(context, c, t))
 
-        await briefs.fire(_owner_id(), send_fn)
+        # run_daily needs a tz-aware time or it fires in UTC.
+        job_queue.run_daily(_morning_job, time=at.replace(tzinfo=local_now().tzinfo),
+                            name="morning_brief")
+        logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
 
-    # run_daily needs a tz-aware time or it fires in UTC — the whole point
-    # is 07:30 on the owner's clock.
-    job_queue.run_daily(_brief_job, time=at.replace(tzinfo=local_now().tzinfo), name="morning_brief")
-    logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
+    evening_at = briefs.brief_time("evening")
+    if evening_at is not None:
+        async def _evening_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await briefs.fire_evening(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_evening_job,
+                            time=evening_at.replace(tzinfo=local_now().tzinfo),
+                            name="evening_brief")
+        logger.info("Evening brief scheduled daily at %s", evening_at)
+
+    from kyraan.triggers import home_alerts
+    if home_alerts.enabled():
+        async def _alerts_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await home_alerts.check(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_repeating(_alerts_job, interval=1800, first=120,
+                                name="home_alerts")
+        logger.info("Home alerts armed (every 30 min, DND-gated)")
 
 
 def _harden_data_permissions() -> None:
@@ -364,8 +423,9 @@ def run() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
+    app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VOICE | filters.VIDEO | filters.AUDIO
+        filters.PHOTO | filters.VIDEO | filters.AUDIO
         | filters.Sticker.ALL | filters.Document.ALL,
         _on_unsupported,
     ))

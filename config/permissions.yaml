@@ -314,7 +314,20 @@ dnd:
   # proactive messages queued during quiet hours are held until it ends;
   # user-initiated chat is never gated by DND.
 
+voice:
+  enabled: true
+  model: mlx-community/whisper-large-v3-turbo   # local, Apple-MLX GPU;
+                                                # audio never leaves the Mac
+
+home_alerts:
+  enabled: true           # periodic (30 min) deterministic checks, DND-gated
+  ac_max_hours: 6         # continuous-run heads-up, once per ON stretch
+  daily_kwh_alert: 8.0    # daily consumption note, once per day
+
 briefs:
+  evening:
+    enabled: true
+    time: "21:30"   # tomorrow's calendar + reminders, today's energy story
   morning:
     enabled: true
     time: "07:30"   # after quiet_hours end on purpose — a brief that lands

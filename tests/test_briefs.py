@@ -114,3 +114,36 @@ async def test_brief_notes_the_ac_when_it_is_on(isolated_store, monkeypatch):
     monkeypatch.setattr(kernel, "run_tool", fake_run_tool)
     text = await briefs.compose(1)
     assert "⚡ The AC is ON — drawing 359.5 W." in text
+
+
+async def test_evening_brief_covers_tomorrow_and_the_energy_story(isolated_store, monkeypatch):
+    from kyraan.control_plane.dnd import local_now
+    from datetime import timedelta
+
+    tomorrow = (local_now() + timedelta(days=1)).replace(hour=10, minute=0, second=0, microsecond=0)
+    store.add(chat_id=1, text="dentist", when_iso=tomorrow.isoformat())
+
+    async def fake_run_tool(call, **kwargs):
+        if call.tool_name == "calendar.list_events":
+            return [{"title": "Standup", "start": tomorrow.isoformat(),
+                     "end": tomorrow.isoformat(), "all_day": False, "location": None}]
+        if call.args["entity"] == "sensor.ac_today_s_consumption":
+            return {"state": "3.4", "unit": "kWh"}
+        return {"state": "off"}
+
+    monkeypatch.setattr(kernel, "run_tool", fake_run_tool)
+    text = await briefs.compose_evening(1)
+    assert "Evening brief" in text
+    assert "Tomorrow:" in text and "Standup" in text
+    assert "dentist" in text
+    assert "AC used 3.4 kWh today." in text
+    assert "still ON" not in text
+
+
+def test_evening_brief_time_from_config(monkeypatch):
+    base = config.load()
+    monkeypatch.setattr(config, "load", lambda: {
+        **base, "briefs": {"evening": {"enabled": True, "time": "21:30"}}})
+    at = briefs.brief_time("evening")
+    assert (at.hour, at.minute) == (21, 30)
+    assert briefs.brief_time("morning") is None  # not configured here

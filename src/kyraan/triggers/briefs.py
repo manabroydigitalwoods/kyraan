@@ -13,12 +13,13 @@ from kyraan.control_plane.logging_setup import log_event
 from kyraan.triggers import scheduler, store
 
 
-def brief_time() -> time | None:
-    """Configured send time, or None when the brief is disabled."""
-    cfg = (config.load().get("briefs") or {}).get("morning") or {}
+def brief_time(which: str = "morning") -> time | None:
+    """Configured send time for a brief, or None when disabled."""
+    default = "07:30" if which == "morning" else "21:30"
+    cfg = (config.load().get("briefs") or {}).get(which) or {}
     if not cfg.get("enabled"):
         return None
-    hh, mm = str(cfg.get("time", "07:30")).split(":")
+    hh, mm = str(cfg.get("time", default)).split(":")
     return time(int(hh), int(mm))
 
 
@@ -102,4 +103,74 @@ async def fire(chat_id: int, send_fn) -> bool:
     text = await compose(chat_id)
     await send_fn(chat_id, text)
     log_event("brief_sent", chat_id=chat_id)
+    return True
+
+
+async def compose_evening(chat_id: int) -> str:
+    """The day's bookend: tomorrow's calendar, tomorrow's reminders, and
+    today's energy story — deterministic, same rules as the morning."""
+    now = local_now()
+    tomorrow_start = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow_end = tomorrow_start + timedelta(days=1)
+    lines = [f"🌙 Evening brief — {now.strftime('%A %d %b')}"]
+
+    try:
+        events = await kernel.run_tool(kernel.ToolCall(
+            "calendar.list_events",
+            {"start": tomorrow_start.isoformat(), "end": tomorrow_end.isoformat()},
+        ))
+        lines.append("")
+        if events:
+            lines.append("Tomorrow:")
+            for e in events:
+                when = "all day" if e["all_day"] else humanize(e["start"])
+                where = f" ({e['location']})" if e.get("location") else ""
+                lines.append(f"- {when} — {e['title']}{where}")
+        else:
+            lines.append("Nothing on tomorrow's calendar.")
+    except kernel.ToolFailed as exc:
+        lines.append("")
+        lines.append(f"Couldn't check the calendar: {exc}")
+
+    tomorrows = []
+    for r in store.list_pending(chat_id):
+        try:
+            when = scheduler._parse_when(r.when_iso)
+        except ValueError:
+            continue
+        if tomorrow_start <= when < tomorrow_end:
+            tomorrows.append((when, r.text))
+    if tomorrows:
+        lines.append("")
+        lines.append("Reminders tomorrow:")
+        for when, text in sorted(tomorrows):
+            lines.append(f"- {humanize(when)} — {text}")
+
+    home = []
+    try:
+        energy = await kernel.run_tool(kernel.ToolCall(
+            "home.get_state", {"entity": "sensor.ac_today_s_consumption"}))
+        home.append(f"⚡ AC used {energy['state']} {energy['unit'] or 'kWh'} today.")
+    except kernel.ToolFailed:
+        pass
+    try:
+        ac = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": "switch.ac"}))
+        if ac["state"] == "on":
+            home.append("The AC is still ON.")
+    except kernel.ToolFailed:
+        pass
+    if home:
+        lines.append("")
+        lines.extend(home)
+
+    return "\n".join(lines)
+
+
+async def fire_evening(chat_id: int, send_fn) -> bool:
+    if not kernel.can_send_proactively():
+        log_event("evening_brief_skipped", chat_id=chat_id)
+        return False
+    text = await compose_evening(chat_id)
+    await send_fn(chat_id, text)
+    log_event("evening_brief_sent", chat_id=chat_id)
     return True

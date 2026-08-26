@@ -431,3 +431,92 @@ async def test_nonce_race_old_button_cannot_confirm_swapped_action(monkeypatch):
     assert confirmed == []                      # the swapped action was NOT confirmed
     assert sent and "no longer active" in sent[0]
     orchestrator._confirmation_nonce.pop(chat, None)
+
+
+async def test_voice_note_becomes_text_in_the_normal_pipeline(monkeypatch):
+    """A voice note is transcribed LOCALLY and then flows through the
+    exact same pipeline as a typed message — same brain, same guards."""
+    from types import SimpleNamespace
+    from kyraan.agents import orchestrator
+    from kyraan.channels import voice
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    monkeypatch.setattr(telegram_bot, "_BURST_WINDOW_S", 0.05)
+    monkeypatch.setattr(voice, "available", lambda: True)
+
+    async def fake_transcribe(path):
+        return "remind me to call Rohan tomorrow at nine am"
+
+    monkeypatch.setattr(voice, "transcribe", fake_transcribe)
+    handled = []
+
+    async def fake_burst(chat_id, texts, superseded=None):
+        handled.append(texts)
+        return [(0, "Reminder noted.")]
+
+    monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
+    replies = []
+
+    async def reply_text(reply, reply_markup=None, do_quote=False):
+        replies.append(reply)
+
+    class FakeTgFile:
+        async def download_to_drive(self, custom_path=None):
+            custom_path.write_bytes(b"fake-oga")
+
+    class FakeVoice:
+        async def get_file(self):
+            return FakeTgFile()
+
+    class FakeBot:
+        async def send_chat_action(self, chat_id, action):
+            pass
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=9, type="private"),
+        message=SimpleNamespace(voice=FakeVoice(), reply_text=reply_text))
+    await telegram_bot._on_voice(update, SimpleNamespace(bot=FakeBot()))
+    assert handled == [["remind me to call Rohan tomorrow at nine am"]]
+    assert replies == ["Reminder noted."]
+
+
+async def test_voice_unavailable_and_empty_transcripts_stay_honest(monkeypatch):
+    from types import SimpleNamespace
+    from kyraan.channels import voice
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    replies = []
+
+    async def reply_text(reply, reply_markup=None, do_quote=False):
+        replies.append(reply)
+
+    class FakeTgFile:
+        async def download_to_drive(self, custom_path=None):
+            custom_path.write_bytes(b"x")
+
+    class FakeVoice:
+        async def get_file(self):
+            return FakeTgFile()
+
+    class FakeBot:
+        async def send_chat_action(self, chat_id, action):
+            pass
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=9, type="private"),
+        message=SimpleNamespace(voice=FakeVoice(), reply_text=reply_text))
+
+    monkeypatch.setattr(voice, "available", lambda: False)
+    await telegram_bot._on_voice(update, SimpleNamespace(bot=FakeBot()))
+    assert "can't listen to voice notes yet" in replies[0]
+
+    monkeypatch.setattr(voice, "available", lambda: True)
+
+    async def empty(path):
+        return ""
+
+    monkeypatch.setattr(voice, "transcribe", empty)
+    await telegram_bot._on_voice(update, SimpleNamespace(bot=FakeBot()))
+    assert "couldn't make out" in replies[1]

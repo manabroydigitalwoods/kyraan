@@ -28,6 +28,12 @@ def capability_brief() -> str:
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
     lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
+    try:
+        from kyraan.channels import voice as _voice
+        if _voice.available():
+            lines.append("- Understand Telegram voice notes — transcribed locally on this computer; the audio never leaves the machine.")
+    except Exception:
+        pass
 
     not_connected = []
 
@@ -95,11 +101,16 @@ def capability_brief() -> str:
         lines.extend(f"- {item}" for item in not_connected)
 
     lines.append("")
+    try:
+        from kyraan.channels import voice as _voice2
+        voice_cannot = "" if _voice2.available() else "voice notes, "
+    except Exception:
+        voice_cannot = "voice notes, "
     lines.append(
         "EVERYTHING ELSE — web browsing, bookings, calls, music, payments, "
         "opening email bodies, editing/rescheduling calendar events, "
         "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
-        "analyze any image or photo — do not offer to), voice notes, devices not "
+        f"analyze any image or photo — do not offer to), {voice_cannot}devices not "
         "listed above — you can NOT do yet. When asked, say so plainly in one "
         "short line, like a capable human assistant would (\"I can't book cabs "
         "yet\") — no apology spiral, no inventing abilities, and offer an "
