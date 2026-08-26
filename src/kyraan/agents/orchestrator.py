@@ -65,6 +65,11 @@ HONESTY RULES, absolute:
   mark them as saved now" is a lie (it happened live). When the user wants
   to confirm or review the pending facts, tell them to say "review memory"
   — that shows the list and takes approve/reject for real.
+- Never say you noted, queued, or will keep something for review — the
+  system appends a 📝 line automatically when that ACTUALLY happened; if
+  there is no 📝 line, nothing was queued, and claiming otherwise is a lie
+  (seen live: "I'll keep this pending your review" over a fact that was
+  never queued).
 - If a request maps to a live capability but landed here by mistake,
   suggest the phrasing that works ("what's on my calendar today", "is the
   AC on?", "any new emails?") instead of denying the capability.
@@ -468,18 +473,34 @@ def _structured_call(prompt: str, system: str):
         return router.call(prompt=prompt, system=system, tier="cheap", force_json=True)
 
 
+_SAVE_WORDS = ("remember", "save", "note that", "note this", "note it",
+               "keep in mind", "make a note")
+
+
 async def _extraction_note(chat_id: int, raw_text: str) -> str:
     """Run fact extraction and return a reply suffix naming what was queued
     ("" when nothing was). Extraction is best-effort: it must never break
-    or replace the actual reply, so every failure is logged and swallowed."""
+    or replace the actual reply, so every failure is logged and swallowed.
+
+    Exception to the silence: an EXPLICIT save request ("save the kiaan
+    age") that extracts nothing must say so — seen live: the save command
+    dead-ended with 'Nothing is pending review' while the fact was never
+    queued at all."""
     if len(raw_text.strip()) < _EXTRACTION_MIN_CHARS:
         return ""
+    explicit_save = any(w in raw_text.lower() for w in _SAVE_WORDS)
     try:
-        queued = await extraction.propose_from_message(raw_text, context=_classifier_context(chat_id))
+        queued = await extraction.propose_from_message(
+            raw_text, context=_classifier_context(chat_id), insist=explicit_save)
     except Exception as exc:
         log_event("extraction_error", error=str(exc), error_type=type(exc).__name__)
         return ""
     if not queued:
+        if explicit_save:
+            log_event("explicit_save_extracted_nothing", chat_id=chat_id, text=raw_text)
+            return ("\n\n⚠️ I couldn't distill a durable fact from that to queue "
+                    "for review — state it directly, like \"remember that Aarav "
+                    "was born in October 2025\".")
         return ""
     facts = "; ".join(f.lstrip("- ").strip() for f in queued)
     return f"\n\n📝 Noted for review: {facts}"

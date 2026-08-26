@@ -27,7 +27,11 @@ school start?" state nothing and must return an empty list (a reminder
 request is not a fact either).
 Never extract temporary states ("I'm tired"), one-off plans, or anything not
 worth knowing months from now. State any dates absolutely, never as
-"tomorrow"/"next week". Each fact must be self-contained and understandable
+"tomorrow"/"next week". A RELATIVE age or duration IS durable once anchored:
+"my son Aarav is about 10 months old" must become the absolute form
+computed from the current date ("- Son Aarav was born around October
+2025") — never store the relative wording, and never drop the fact just
+because it was stated relatively. Each fact must be self-contained and understandable
 without the original message — "- Wife's name is Mira", never just "- Mira".
 Most messages contain no durable facts — then return an empty list.
 Respond with ONLY JSON:
@@ -41,7 +45,7 @@ work/woodsportal.md). Empty: {{"facts": []}}"""
 _MAX_FACTS_PER_MESSAGE = 3
 
 
-async def propose_from_message(raw_text: str, context: str = "") -> list[str]:
+async def propose_from_message(raw_text: str, context: str = "", insist: bool = False) -> list[str]:
     """Extract stated facts from one message and queue them for human
     review. Returns the queued facts' content lines ([] when none), so the
     caller can tell the user what was noted."""
@@ -71,6 +75,19 @@ async def propose_from_message(raw_text: str, context: str = "") -> list[str]:
                 "\n\nRecent conversation — use it ONLY to resolve referents"
                 " ('his', 'her', 'that') so each fact is self-contained;"
                 " extract facts solely from the CURRENT message:\n" + context
+            )
+        if insist:
+            # The user EXPLICITLY asked to save ("save the kiaan age") —
+            # a silent empty result here reads as a broken promise. The
+            # save command may point at an earlier statement, so context
+            # becomes legitimate fact material for this call only.
+            system += (
+                "\n\nIMPORTANT: the user EXPLICITLY asked to save this. If "
+                "the message is a save command pointing at something said "
+                "earlier ('save my son's age'), extract the durable fact "
+                "from that referenced statement in the conversation above. "
+                "Return empty ONLY if there is genuinely no information to "
+                "save anywhere in the message or the referenced statement."
             )
         # Frontier-first for extraction quality (terse/fabricated facts
         # were the local 8B's signature); local fallback keeps memory

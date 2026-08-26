@@ -128,7 +128,7 @@ def _no_real_extraction(monkeypatch):
     real model call. Neutralize it by default so every pre-existing test
     stays hermetic; extraction-specific tests override this seam."""
 
-    async def fake_propose(raw_text, context=""):
+    async def fake_propose(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
@@ -249,7 +249,7 @@ async def test_reply_gets_a_noted_for_review_line_when_a_fact_is_queued(monkeypa
     _mock_normalize(monkeypatch, "qa.answer")
     monkeypatch.setattr(orchestrator.router, "call", lambda **kwargs: _FakeRouted(text="Nice!"))
 
-    async def fake_propose(raw_text, context=""):
+    async def fake_propose(raw_text, context="", insist=False):
         return ["- Wife's name is Mira"]
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", fake_propose)
@@ -887,7 +887,7 @@ async def test_low_confidence_messages_skip_extraction(monkeypatch):
     monkeypatch.setattr(orchestrator, "normalize", unsure)
     calls = []
 
-    async def counting(raw_text, context=""):
+    async def counting(raw_text, context="", insist=False):
         calls.append(1)
         return []
 
@@ -1035,7 +1035,7 @@ async def test_incomplete_fragment_waits_instead_of_answering(monkeypatch):
     monkeypatch.setattr(orchestrator.router, "call", explode)
     calls = []
 
-    async def counting(raw_text, context=""):
+    async def counting(raw_text, context="", insist=False):
         calls.append(1)
         return []
 
@@ -1219,7 +1219,7 @@ async def test_reminder_intent_without_remind_wording_is_demoted(monkeypatch):
     async def fake_answer(chat_id, text):
         return "Sounds like a busy morning."
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator, "_answer", fake_answer)
@@ -1242,7 +1242,7 @@ async def test_rejected_rewrite_discredits_the_intent_too(monkeypatch):
     async def must_not_run(chat_id, text):
         raise AssertionError("home.query must not execute on a discredited intent")
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator, "_answer", fake_answer)
@@ -1265,7 +1265,7 @@ async def test_home_query_without_any_home_word_is_demoted(monkeypatch):
     async def must_not_run(chat_id, text):
         raise AssertionError("no home tool for a guess")
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator, "_answer", fake_answer)
@@ -1281,7 +1281,7 @@ async def test_verbatim_repetition_retries_then_admits(monkeypatch):
     retry naming the problem; a stuck model admits it instead of looping."""
     _mock_normalize(monkeypatch, "qa.answer", "on what")
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
@@ -1344,7 +1344,7 @@ def _cancel_flow_fixtures(monkeypatch):
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
@@ -1427,7 +1427,7 @@ async def test_meta_question_about_a_listing_answers_instead_of_reprinting(monke
     async def fake_answer(chat_id, text):
         return "Yes — those are the five most recent unread ones."
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator, "_check_email", fake_check)
@@ -1508,7 +1508,7 @@ async def test_repeated_greeting_is_not_a_repetition_loop(monkeypatch):
     monkeypatch.setattr(orchestrator.router, "call",
                         lambda **kw: _FakeRouted(text="Hello! How can I assist you today?"))
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
@@ -1556,7 +1556,7 @@ async def test_review_memory_lists_then_mixed_decision_promotes_and_rejects(monk
     memory_root, pending = _seed_review_queue(monkeypatch, tmp_path)
     _mock_normalize(monkeypatch, "memory.review", "review memory")
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
@@ -1577,7 +1577,7 @@ async def test_unrelated_reply_leaves_the_review_queue_untouched(monkeypatch, tm
     _memory_root, pending = _seed_review_queue(monkeypatch, tmp_path)
     _mock_normalize(monkeypatch, "memory.review", "review memory")
 
-    async def no_facts(raw_text, context=""):
+    async def no_facts(raw_text, context="", insist=False):
         return []
 
     async def fake_answer(chat_id, text):
@@ -1603,3 +1603,31 @@ def test_review_decision_parser_boundaries():
     assert parse("approve 2 reject 2", 3) == ([], [1])  # conflict: stays unsaved
     assert parse("yes", 3) is None            # plain yes is a confirm word, not a review decision
     assert parse("what about 2?", 3) is None  # not a decision at all
+
+
+async def test_explicit_save_that_extracts_nothing_says_so(monkeypatch):
+    """Seen live: 'save the kiaan age' produced no proposal and no
+    acknowledgement of the failure. An explicit save must either queue a
+    fact (📝 line) or admit it couldn't."""
+    _mock_normalize(monkeypatch, "qa.answer", "save the kiaan age")
+
+    async def fake_answer(chat_id, text):
+        return "Okay."
+
+    calls = []
+
+    async def empty_extraction(raw_text, context="", insist=False):
+        calls.append(insist)
+        return []
+
+    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", empty_extraction)
+    result = await orchestrator.handle_message(chat_id=0, raw_text="save the kiaan age")
+    assert calls == [True]                      # the insist path was used
+    assert "couldn't distill a durable fact" in result
+
+    # An ordinary statement extracting nothing stays silent, as before.
+    _mock_normalize(monkeypatch, "qa.answer", "nice weather today")
+    result = await orchestrator.handle_message(chat_id=0, raw_text="nice weather today")
+    assert calls == [True, False]
+    assert "couldn't distill" not in result

@@ -205,3 +205,28 @@ async def test_capitalized_category_paths_are_normalized(monkeypatch, isolated_m
     _mock_model(monkeypatch, '{"facts": [{"path": "Preferences/murukku.md", "content": "- Favourite snack is murukku"}]}')
     queued = await extraction.propose_from_message("my favourite snack is murukku")
     assert queued == ["- Favourite snack is murukku"]
+
+
+async def test_explicit_save_passes_insist_and_context_to_the_model(monkeypatch, tmp_path):
+    """'save the kiaan age' pointed at an earlier statement and extracted
+    nothing, silently. An explicit save escalates: the prompt insists, and
+    the referenced statement in context becomes legitimate material."""
+    memory_root = tmp_path / "memory"
+    (memory_root / "pending_review").mkdir(parents=True)
+    monkeypatch.setattr(extraction.store, "MEMORY_ROOT", memory_root)
+    monkeypatch.setattr(extraction.store, "PENDING_DIR", memory_root / "pending_review")
+    captured = {}
+
+    def fake_call(prompt, system="", **kwargs):
+        captured["system"] = system
+        class R: text = '{"facts": [{"path": "people/kiaan.md", "content": "- Son Aarav was born around October 2025"}]}'
+        return R()
+
+    monkeypatch.setattr(extraction.router, "call", fake_call)
+    queued = await extraction.propose_from_message(
+        "save the kiaan age",
+        context="user: kiaan is about 10months old\nassistant: Got it.",
+        insist=True,
+    )
+    assert "EXPLICITLY asked to save" in captured["system"]
+    assert queued == ["- Son Aarav was born around October 2025"]
