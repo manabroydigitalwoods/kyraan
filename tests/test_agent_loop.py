@@ -154,7 +154,7 @@ async def test_orchestrator_falls_back_to_the_classifier_path(monkeypatch):
     over, invisible to the user."""
     from kyraan.intent.normalize import NormalizedIntent
 
-    async def unavailable(chat_id, raw_text):
+    async def unavailable(chat_id, raw_text, tier="frontier"):
         raise agent_loop.AgentUnavailable("down")
 
     monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
@@ -261,3 +261,46 @@ async def test_memory_forget_confirms_the_exact_facts_then_deactivates(scripted_
     assert "Wife's name is Mira" in active          # unrelated fact untouched
     assert any(e["content"] == "Father's name is Deven Roy" and not e["active"]
                for e in engine._load())             # history, not deletion
+
+
+async def test_cheap_tier_loop_takes_over_when_frontier_is_down(monkeypatch):
+    """G-02's core: degraded mode is the SAME brain on the local tier, not
+    a different system."""
+    tiers_tried = []
+
+    async def tiered(chat_id, raw_text, tier="frontier"):
+        tiers_tried.append(tier)
+        if tier == "frontier":
+            raise agent_loop.AgentUnavailable("cloud down")
+        return "local loop reply"
+
+    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(agent_loop, "run", tiered)
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    result = await orchestrator.handle_message(chat_id=90, raw_text="hello")
+    assert result.startswith("local loop reply")
+    assert tiers_tried == ["frontier", "cheap"]
+
+
+async def test_degraded_tier_carries_the_self_awareness_note(scripted_model):
+    prompts = scripted_model(['{"action": "reply", "text": "Short answer."}'])
+    systems = []
+
+    # capture the system prompt via the scripted fake's kwargs
+    import kyraan.agents.agent_loop as al
+    original = al.router.call
+
+    def capturing(prompt, system="", **kw):
+        systems.append(system)
+        return original(prompt, system=system, **kw)
+
+    al.router.call = capturing
+    try:
+        await agent_loop.run(90, "hello", tier="cheap")
+    finally:
+        al.router.call = original
+    assert "LOCAL backup model" in systems[0]

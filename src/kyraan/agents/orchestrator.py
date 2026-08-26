@@ -9,6 +9,20 @@ import time
 from collections import defaultdict, deque
 
 from kyraan.agents.capabilities import capability_brief
+from kyraan.agents.guards import (  # noqa: F401 — re-exported names
+    _GREETING_WORDS, _HOME_WORDS_EXACT, _HOME_WORD_STEMS, _LEADING_OPEN,
+    _META_COMPLAINT_MARKERS, _META_DEMONSTRATIVES, _META_STARTERS,
+    _META_YOU, _REMIND_WORDS, _TIME_WORDS, _TRAILING_OPEN, _is_greeting,
+    _is_meta_question, _is_review_request, _mentions_home,
+    is_time_fragment, thought_open,
+)
+from kyraan.agents.prompts import (  # noqa: F401
+    _ANSWER_SYSTEM, _BURST_PLAN_SYSTEM, _EXTRACT_EVENT_SYSTEM,
+    _EXTRACT_WHEN_SYSTEM, _EXTRACT_WINDOW_SYSTEM,
+)
+from kyraan.agents.review import (  # noqa: F401
+    _load_review_proposals, _parse_review_decision,
+)
 from kyraan.control_plane import kernel
 from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
@@ -18,97 +32,6 @@ from kyraan.memory import extraction
 from kyraan.memory import store as memory_store
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
-
-_EXTRACT_WINDOW_SYSTEM = """The user is asking what's on their calendar.
-The current date/time is {now} (includes a UTC offset). Work out the time
-window they mean — default to the rest of today if unclear; "tomorrow" is
-that full day; "this week" runs to Sunday night. Respond with ONLY JSON:
-{{"start_iso": "<ISO 8601 datetime with the same UTC offset>", "end_iso": "<ISO 8601 datetime with the same UTC offset>", "label": "<short human name for the window, e.g. 'today', 'tomorrow'>"}}"""
-
-_EXTRACT_EVENT_SYSTEM = """Extract a calendar event from the user's message.
-The current date/time is {now} (includes a UTC offset). Use a stated clock
-time EXACTLY — "5pm" means 17:00:00, never the current minutes/seconds or
-microseconds carried over. If no end time is given, make the event 1 hour
-long. location is JSON null when no place was mentioned — never the string
-"null". Respond with ONLY JSON:
-{{"title": "<short event title>", "start_iso": "<ISO 8601, same UTC offset as above>", "end_iso": "<ISO 8601, same offset>", "location": "<place or null>"}}"""
-
-_EXTRACT_WHEN_SYSTEM = """Extract a reminder from the user's message.
-The current date/time is {now} (includes a UTC offset). Use a stated clock
-time EXACTLY — "8pm" means 20:00:00, never the current minutes/seconds
-carried over from now. Respond with ONLY JSON:
-{{"text": "<what to remind about>", "when_iso": "<ISO 8601 datetime, including the same UTC offset as above>"}}"""
-
-_ANSWER_SYSTEM = """You are Kyraan, a personal assistant. The current date/time
-is {now}. Respond the way a capable, trusted human assistant would: direct,
-natural, matched in length to the question. A greeting gets a short friendly
-reply. If asked who you are: "I'm Kyraan, a personal assistant." Skip
-disclaimers, meta-commentary about being an AI, and unsolicited lists of
-what you can do. But when the user ASKS what you can do ("what can you
-help with?", "what kind of assist you can do?"), that list IS the answer:
-give a short friendly summary of the live capabilities below (reminders,
-calendar, email, home devices, questions) — never deflect with "how can
-I help you today?".
-
-{capabilities}
-
-HONESTY RULES, absolute:
-- Never claim an action happened (event created, device switched, reminder
-  set, fact saved) unless it actually did. A reminder is not a calendar
-  event — never present one as the other.
-- You have no visibility into a reminder's live status or countdown — if
-  asked, say you're not sure and suggest checking; never invent specifics.
-- Facts the user tells you are saved only after the owner's review — say
-  "it'll be saved after a quick review", never that it's already permanently
-  saved. Never deny being able to remember.
-- You CANNOT save, mark, or promote facts from this answer — saying "I'll
-  mark them as saved now" is a lie (it happened live). When the user wants
-  to confirm or review the pending facts, tell them to say "review memory"
-  — that shows the list and takes approve/reject for real.
-- Never say you noted, queued, or will keep something for review — the
-  system appends a 📝 line automatically when that ACTUALLY happened; if
-  there is no 📝 line, nothing was queued, and claiming otherwise is a lie
-  (seen live: "I'll keep this pending your review" over a fact that was
-  never queued).
-- If a request maps to a live capability but landed here by mistake,
-  suggest the phrasing that works ("what's on my calendar today", "is the
-  AC on?", "any new emails?") instead of denying the capability.
-- NEVER say "let me check", "I'll check", "checking now", or any promise
-  of an action — you cannot run anything from inside this answer. Either
-  the information is already in the conversation below (use it), or tell
-  the user the exact phrase to send ("say 'check emails'"). A promise
-  with no action behind it is a lie.
-- If the user refers to something you supposedly showed ("are those the
-  latest emails?") and it is NOT in the conversation below, say you don't
-  see it in the current conversation and offer the phrase to fetch it
-  fresh — never pass judgment ("no, those aren't the latest") on
-  something you cannot see.
-
-When the user asks you to CREATE something — a song, poem, story, message,
-code — ask at most ONE clarifying question, then create it. "anything",
-"random", "you choose", "go ahead", "yes" mean: stop asking and produce it
-NOW, in full, using the conversation to know what "it" is. A request to
-change length, format, or style ("make it 2 paragraphs", "shorter",
-"more formal") applies to YOUR PREVIOUS creation — produce the revised
-version; repeating the previous text unchanged is never an answer. Never
-answer about schedules or tasks while a creative thread is live.
-
-Known facts, from the owner-reviewed memory — treat as true; never invent
-personal facts beyond these and the conversation. When the user states a
-fact you ALREADY have in this list, say you already know it — don't
-promise to save it again. If asked for a PERSONAL
-fact in neither, say you don't know it yet (general knowledge — geography,
-code, science — is unaffected; answer normally):
-{facts}
-
-Facts the user has STATED but the owner hasn't reviewed yet — use them to
-answer (the user said them), and mention they're still awaiting the
-owner's review when relevant:
-{pending_facts}
-
-Recent conversation, oldest first — your only memory of this session; use
-it to resolve follow-ups and pronouns:
-{history}"""
 
 # Confirm-first flow state: chat_id -> (SkillCall, handler) awaiting a
 # yes/no. In-memory only — a restart drops any pending confirmation, which
@@ -145,58 +68,6 @@ _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_red
 _skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extraction", default=False)
 
 
-# Words that make up bare time-phrases ("tomorrow morning", "at 9",
-# "tonight after dinner"). A message consisting ONLY of these is a
-# fragment starting a thought — detected deterministically, because the
-# classifier was seen turning "tomorrow morning" into a literal reminder
-# named "tomorrow morning" at 6 AM.
-_TIME_WORDS = {
-    "tomorrow", "today", "tonight", "yesterday", "morning", "evening",
-    "afternoon", "noon", "night", "midnight", "next", "this", "week",
-    "month", "at", "on", "in", "am", "pm", "o'clock", "oclock", "after",
-    "before", "around", "lunch", "dinner", "breakfast", "early", "late",
-    "the", "monday", "tuesday", "wednesday", "thursday", "friday",
-    "saturday", "sunday",
-}
-
-
-def is_time_fragment(text: str) -> bool:
-    words = [w.strip(".,!?…") for w in text.lower().split()]
-    words = [w for w in words if w]
-    if not words:
-        return False
-    return all(w in _TIME_WORDS or w.replace(":", "").replace("am", "").replace("pm", "").isdigit()
-               for w in words)
-
-
-# Words that cannot END a finished English thought (prepositions,
-# conjunctions, articles, bare auxiliaries) and words that START a message
-# which is really the continuation of the previous one ("to buy something"
-# after "I have to go to siliguri", seen live misread as a standalone
-# request and turned into a junk reminder).
-_TRAILING_OPEN = {
-    "to", "and", "or", "but", "the", "a", "an", "my", "your", "our", "his",
-    "her", "their", "for", "with", "of", "in", "at", "on", "so", "then",
-    "about", "because", "if", "when", "while", "than", "into", "from",
-    "by", "as", "will", "would", "can", "could", "should", "must", "have",
-    "has", "had", "am", "are", "was", "were", "be", "been", "very",
-    "really", "just", "also", "plus", "i", "we", "they", "he", "she",
-}
-_LEADING_OPEN = {
-    "to", "and", "but", "or", "also", "then", "because", "so", "plus",
-    "with", "for", "very", "really", "on", "in", "at", "about", "of",
-    "from", "after", "before",
-}
-
-# A genuine reminder request contains remind-ish wording somewhere in the
-# raw or normalized text ("remind", "reminder", "wake me", "don't
-# forget", "tell me at 9", ...). A reminders.create classification
-# without ANY of these is the classifier inventing intent.
-_REMIND_WORDS = (
-    "remind", "remember", "alarm", "alert", "wake me", "notify",
-    "forget", "ping me", "timer", "tell me", "let me know",
-)
-
 # In-chat memory review: chat_id -> (proposals, stashed_at). Born live
 # 2026-08-26: the owner said "reviewed and confirmed" and Kyraan claimed
 # "I'll mark the remaining items as saved now" — a false action claim; the
@@ -208,52 +79,6 @@ _pending_reviews: dict = {}
 # The model-driven loop is the primary path in production; the classifier
 # tests flip this off to exercise the fallback path in isolation.
 AGENT_LOOP_ENABLED = True
-
-
-def _is_review_request(text: str) -> bool:
-    t = text.lower()
-    return "review" in t and any(w in t for w in ("memory", "fact", "pending"))
-
-
-def _load_review_proposals() -> list:
-    items = []
-    for path in sorted(memory_store.PENDING_DIR.glob("*.md")):
-        text = path.read_text()
-        _, _, rest = text.partition("---\n")
-        frontmatter, _, body = rest.partition("---\n")
-        target = next((line.split("target:", 1)[1].strip()
-                       for line in frontmatter.splitlines() if line.startswith("target:")), "?")
-        items.append((path, target, body.strip().lstrip("- ").strip()))
-    return items
-
-
-def _parse_review_decision(text: str, count: int):
-    """Deterministic approve/reject parsing — no model sits between the
-    owner's decision and a memory write. Returns (approved, rejected)
-    index lists, or None when the message isn't a review decision."""
-    import re
-    words = re.findall(r"[a-z]+|\d+", text.lower())
-    if not words or words[0] not in ("approve", "promote", "confirm", "save",
-                                     "keep", "reject", "remove", "discard"):
-        return None
-    mode = None
-    approved: set = set()
-    rejected: set = set()
-    for w in words:
-        if w in ("approve", "promote", "confirm", "save", "keep"):
-            mode = "a"
-        elif w in ("reject", "remove", "discard", "delete", "drop"):
-            mode = "r"
-        elif w == "all" and mode:
-            (approved if mode == "a" else rejected).update(range(count))
-        elif w.isdigit() and mode:
-            i = int(w) - 1
-            if 0 <= i < count:
-                (approved if mode == "a" else rejected).add(i)
-    if not approved and not rejected:
-        return None
-    approved -= rejected  # an index named on both sides stays unsaved
-    return (sorted(approved), sorted(rejected))
 
 
 async def _review_memory(chat_id: int, text: str) -> str:
@@ -284,48 +109,12 @@ def _cloud_tier_in_use() -> bool:
     return any(t.get("provider") != "ollama" for t in tiers.values())
 
 
-# "are these latest emails", "is that all?" — a question ABOUT the reply
-# Kyraan just sent. Re-running the tool and reprinting the same text (seen
-# live 2026-08-26, twice in one session) reads as a broken record; a human
-# answers the question. Shape: interrogative opener + a demonstrative
-# pointing back at the previous reply.
-_META_STARTERS = ("are", "is", "was", "were", "do", "does", "did", "really", "so")
-_META_DEMONSTRATIVES = {"these", "this", "that", "those", "it", "they", "them"}
-# "these emails are already shared by u" — a repetition COMPLAINT, same
-# family: the user is talking about the previous reply, not requesting it.
-_META_COMPLAINT_MARKERS = {"already", "again", "repeating", "repeated"}
-_META_YOU = {"you", "u", "shared", "showed", "said", "told", "sent", "gave"}
-
-
-def _is_meta_question(text: str) -> bool:
-    words = [w.strip(".,!?\"'").lower() for w in text.split()]
-    words = [w for w in words if w]
-    if not words:
-        return False
-    if words[0] in _META_STARTERS and set(words) & _META_DEMONSTRATIVES:
-        return True
-    return bool(set(words) & _META_COMPLAINT_MARKERS) and bool(set(words) & _META_YOU)
-
-
 # The exact last reply each chat received (unredacted — _history may hold
 # a redacted placeholder when a cloud tier is active) and when this
 # process sent it (monotonic; absent after a restart, which is exactly
 # right — seeded history must never look like a live exchange).
 _last_sent_reply: dict = {}
 _last_reply_at: dict = {}
-
-_GREETING_WORDS = {
-    "hi", "hii", "hiii", "hello", "helo", "hallo", "hey", "heya", "yo",
-    "namaste", "good", "morning", "evening", "afternoon", "night", "there",
-    "kyraan",
-}
-
-
-def _is_greeting(text: str) -> bool:
-    words = [w.strip(".,!?…\"'").lower() for w in text.split()]
-    words = [w for w in words if w]
-    return bool(words) and all(w in _GREETING_WORDS for w in words)
-
 
 async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) -> str:
     """Deterministic backstop behind the classifier: a read-intent reply
@@ -342,46 +131,6 @@ async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) ->
         log_event("meta_question_rerouted", chat_id=chat_id, intent=intent, text=raw_text)
         return await _answer(chat_id, raw_text)
     return reply
-
-
-# A genuine home/climate question names something in the home. A
-# home.query classification whose text mentions none of these is the
-# classifier guessing ("on my smoke havite" got the full AC dump, live).
-_HOME_WORDS_EXACT = {"ac", "a/c", "air", "hot", "hub", "fan", "off"}
-_HOME_WORD_STEMS = (
-    "temp", "humid", "plug", "power", "energy", "watt", "kwh", "room",
-    "bedroom", "home", "house", "device", "switch", "vacuum", "geyser",
-    "heater", "climate", "degree", "cold", "warm", "sensor", "run",
-)
-
-
-def _mentions_home(text: str) -> bool:
-    tokens = {w.strip(".,!?…'\"()") for w in text.lower().split()}
-    if tokens & _HOME_WORDS_EXACT:
-        return True
-    return any(t.startswith(s) for t in tokens for s in _HOME_WORD_STEMS)
-
-
-def thought_open(text: str) -> bool:
-    """Deterministic "is the user still mid-thought?" — the channel's
-    substitute for a human watching the typing indicator (Telegram never
-    sends bots one). A message that trails off on a connector, ends in a
-    comma/ellipsis, opens with a continuation word, or is a bare
-    time-phrase means more is coming: wait, like a person would."""
-    t = text.strip()
-    if not t:
-        return False
-    if is_time_fragment(t):
-        return True
-    if t.endswith((",", ";", ":", "-", "—", "...", "…")):
-        return True
-    if t.endswith(("?", "!", ".")):
-        return False
-    words = [w.strip(".,!?…\"'") for w in t.lower().split()]
-    words = [w for w in words if w]
-    if not words:
-        return False
-    return words[-1] in _TRAILING_OPEN or words[0] in _LEADING_OPEN
 
 
 _CLOCK_RE = None
@@ -541,29 +290,6 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
         return ""
     facts = "; ".join(f.lstrip("- ").strip() for f in queued)
     return f"\n\n📝 Noted for review: {facts}"
-
-
-_BURST_PLAN_SYSTEM = """The user sent {n} quick messages as ONE burst. Extract the
-MINIMAL ordered list of self-contained requests to act on:
-- Fragments of one thought merge into a single request.
-- Greetings, filler, and acknowledgements ("hey", "how are you", "let me
-  know", "ok") FOLD into the requests — never become requests of their
-  own. If the burst is ONLY chit-chat, output one conversational request.
-- Genuinely distinct actionable asks stay distinct, each self-contained.
-Respond with ONLY JSON: {{"requests": ["...", "..."]}}
-Examples:
-- ["hey hi", "how are you?", "check tomorrow email", "let me know", "what is plan"]
-  -> {{"requests": ["hi! how are you", "check my unread emails, and tell me tomorrow's plan from the calendar"]}}
-- ["tomorrow morning", "i need to call the plumber", "remind me at 9am"]
-  -> {{"requests": ["remind me to call the plumber tomorrow at 9am"]}}
-- ["is the AC on?", "any new emails?"]
-  -> {{"requests": ["is the AC on?", "any new emails?"]}}
-- ["today morning I have to go to siliguri", "to buy something", "very important"]
-  -> {{"requests": ["this morning I have to go to siliguri to buy something very important"]}}
-  (fragments of one STATEMENT merge into that statement — a story stays a
-  story, it never becomes a reminder or any other action)
-The messages, numbered:
-{numbered}"""
 
 
 class BurstSuperseded(Exception):
@@ -774,15 +500,25 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _review_memory(chat_id, raw_text)
 
         if AGENT_LOOP_ENABLED:
-            try:
-                from kyraan.agents import agent_loop
-                return await agent_loop.run(chat_id, raw_text)
-            except KillSwitchEngaged:
-                raise
-            except agent_loop.AgentUnavailable as exc:
-                log_event("agent_fallback_classifier", error=str(exc)[:200])
-            except Exception as exc:
-                log_event("agent_loop_error", error=str(exc), error_type=type(exc).__name__)
+            # ONE brain, two tiers (G-02): the same agent loop runs on the
+            # frontier, then on the local cheap tier when the cloud is
+            # unreachable — degraded mode no longer means a different
+            # system, just a smaller model behind the same doctrine. The
+            # legacy classifier below survives only as the third line, for
+            # the case where the local model can't even hold the loop's
+            # decision JSON.
+            from kyraan.agents import agent_loop
+            for tier in ("frontier", "cheap"):
+                try:
+                    return await agent_loop.run(chat_id, raw_text, tier=tier)
+                except KillSwitchEngaged:
+                    raise
+                except agent_loop.AgentUnavailable as exc:
+                    log_event("agent_tier_fallback", tier=tier, error=str(exc)[:200])
+                except Exception as exc:
+                    log_event("agent_loop_error", tier=tier, error=str(exc),
+                              error_type=type(exc).__name__)
+            log_event("agent_fallback_classifier")
 
         # Structured JSON intent classification needs more reliability than
         # the cheap tier's local 3B model consistently gives — verified

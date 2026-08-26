@@ -318,15 +318,26 @@ def _memory_block(message: str) -> str:
             or "(no facts stored yet)")
 
 
-async def run(chat_id: int, raw_text: str) -> str:
-    """One agentic exchange. Returns the reply; raises AgentUnavailable to
-    hand the message to the classifier fallback."""
+async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
+    """One agentic exchange on the given model tier. Returns the reply;
+    raises AgentUnavailable to hand the message down the fallback chain
+    (frontier loop -> cheap loop -> legacy classifier). One brain, two
+    tiers: G-02's dual-system drift is closed by construction."""
     from kyraan.agents import orchestrator  # late: avoids a module cycle
 
     system = _AGENT_SYSTEM.format(
         capabilities=capability_brief(),
         tools=_tools_block(),
     )
+    if tier == "cheap":
+        # Degraded-mode self-awareness, carried over from the classifier
+        # era's live lesson: the local backup model must keep replies
+        # short and admit reduced quality instead of spiraling.
+        system += ("\n\nIMPORTANT: you are running as the smaller LOCAL "
+                   "backup model because the main model is unreachable. "
+                   "Keep replies short and factual. If the user says you "
+                   "seem confused or repetitive, say honestly that the "
+                   "main model is temporarily unavailable.")
     # Dynamic context lives AFTER the cache-stable system prefix. History
     # keeps its recent entries at full clip; older ones tighten — recency
     # carries the follow-up context, so nothing useful is dropped.
@@ -347,7 +358,7 @@ async def run(chat_id: int, raw_text: str) -> str:
     for step in range(_MAX_STEPS):
         try:
             response = await router.acall(prompt=transcript, system=system,
-                                           tier="frontier", force_json=True)
+                                           tier=tier, force_json=True)
         except router.ModelProviderError as exc:
             raise AgentUnavailable(str(exc)) from exc
 
@@ -367,7 +378,8 @@ async def run(chat_id: int, raw_text: str) -> str:
             reply = str(decision.get("text", "")).strip()
             if not reply:
                 raise AgentUnavailable("empty reply")
-            log_event("agent_reply", chat_id=chat_id, steps=step + 1, consider=consider)
+            log_event("agent_reply", chat_id=chat_id, steps=step + 1,
+                      tier=tier, consider=consider)
             return reply
 
         if action != "call" or decision.get("tool") not in TOOLS:

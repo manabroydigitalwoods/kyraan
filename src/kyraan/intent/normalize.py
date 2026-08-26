@@ -1,6 +1,11 @@
-"""Intent normalization: resolve typos/slang/shorthand into a structured
-intent + confidence using the cheap model tier. Escalation to a bigger
-model or a clarifying question is the caller's decision, not this module's.
+"""LEGACY intent normalization — the third-line brain.
+
+Since 2026-08-26 the agent loop handles every message (frontier tier,
+then the same loop on the local cheap tier). This classifier runs only
+when BOTH loop tiers fail — i.e. the local model can't even hold the
+loop's decision JSON. It is FROZEN: bug fixes only, no new intents or
+rules — new behavior belongs in the agent loop, and this whole path
+retires with the classifier handlers in Phase 3.
 """
 import json
 from dataclasses import dataclass
