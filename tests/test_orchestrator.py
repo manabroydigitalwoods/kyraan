@@ -1925,3 +1925,40 @@ async def test_window_words_are_never_title_filters(monkeypatch):
     ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all events next month")
     assert "About to DELETE 1 event(s)" in ask and "Board meeting" in ask
     assert "couldn't match" not in ask
+
+
+async def test_overflow_resume_preserves_the_title_filter(monkeypatch):
+    """Round-8 P2: 'cancel all yoga events' with 11 matches must resume
+    as 'cancel all yoga events <window>' — losing the filter would sweep
+    unrelated events into the next confirm ask."""
+    from kyraan.tools import registry as reg
+
+    monkeypatch.setattr(orchestrator.router, "call", lambda **kw: _FakeRouted(
+        text='{"start_iso": "2099-02-01T00:00:00+00:00", "end_iso": "2099-02-28T23:59:59+00:00", "label": "next month"}'))
+    events = [{"id": f"y{i}", "title": f"Yoga class {i}", "start": f"2099-02-{10+i:02d}T07:00:00+00:00",
+               "end": f"2099-02-{10+i:02d}T08:00:00+00:00", "all_day": False,
+               "location": None, "recurring": False} for i in range(11)]
+    events.append({"id": "other", "title": "Board meeting", "start": "2099-02-05T10:00:00+00:00",
+                   "end": "2099-02-05T11:00:00+00:00", "all_day": False,
+                   "location": None, "recurring": False})
+
+    async def fake_dispatch(spec, args):
+        if spec.name == "calendar.list_events":
+            return events
+        return {"id": args["event_id"], "deleted": True, "already_gone": False}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    _mock_normalize(monkeypatch, "calendar.cancel", "cancel all yoga events next month")
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await orchestrator.handle_message(chat_id=0, raw_text="cancel all yoga events next month")
+    assert "DELETE 8 event(s)" in ask
+    assert "Board meeting" not in ask                       # filter held in the batch
+    assert '"cancel all yoga events next month"' in ask     # and in the ask's resume note
+
+    receipt = await orchestrator.handle_message(chat_id=0, raw_text="yes")
+    assert "3 event(s) still to cancel" in receipt
+    assert '"cancel all yoga events next month"' in receipt # and in the receipt

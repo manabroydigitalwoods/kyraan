@@ -83,7 +83,18 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     messages = result.get("messages", [])
     if not messages:
         return {"__direct_reply__": "No unread emails."}
-    lines = [f"You have about {total} unread. Latest:"]
+    lines = []
+    if any(w in raw_text.lower() for w in (
+            "open", "read", "body", "content", "full", "detail", "more about",
+            "tell me about", "about the email", "what does", "says", "summar")):
+        # The user asked for a BODY — the §3a boundary line leads the
+        # reply (the direct-reply short-circuit had silently dropped it:
+        # eval case email.boundary caught the regression).
+        lines.append("I can't open email contents — by design I only see "
+                     "senders and subjects, never bodies. Open Gmail for the "
+                     "full message. Latest unread:")
+    else:
+        lines.append(f"You have about {total} unread. Latest:")
     for m in messages:
         sender = str(m.get("from", "?")).split("<")[0].strip().strip('"') or "?"
         lines.append(f"- {sender}: {m.get('subject', '(no subject)')}")

@@ -478,7 +478,8 @@ def test_partial_deletion_receipt_names_the_working_resume_phrase():
     from kyraan.agents import orchestrator as o
 
     source = inspect.getsource(o._cancel_event)
-    assert 'say \"cancel all events {label}\" again' in source  # windowed resume
+    # round-8: the resume carries BOTH the title filter and the window
+    assert 'say \"cancel all {title_part}events {label}\" again' in source
     assert '— say \"cancel\" again' not in source
 
 
@@ -547,3 +548,34 @@ def test_reference_point_times_are_grammar_filtered(monkeypatch):
     drift = {"start": "2099-01-02T19:49:00+05:30", "end": "2099-01-02T20:49:00+05:30"}
     start, _ = guards.normalized_event_times(drift, "add dinner at 8pm")
     assert "T20:00:00" in start                          # event-marker 'at' still anchors
+
+
+def test_clause_scoped_and_lookahead_context_filtering(monkeypatch):
+    """Round-8 P2 (final heuristic iteration, frozen hereafter): the
+    reference word may sit earlier in the clause, or the decoy time may
+    be followed by another event's noun — both are filtered; the plain
+    event time still anchors."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    from kyraan.agents import guards
+
+    args = {"start": "2099-01-02T20:00:00+05:30", "end": "2099-01-02T21:00:00+05:30"}
+    for phrase in ("after my call at 7:45pm, add dinner at 8",
+                   "once my 7:45pm call ends, add dinner",
+                   "when the 7:45pm show finishes add dinner"):
+        start, _ = guards.normalized_event_times(args, phrase)
+        assert "T20:00:00" in start, phrase          # decoys filtered, model kept
+
+    drift = {"start": "2099-01-02T19:49:00+05:30", "end": "2099-01-02T20:49:00+05:30"}
+    start, _ = guards.normalized_event_times(drift, "add dinner at 8pm")
+    assert "T20:00:00" in start                      # the real anchor still works
+
+
+def test_window_vocabulary_never_filters_titles():
+    """Round-8 P2: months/weekdays/ordinals/numerics are window words on
+    the USER'S tokens — no dependence on the extractor echoing them."""
+    from kyraan.agents import guards
+
+    for w in ("feb", "February", "monday", "22nd", "2024", "3:30", "pm", "tonight"):
+        assert guards.is_window_word(w), w
+    for w in ("yoga", "dentist", "board", "suman"):
+        assert not guards.is_window_word(w), w

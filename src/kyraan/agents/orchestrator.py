@@ -857,12 +857,12 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             "yes", "right", "now", "it", "them", "and", "of", "for",
             "can", "you", "everything", "every"}
     words = {w.strip(".,!?\"'").lower() for w in text.split()}
-    # Whatever the extractor recognized as the WINDOW can't also be a
-    # title filter (round-7 P2: "cancel all events next month" treated
-    # "next month" as a title and dead-ended — the very phrase our own
-    # receipts recommend).
-    label_words = {w.strip(".,!?\"'").lower() for w in str(label).split()}
-    content = words - stop - label_words - {""}
+    # Time vocabulary can never be a title filter (round-8: subtracting
+    # the extractor's label words broke when the label was humanized —
+    # user "feb", label "February 2099"; the vocabulary check works on
+    # the user's own tokens and needs no agreement between the two).
+    from kyraan.agents.guards import is_window_word
+    content = {w for w in words - stop if w and not is_window_word(w)}
     if content:
         targets = [e for e in events
                    if content & {w.strip(".,!?\"'").lower() for w in e["title"].split()}]
@@ -925,7 +925,13 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             parts.append(f'Outcome UNKNOWN for "{unknown}" — the delete timed out and may '
                          "have succeeded; check the calendar before retrying it")
         remaining = len(untouched) + overflow
-        resume = f'say "cancel all events {label}" again'
+        # The resume phrase reconstructs the EFFECTIVE filter (round-8:
+        # 'cancel all yoga events' resumed as 'cancel all events' and
+        # would sweep unrelated events into the next confirm ask). Built
+        # from `content`, it round-trips through this matcher by
+        # construction.
+        title_part = (" ".join(sorted(content)) + " ") if content else ""
+        resume = f'say "cancel all {title_part}events {label}" again'
         if untouched:
             parts.append(f"NOT touched ({stop_reason.split(':')[0]}): "
                          + ", ".join(f'"{t}"' for t in untouched))
@@ -946,8 +952,9 @@ async def _cancel_event(chat_id: int, text: str) -> str:
     describe = (f"About to DELETE {len(unique)} event(s) from your Google Calendar:\n"
                 f"{described}\nThis can't be undone from here")
     if overflow:
+        title_part = (" ".join(sorted(content)) + " ") if content else ""
         describe += (f"\n({overflow} more matched — this batch is capped at 8; "
-                     f'say "cancel all events {label}" again afterwards for the rest)')
+                     f'say "cancel all {title_part}events {label}" again afterwards for the rest)')
     return await _gated(chat_id, SkillCall("calendar.cancel", {"text": text}), handler, describe=describe)
 
 

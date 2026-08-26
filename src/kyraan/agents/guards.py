@@ -165,14 +165,25 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
 
     start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
     end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
-    # A time marked by a reference-point preposition ("AFTER my 7:45pm
-    # call", "until 6pm") is context, not the event's own time — distance
-    # tolerance can't catch a decoy 15 minutes away, but grammar marks it
-    # (round-7 P2). "at 8pm" keeps its match: "at" is the event marker.
+    # Context filtering, FINAL FORM (rounds 7-8; frozen hereafter as a
+    # design position): a time is a reference point, not the event's own
+    # time, when (a) a reference word appears earlier in the SAME CLAUSE
+    # (no punctuation between) — "after my call at 7:45pm" — or (b) the
+    # time is immediately followed by another event's noun or an
+    # end-verb — "my 7:45pm call ends". This grammar is an arms race
+    # against natural language and will not grow further: residual
+    # decoys land on the confirm gate, which shows the final times
+    # before anything writes. Improvements beyond this come from model
+    # quality, not more regex.
     matches = []
     for m in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I):
-        lead = raw_text[max(0, m.start() - 20):m.start()].lower()
-        if re.search(r"\b(after|before|until|till|by|past|following)\s+(my|the|his|her|our|a|an)?\s*$", lead):
+        clause_lead = raw_text[max(0, m.start() - 60):m.start()].lower()
+        clause_lead = re.split(r"[,.;!?]", clause_lead)[-1]
+        if re.search(r"\b(after|before|until|till|by|past|once|when|following)\b", clause_lead):
+            continue
+        tail = raw_text[m.end():m.end() + 16].lower()
+        if re.match(r"\s*(call|meeting|session|appointment|class|shift|standup)\b"
+                    r"|\s*\w+\s+(ends|finishes)\b", tail):
             continue
         matches.append(m.groups())
 
@@ -205,3 +216,29 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
         raise kernel.ToolFailed(
             "the event's end is not after its start — ask the user for the intended times")
     return start_dt.isoformat(), end_dt.isoformat()
+
+
+_WINDOW_VOCAB = {
+    "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept",
+    "oct", "nov", "dec",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri",
+    "sat", "sun",
+}
+
+
+def is_window_word(word: str) -> bool:
+    """Time-vocabulary words can never be event-title filters (round-8:
+    label subtraction broke whenever the extractor humanized the window —
+    user says 'feb', label says 'February 2099'). Deterministic on the
+    USER'S OWN tokens: months, weekdays, time-of-day words, ordinals,
+    numerics, am/pm."""
+    w = word.strip(".,!?'\"").lower()
+    if not w:
+        return True
+    if w in _WINDOW_VOCAB or w in _TIME_WORDS or w in ("am", "pm"):
+        return True
+    core = w[:-2] if w.endswith(("st", "nd", "rd", "th")) else w
+    return core.replace(":", "").replace("/", "").replace("-", "").isdigit()
