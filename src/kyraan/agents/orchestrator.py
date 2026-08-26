@@ -290,6 +290,18 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
     log_event("history_seeded", chats=len(per_chat))
 
 
+def record_exchange(chat_id: int, user_text: str, assistant_text: str) -> None:
+    """Record a user/assistant exchange that happened OUTSIDE
+    handle_message (photo turns) — same history/backlog/chat-log
+    treatment, so follow-ups and the rolling summary see it."""
+    for entry in (("user", user_text), ("assistant", assistant_text)):
+        if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
+            _summary_backlog[chat_id].append(_history[chat_id][0])
+        _history[chat_id].append(entry)
+    log_chat(chat_id, "user", user_text)
+    log_chat(chat_id, "assistant", assistant_text)
+
+
 def record_proactive(chat_id: int, text: str) -> None:
     """Proactive sends (reminders, briefs) belong in conversation history
     too — found live: \"Thanks for the reminder\" got \"I didn't actually

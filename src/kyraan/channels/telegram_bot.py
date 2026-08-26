@@ -300,6 +300,44 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                   f"[I'm sharing my current location: {described}]")
 
 
+async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """A photo becomes one frontier vision call — analysis only, no tools
+    on this path (see agents/photo.py). The reply plus a text record land
+    in history so follow-up questions work."""
+    if not _owner_private(update):
+        return
+    import base64
+
+    from kyraan.agents import orchestrator, photo
+    from kyraan.control_plane.logging_setup import log_trace, new_turn
+
+    new_turn()
+    caption = update.message.caption or ""
+    log_trace("turn_start", chat_id=update.effective_chat.id,
+              user_text=f"[photo] {caption}")
+    typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
+    try:
+        # largest thumbnail Telegram offers — plenty for detail=low vision
+        tg_file = await update.message.photo[-1].get_file()
+        image_bytes = bytes(await tg_file.download_as_bytearray())
+        data_url = ("data:image/jpeg;base64,"
+                    + base64.b64encode(image_bytes).decode())
+        reply = await photo.answer(update.effective_chat.id, data_url, caption)
+    except photo.VisionUnavailable:
+        reply = ("I can't see photos right now (the vision model is "
+                 "unavailable) — tell me in words for now.")
+    except Exception as exc:
+        logger.warning("Photo handling failed: %s", exc)
+        reply = "Something went wrong with that photo — try sending it again."
+    finally:
+        typing.cancel()
+    orchestrator.record_exchange(
+        update.effective_chat.id,
+        f"[sent a photo{': ' + caption if caption else ''}]", reply)
+    log_trace("turn_end", chat_id=update.effective_chat.id, reply=reply)
+    await update.message.reply_text(_plain(reply), do_quote=True)
+
+
 async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Photos, voice notes, stickers, files — the text-only handler never
     fires for these, and the owner got SILENCE (live 2026-08-26: an image
@@ -516,8 +554,9 @@ def run() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(filters.LOCATION, _on_location))
+    app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
     app.add_handler(MessageHandler(
-        filters.PHOTO | filters.VIDEO | filters.AUDIO
+        filters.VIDEO | filters.AUDIO
         | filters.Sticker.ALL | filters.Document.ALL,
         _on_unsupported,
     ))

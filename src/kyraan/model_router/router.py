@@ -315,12 +315,21 @@ def _call_gemini(provider_cfg: dict, model: str, prompt: str, system: str, max_t
 
 def _call_openai_compatible(
     provider: str, provider_cfg: dict, model: str, prompt: str, system: str, max_tokens: int,
-    force_json: bool = False,
+    force_json: bool = False, images: list | None = None,
 ) -> _RawResult:
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+    if images:
+        # Vision: image data-URLs ride as content parts beside the text.
+        # detail=low pins each image to a small fixed token cost (live
+        # probe 2026-08-26: a whole image at low detail was ~19 tokens).
+        content = [{"type": "text", "text": prompt}]
+        content += [{"type": "image_url", "image_url": {"url": u, "detail": "low"}}
+                    for u in images]
+        messages.append({"role": "user", "content": content})
+    else:
+        messages.append({"role": "user", "content": prompt})
 
     # Most OpenAI-compatible gateways (Groq, OpenRouter, OpenCode, Ollama)
     # accept the traditional `max_tokens`, but native OpenAI's gpt-5 family
@@ -418,9 +427,13 @@ def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str
 
 
 def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: int,
-              force_json: bool = False) -> _RawResult:
+              force_json: bool = False, images: list | None = None) -> _RawResult:
     provider_cfg = _provider_cfg(provider)
     kind = provider_cfg["kind"]
+    if images and kind != "openai_compatible":
+        # Only the OpenAI-wire path carries image parts today — failing
+        # loudly beats silently dropping the photo from the request.
+        raise ModelProviderError(f"provider {provider!r} cannot process images")
     if kind == "anthropic":
         return _call_anthropic(provider_cfg, model, prompt, system, max_tokens)
     if kind == "gemini":
@@ -428,7 +441,7 @@ def _dispatch(provider: str, model: str, prompt: str, system: str, max_tokens: i
     if kind == "ollama_native":
         return _call_ollama_native(provider_cfg, model, prompt, system, max_tokens, force_json)
     if kind == "openai_compatible":
-        return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens, force_json)
+        return _call_openai_compatible(provider, provider_cfg, model, prompt, system, max_tokens, force_json, images)
     raise ValueError(f"Unknown provider kind {kind!r} for provider {provider!r}")
 
 
@@ -506,6 +519,7 @@ def call(
     tier: str = "cheap",
     max_tokens: int = 1024,
     force_json: bool = False,
+    images: list | None = None,
 ) -> RoutedResponse:
     global last_call, session_cost_usd
     # Hard stop at the daily budget (plan: "hard budget caps + alerts").
@@ -537,7 +551,11 @@ def call(
     for attempt in range(attempts):
         start = time.monotonic()
         try:
-            raw = _dispatch(provider, model, prompt, system, max_tokens, force_json)
+            # images passed only when present — keeps the plain-text call
+            # signature stable for every existing _dispatch monkeypatch.
+            raw = (_dispatch(provider, model, prompt, system, max_tokens, force_json, images)
+                   if images else
+                   _dispatch(provider, model, prompt, system, max_tokens, force_json))
             latency_ms = (time.monotonic() - start) * 1000
             cost_usd = _cost_usd(tier_cfg, raw.usage)
             log_event(

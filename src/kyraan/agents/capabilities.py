@@ -44,6 +44,10 @@ def capability_brief() -> str:
     else:
         not_connected.append("Travel times / traffic (needs GOOGLE_MAPS_API_KEY with the Routes API enabled, or TOMTOM_API_KEY)")
     lines.append("- Find nearby places by category — hospitals, pharmacies, ATMs, banks, restaurants, cafes, hotels, sightseeing, fuel, police, groceries — around a shared pin or any named place, with distances and map links.")
+    tiers_now = config.load().get("model_tiers", {})
+    vision_ok = tiers_now.get("frontier", {}).get("provider") == "openai"
+    if vision_ok:
+        lines.append("- See and analyze PHOTOS sent in the chat — describe them, read text in them, answer questions about them (each photo is handled in its own turn; actions still need a normal text message).")
     lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
@@ -139,11 +143,16 @@ def capability_brief() -> str:
                        if _has_env("SEARXNG_URL") else "web browsing, ")
     email_cannot = ("" if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
                     else "opening email bodies, ")
+    images_cannot = (
+        "GENERATING IMAGES (you can SEE photos sent in chat, but cannot "
+        "create, draft, or edit any image)"
+        if vision_ok else
+        "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
+        "analyze any image or photo — do not offer to)")
     lines.append(
         f"EVERYTHING ELSE — {browsing_cannot}bookings, calls, music, payments, "
         f"{email_cannot}editing/rescheduling calendar events, "
-        "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
-        f"analyze any image or photo — do not offer to), {voice_cannot}devices not "
+        f"{images_cannot}, {voice_cannot}devices not "
         "listed above — you can NOT do yet. When asked, say so plainly in one "
         "short line, like a capable human assistant would (\"I can't book cabs "
         "yet\") — no apology spiral, no inventing abilities, and offer an "

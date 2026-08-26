@@ -23,6 +23,7 @@ Policy has to start from facts. As of 2026-08-26, live-verified:
 | Google (Calendar/Gmail APIs) | Calendar events, email metadata queries, email bodies (fetch only — content is then processed locally) | Calendar/email tools |
 | Google (Places/Routes APIs) | Coordinates or place names of owner-initiated queries, incl. shared location pins | places.nearby, routes.eta |
 | TomTom | Same as above, on Google failure | routes.eta fallback |
+| OpenAI (vision) | Photos the owner sends to the bot (analysis only; no tools on photo turns) | Photo messages |
 | OSM Nominatim | Coordinates of shared location pins | Pin reverse-geocoding |
 | Open-Meteo | Coordinates/place names | weather.get |
 | Public search engines (via local SearXNG) | Search queries only | web.search |
