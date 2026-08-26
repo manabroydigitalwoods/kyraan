@@ -62,7 +62,7 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
                  maybe: list | None = None) -> str:
     if kill_switch.is_engaged():
         return ("The kill switch is engaged — no autonomous action will run "
-                "until it's disengaged.")
+                "until it's disengaged.", None)
     question = caption.strip() or "(no caption — describe the photo usefully)"
     faces_line = ""
     if recognized:

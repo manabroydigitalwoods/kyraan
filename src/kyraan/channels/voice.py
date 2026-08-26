@@ -24,11 +24,12 @@ def _cfg() -> dict:
 def available() -> bool:
     if _cfg().get("enabled") is False:
         return False
-    try:
-        import mlx_whisper  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    # find_spec only LOCATES the package — importing mlx_whisper executes
+    # native init, and a broken install SIGABRTs the whole process, which
+    # no except clause can catch (Bugbot P1). The real import happens in
+    # the transcription worker, at use time.
+    import importlib.util
+    return importlib.util.find_spec("mlx_whisper") is not None
 
 
 def _transcribe_sync(path: str) -> str:

@@ -1006,7 +1006,10 @@ async def test_typo_correction_rewrites_are_accepted(monkeypatch):
     assert captured["prompt"] == "what time is it"  # correction kept
 
 
-async def test_pending_facts_reach_the_qa_prompt(monkeypatch):
+async def test_pending_facts_reach_qa_only_on_a_local_tier(monkeypatch):
+    """Boundary-corrected (2026-08-27 audit P1): unapproved proposals
+    enter the qa prompt ONLY when the tier's provider is local — the
+    cloud tier gets the placeholder, same rule as the agent loop."""
     _mock_normalize(monkeypatch, "qa.answer")
     monkeypatch.setattr(orchestrator.memory_store, "load_pending_facts", lambda **kwargs: "- His name is deven rao")
     captured = {}
@@ -1016,9 +1019,15 @@ async def test_pending_facts_reach_the_qa_prompt(monkeypatch):
         return _FakeRouted(text="Deven Rao is your father (awaiting your review).")
 
     monkeypatch.setattr(orchestrator.router, "call", fake_call)
+
+    monkeypatch.setattr(orchestrator.router, "provider_is_local", lambda p: True)
     await orchestrator.handle_message(chat_id=0, raw_text="who is deven?")
-    assert "- His name is deven rao" in captured["system"]
-    assert "awaiting the" in captured["system"]  # honest framing instruction
+    assert "- His name is deven rao" in captured["system"]   # local tier: visible
+
+    monkeypatch.setattr(orchestrator.router, "provider_is_local", lambda p: False)
+    await orchestrator.handle_message(chat_id=0, raw_text="who is deven?")
+    assert "- His name is deven rao" not in captured["system"]  # cloud: never
+    assert "held locally" in captured["system"]
 
 
 async def test_control_intent_without_a_device_answers_conversationally(monkeypatch):

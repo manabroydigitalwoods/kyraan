@@ -305,8 +305,14 @@ async def _task_schedule(chat_id: int, args: dict, raw_text: str):
         raise kernel.ToolFailed("give the full instruction the task should run")
     when_iso = scheduler._parse_when(scheduler._sanitize_iso(str(args["when_iso"]))).isoformat()
     repeat = str(args.get("repeat", "") or "")
-    if repeat and repeat not in scheduler.REPEAT_CHOICES:
-        raise kernel.ToolFailed(f"repeat must be one of {scheduler.REPEAT_CHOICES} or omitted")
+    task_repeats = tuple(r for r in scheduler.REPEAT_CHOICES if r != "interval")
+    if repeat and repeat not in task_repeats:
+        # "interval" is a REMINDER rule; task execution rejects it later
+        # (advance_occurrence raises), so a confirmed task would fail at
+        # run time (Bugbot P2) — refuse at scheduling instead.
+        raise kernel.ToolFailed(
+            f"repeat must be one of {task_repeats} or omitted — for interval "
+            "repeats use a reminder, not a task")
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("tasks.schedule",
                                           {"instruction": instruction, "when_iso": when_iso,

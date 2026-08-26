@@ -228,8 +228,10 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
         if {"fun", "sentimental", "milestone"} & set(entry.get("flags") or []):
             score += 4 if reaching_for_past else -2
         ranked.append((score, entry))
-    # highest score first; newer entries break ties
-    ranked.sort(key=lambda pair: (-pair[0], pair[1]["created"]), reverse=False)
+    # highest score first; newer entries break ties (two stable passes —
+    # "created" is an ISO string and can't be negated in one key)
+    ranked.sort(key=lambda pair: pair[1]["created"], reverse=True)
+    ranked.sort(key=lambda pair: -pair[0])
 
     lines, used = [], 0
 

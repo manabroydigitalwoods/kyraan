@@ -13,6 +13,7 @@ Safety, by construction:
 """
 import json
 import uuid
+from datetime import timedelta
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -100,7 +101,16 @@ def _schedule(task: AgentTask) -> None:
     assert _schedule_fn is not None, "agent_tasks.init() first"
     when = _parse_when(task.when_iso)
     if when < local_now():
-        when = advance_occurrence(when, task.repeat) if task.repeat else local_now()
+        if task.repeat:
+            # A single advance after downtime can still land in the past —
+            # rescheduling a past time refires immediately, repeatedly
+            # (Bugbot P1). Skip every missed occurrence and PERSIST the
+            # new base so fire() advances from a future anchor.
+            while when < local_now():
+                when = advance_occurrence(when, task.repeat)
+            _advance(task.id, when.isoformat())
+        else:
+            when = local_now()
     _schedule_fn(f"task-{task.id}", when, {"task_id": task.id})
 
 
@@ -125,18 +135,29 @@ async def fire(task_id: str) -> None:
     # occurrence rather than stalling the series
     if task.repeat:
         next_when = advance_occurrence(_parse_when(task.when_iso), task.repeat)
+        while next_when <= local_now():  # stale base after downtime: catch up
+            next_when = advance_occurrence(next_when, task.repeat)
         _advance(task.id, next_when.isoformat())
         _schedule_fn(f"task-{task.id}", next_when, {"task_id": task.id})
-    else:
-        cancel(task.id)  # one-shot: retire before running
+    # One-shots retire only AFTER a successful run — retiring first meant a
+    # DND hold or a transient model/send failure permanently discarded the
+    # task (Bugbot P1).
     if not kernel.can_send_proactively():
         log_event("agent_task_skipped_dnd", task_id=task_id)
+        if not task.repeat:
+            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=30),
+                         {"task_id": task.id})  # held through quiet hours, not lost
         return
     try:
         result = await _run_fn(task.chat_id, task.instruction)
+        if result:
+            await _send_fn(task.chat_id, f"⏱ {result}")
+        log_event("agent_task_ran", task_id=task_id)
     except Exception as exc:
         log_event("agent_task_failed", task_id=task_id, error=str(exc)[:200])
+        if not task.repeat:
+            _schedule_fn(f"task-{task.id}", local_now() + timedelta(minutes=15),
+                         {"task_id": task.id})  # transient failure: retry, don't discard
         return
-    if result:
-        await _send_fn(task.chat_id, f"⏱ {result}")
-        log_event("agent_task_ran", task_id=task_id)
+    if not task.repeat:
+        cancel(task.id)

@@ -114,7 +114,7 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         # Recurring: roll forward instead of retiring — the record IS the
         # series; when_iso always points at the next occurrence, so a
         # restart's init() reschedules the series naturally.
-        next_when = advance_for(record)
+        next_when = advance_past_now(record)
         store.roll_forward(reminder_id, next_when.isoformat())
         assert _schedule_fn is not None
         _schedule_fn(reminder_id, next_when,
@@ -241,12 +241,29 @@ def advance_occurrence(when, repeat: str):
     raise ValueError(f"unknown repeat rule {repeat!r}")
 
 
-def advance_for(record) -> "datetime":
+def advance_past_now(record) -> "datetime":
+    """The next FUTURE occurrence: after downtime a single advance still
+    lands in the past, and rescheduling a past time fires immediately —
+    a catch-up burst of stale reminders (Bugbot P1). Missed occurrences
+    are skipped, not replayed; the one late send already happened."""
+    next_when = advance_for(record)
+    skipped = 0
+    while next_when <= local_now() and skipped < 100000:
+        next_when = advance_for(record, from_when=next_when)
+        skipped += 1
+    if skipped:
+        log_event("reminder_catchup_skipped", reminder_id=record.id,
+                  skipped=skipped, resumed=next_when.isoformat())
+    return next_when
+
+
+def advance_for(record, from_when=None) -> "datetime":
     """Next occurrence for a full record — handles interval-with-window
-    rules; simple rules delegate to advance_occurrence."""
+    rules; simple rules delegate to advance_occurrence. `from_when`
+    overrides the record's own base so catch-up can step repeatedly."""
     from datetime import time as _time
 
-    when = _parse_when(record.when_iso)
+    when = from_when if from_when is not None else _parse_when(record.when_iso)
     if record.repeat != "interval":
         return advance_occurrence(when, record.repeat)
     nxt = when + timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))

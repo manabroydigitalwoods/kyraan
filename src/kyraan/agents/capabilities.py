@@ -126,12 +126,17 @@ def capability_brief() -> str:
             "conversation text is processed by the configured AI models (a "
             f"local one and the {cloud} cloud API) to generate replies"
         )
+    email_truth = (
+        "email bodies are read only when you ask, processed entirely by the "
+        "local model on this computer, and never sent to any cloud service"
+        if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
+        else "email bodies are never read")
     lines.append(
         "IF ASKED ABOUT DATA OR PRIVACY, answer with exactly these truths: "
         "everything runs on the owner's own computer; facts you're told are "
         f"stored as local files only after the owner reviews them; {model_truth}; "
         "nothing is ever used to train models; "
-        "email bodies are never read; nothing is shared with anyone else."
+        f"{email_truth}; nothing is shared with anyone else."
     )
 
     if not_connected:

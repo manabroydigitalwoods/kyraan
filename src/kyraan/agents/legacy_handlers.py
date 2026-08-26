@@ -16,7 +16,6 @@ import time
 from kyraan.control_plane import kernel
 from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.kernel import SkillCall
-from kyraan.memory import store as memory_store
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
@@ -535,12 +534,16 @@ async def _answer(chat_id: int, text: str) -> str:
         # is exactly where it's weakest (Ollama's default context also
         # truncates big prompts silently).
         tier = kernel.config.skill_config("qa.answer")["model_tier"]
+        from kyraan.agents import agent_loop
         from kyraan.memory import engine
         system = orch._ANSWER_SYSTEM.format(
             now=local_now().isoformat(),
             capabilities=orch.capability_brief(),
             facts=engine.memory_context(args["text"]),
-            pending_facts=memory_store.load_pending_facts() or "(none)",
+            # Same rule as the agent loop's _pending_block: unapproved
+            # proposals never enter a CLOUD prompt — this call built the
+            # frontier prompt with raw pending facts (Bugbot P1).
+            pending_facts=agent_loop._pending_block(tier),
             history=orch._history_block(chat_id),
         )
         try:
