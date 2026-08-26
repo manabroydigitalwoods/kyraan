@@ -42,8 +42,8 @@ def _isolated_memory_tree(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def _isolated_session_summaries(monkeypatch, tmp_path):
     """Summary rolls in tests must never write the real data/ file."""
-    from kyraan.agents import orchestrator
-    monkeypatch.setattr(orchestrator, "_summaries_path",
+    from kyraan.agents import session
+    monkeypatch.setattr(session, "_summaries_path",
                         lambda: tmp_path / "session_summaries.json")
 
 
