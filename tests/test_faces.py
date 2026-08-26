@@ -72,10 +72,41 @@ def test_enroll_from_text_matches_photo_followups_not_family_facts():
     assert faces.enroll_from_text("remember this is kiaan") == "kiaan"
     assert faces.enroll_from_text("Remember this face as Maan Roy") == "Maan Roy"
     assert faces.enroll_from_text("remember her as Ruma") == "Ruma"
+    assert faces.enroll_from_text("remember as Suman Ghosh") == "Suman Ghosh"  # live miss 23:14
     # ordinary memory statements must NOT read as biometric requests
     assert faces.enroll_from_text("remember that my wife is Ruma") is None
     assert faces.enroll_from_text("remember to call mom") is None
     assert faces.enroll_from_text("what is this?") is None
+
+
+async def test_loop_tool_gates_then_enrolls_the_recent_photo(monkeypatch):
+    """Any-phrasing enrollment via the agent loop: no recent photo is an
+    honest error; unconfirmed raises the gate; the confirmed replay
+    enrolls and short-circuits the receipt."""
+    from kyraan.agents import agent_loop
+    from kyraan.control_plane import kernel
+    import pytest as _pytest
+
+    monkeypatch.setattr(faces, "available", lambda: True)
+    monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[1.0, 0.0]])
+    faces._recent_photos.pop(98, None)
+
+    with _pytest.raises(kernel.ToolFailed, match="no recent photo"):
+        await agent_loop._faces_remember(98, {"name": "Suman"}, "remember as Suman")
+
+    faces.stash_photo(98, b"photo-bytes")
+    with _pytest.raises(kernel.ConfirmationRequired):
+        await agent_loop._faces_remember(98, {"name": "Suman"}, "remember as Suman")
+    assert faces.enrolled_names() == []
+
+    token = kernel._skill_confirmed.set(True)
+    try:
+        result = await agent_loop._faces_remember(98, {"name": "Suman"}, "remember as Suman")
+    finally:
+        kernel._skill_confirmed.reset(token)
+    assert "only on this machine" in result["__direct_reply__"]
+    assert faces.enrolled_names() == ["Suman"]
+    faces._recent_photos.pop(98, None)
 
 
 async def test_text_followup_enrolls_the_recent_photo(monkeypatch):
@@ -91,7 +122,7 @@ async def test_text_followup_enrolls_the_recent_photo(monkeypatch):
     orchestrator._pending_confirmations.pop(97, None)
     monkeypatch.setattr(faces, "available", lambda: True)
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [[1.0, 0.0]])
-    telegram_bot._recent_photos[97] = (b"the-photo-bytes", _time.monotonic())
+    faces.stash_photo(97, b"the-photo-bytes")
 
     replies = []
 
@@ -110,7 +141,7 @@ async def test_text_followup_enrolls_the_recent_photo(monkeypatch):
     assert 97 in orchestrator._pending_confirmations   # awaiting the yes
     assert faces.enrolled_names() == []                # nothing stored yet
     orchestrator._pending_confirmations.pop(97, None)
-    telegram_bot._recent_photos.pop(97, None)
+    faces._recent_photos.pop(97, None)
 
 
 def test_enroll_needs_exactly_one_face(monkeypatch):

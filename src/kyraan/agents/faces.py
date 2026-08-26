@@ -55,8 +55,27 @@ def enroll_request(caption: str):
 
 
 _TEXT_ENROLL_RE = re.compile(
-    r"^\s*remember\s+(?:this|that|it|him|her)\s+(?:face\s+)?(?:is|as)\s+"
+    r"^\s*remember\s+(?:(?:this|that|it|him|her)\s+)?(?:face\s+)?(?:is|as)\s+"
     r"([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$", re.IGNORECASE)
+
+# The most recent photo per chat — process memory ONLY, never persisted;
+# lets both the channel fast-path and the agent loop's faces.remember
+# tool enroll "the photo you just sent" in any phrasing.
+_recent_photos: dict = {}
+_RECENT_PHOTO_TTL_S = 600
+
+
+def stash_photo(chat_id: int, image_bytes: bytes) -> None:
+    import time
+    _recent_photos[chat_id] = (image_bytes, time.monotonic())
+
+
+def recent_photo(chat_id: int):
+    import time
+    entry = _recent_photos.get(chat_id)
+    if entry and time.monotonic() - entry[1] < _RECENT_PHOTO_TTL_S:
+        return entry[0]
+    return None
 
 
 def enroll_from_text(text: str):

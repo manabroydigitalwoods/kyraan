@@ -473,6 +473,35 @@ async def _routes_eta(chat_id: int, args: dict, raw_text: str):
     return await kernel.run_tool(kernel.ToolCall("routes.eta", call_args))
 
 
+async def _faces_remember(chat_id: int, args: dict, raw_text: str):
+    """Enrollment via the LOOP — so any phrasing works ("remember as
+    Suman", "this is me Maan") while the write stays confirm-gated and
+    the biometric stays on-machine. Built after the model, with no such
+    tool, HALLUCINATED a successful save ("Done — I'll remember this
+    face", 2026-08-26 23:14) — the false-success class."""
+    from kyraan.agents import faces
+    name = str(args.get("name", "")).strip()
+    if len(name) < 2:
+        raise kernel.ToolFailed("give the person's name to remember the face as")
+    if not faces.available():
+        raise kernel.ToolFailed(
+            "face recognition isn't set up — the owner must run "
+            "scripts/setup_faces.py once")
+    image_bytes = faces.recent_photo(chat_id)
+    if image_bytes is None:
+        raise kernel.ToolFailed(
+            "no recent photo to enroll from — ask the user to send the "
+            "person's photo (solo, clear face) first, then ask again")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("faces.remember", {"name": name})
+    import asyncio as _aio
+    try:
+        receipt = await _aio.to_thread(faces.enroll, name, image_bytes)
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"__direct_reply__": receipt}
+
+
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents import orchestrator
     return [{"n": i + 1, "fact": fact, "target": target}
@@ -590,6 +619,18 @@ TOOLS = {
                   "wider radius, don't re-call with reworded args. Include the "
                   "map links in your reply — they open navigation on tap."),
         "run": _places_nearby,
+    },
+    "faces.remember": {
+        "params": '{"name": "<who the face in the latest photo is>"}',
+        "about": ("Save the face from the MOST RECENT photo the user sent "
+                  "(within ~10 min) so future photos are recognized — use for "
+                  "ANY wording of that ask (\"remember as Suman\", \"this is "
+                  "me Maan\", \"save his face\"). The owner confirms first; "
+                  "the face data stays on this machine only. You CANNOT save "
+                  "a face any other way — NEVER claim one was remembered "
+                  "except through this tool's result. No recent photo = ask "
+                  "for the photo."),
+        "run": _faces_remember,
     },
     "weather.get": {
         "params": '{"place": "<town/city name>"} OR {"latitude": 26.65, "longitude": 88.47, "place": "<pin\'s place name, pass it through>"}',
@@ -816,6 +857,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
         name = str(args.get("entity", "")).split(".")[-1].replace("_", " ")
         name = name.upper() if len(name) <= 3 else name
         return f"About to turn the {name} {'ON' if tool.endswith('on') else 'OFF'}"
+    if tool == "faces.remember":
+        return (f'About to store a FACE TEMPLATE for "{args.get("name")}" from '
+                "the photo just sent — biometric data, kept ONLY on this "
+                "machine (never sent anywhere), deletable anytime with "
+                f'"forget the face {args.get("name")}"')
     return f"Run {tool} with {json.dumps(args)}?"
 
 
@@ -1065,6 +1111,8 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     loop ended at the ask; this is the receipt."""
     if isinstance(outcome, dict) and outcome.get("error"):
         return f"That failed: {outcome['error']}"
+    if isinstance(outcome, dict) and "__direct_reply__" in outcome:
+        return outcome["__direct_reply__"]  # executor-composed receipt
     if tool == "calendar.create_event":
         link = outcome.get("link", "") if isinstance(outcome, dict) else ""
         executed = outcome.get("start") if isinstance(outcome, dict) else None
