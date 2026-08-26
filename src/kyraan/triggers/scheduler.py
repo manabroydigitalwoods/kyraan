@@ -246,19 +246,38 @@ def advance_for(record) -> "datetime":
     return nxt
 
 
+_FILLER_WORDS = frozenset(
+    "remind reminder me to please a the my for about".split())
+
+
+def _text_essence(text: str) -> frozenset:
+    """The content words of a reminder, filler stripped. The model phrases
+    the same intent differently between calls ('Call mom' vs 'Remind me to
+    call mom' — seen in eval, created two pings for one intent), so
+    duplicate detection must compare meaning-bearing words, not strings."""
+    words = re.findall(r"[a-z0-9]+", text.casefold())
+    return frozenset(w for w in words if w not in _FILLER_WORDS)
+
+
 def find_duplicate(chat_id: int, text: str, when_iso: str) -> store.Reminder | None:
-    """An existing pending reminder with the same text (case-insensitive)
-    at the same moment. Found live: "ok then set a reminder for it" after
-    the reminder already existed silently created a second identical one —
-    two pings for one intent. Same text at a *different* time is not a
-    duplicate (call mom at 8 and again at 9 is legitimate)."""
+    """An existing pending reminder for the same intent at the same
+    moment. Found live: "ok then set a reminder for it" after the reminder
+    already existed silently created a second identical one — two pings
+    for one intent. Texts match when either's content words contain the
+    other's (phrasing varies; the moment plus overlapping content words is
+    the identity). Same text at a *different* time is not a duplicate
+    (call mom at 8 and again at 9 is legitimate)."""
     when = _parse_when(when_iso)
+    essence = _text_essence(text)
     for r in store.list_pending(chat_id):
         try:
-            if r.text.casefold() == text.casefold() and _parse_when(r.when_iso) == when:
-                return r
+            if _parse_when(r.when_iso) != when:
+                continue
         except ValueError:
             continue
+        other = _text_essence(r.text)
+        if essence and other and (essence <= other or other <= essence):
+            return r
     return None
 
 

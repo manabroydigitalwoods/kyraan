@@ -20,6 +20,7 @@ Safety is layered, not replaced:
   decisions) run BEFORE the loop in the orchestrator, as always.
 """
 import json
+import re
 
 from kyraan.agents.capabilities import capability_brief
 from kyraan.control_plane import kernel, kill_switch
@@ -28,6 +29,20 @@ from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store as memory_store
 from kyraan.model_router import router
 from kyraan.triggers import scheduler
+
+# A reply that asks permission to do the thing the user just asked for.
+# Matched case-insensitively against the model's DRAFT reply; one forced
+# re-decide, then the model's second answer stands (see the guard in run()).
+_DEFLECTION_RE = re.compile(
+    r"\b(?:do you want me to|would you like me to|shall i\b"
+    r"|should i (?:schedule|set|create|add|go ahead)"
+    r"|want me to (?:schedule|set|create|add)"
+    # "if you want, I can list them — just say 'list reminders'": telling
+    # the user to issue another command for something a tool does right
+    # now is homework, not help (seen live 2026-08-26 18:30).
+    r"|if you want,? i can"
+    r"|just say [\"'“‘])",
+    re.IGNORECASE)
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 
@@ -264,9 +279,20 @@ async def _task_schedule(chat_id: int, args: dict, raw_text: str):
 
 async def _task_list(chat_id: int, args: dict, raw_text: str):
     from kyraan.triggers import agent_tasks
-    return [{"id": t.id, "instruction": t.instruction, "when": humanize(t.when_iso),
-             **({"repeats": t.repeat} if t.repeat else {})}
-            for t in agent_tasks.list_active(chat_id)]
+    tasks = [{"id": t.id, "instruction": t.instruction, "when": humanize(t.when_iso),
+              **({"repeats": t.repeat} if t.repeat else {})}
+             for t in agent_tasks.list_active(chat_id)]
+    if not tasks:
+        # The owner says "tasks" for reminders too (seen live: "we have
+        # setup some tasks but you said empty" — the water reminders
+        # existed, the reply pointed at the wrong store and told the
+        # owner to run another command). Steer the model to check the
+        # other store BEFORE answering, not to offer it as homework.
+        return {"tasks": [], "note": (
+            "no scheduled agent tasks — but the user may mean reminders: "
+            "call reminders.list NOW and answer with the full picture "
+            "instead of saying the list is empty")}
+    return tasks
 
 
 async def _task_cancel(chat_id: int, args: dict, raw_text: str):
@@ -587,6 +613,8 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     )
     malformed_retries = 0
     calls_seen: dict = {}
+    deflection_corrected = False
+    executed_tool = False
 
     for step in range(_MAX_STEPS):
         try:
@@ -611,6 +639,39 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             reply = str(decision.get("text", "")).strip()
             if not reply:
                 raise AgentUnavailable("empty reply")
+            if (not deflection_corrected and not read_only
+                    and _DEFLECTION_RE.search(reply)):
+                # Deflection guard. The prompt-level "stated request IS the
+                # want" rule lost, live, to history self-poisoning: once one
+                # "Do you want me to schedule it again?" enters the
+                # conversation, the model imitates its own recent replies
+                # harder than it follows a doctrine bullet. A permission
+                # question forces exactly one re-decide with the error
+                # named; a reply the model then stands by (a genuinely
+                # proactive offer for something the user never asked) is
+                # accepted the second time.
+                deflection_corrected = True
+                log_event("agent_deflection_corrected", chat_id=chat_id,
+                          tier=tier, draft=reply[:150])
+                transcript += (
+                    "\nSYSTEM: STOP — your draft reply asked permission or "
+                    f"assigned the user homework (\"{reply[:150]}\"). If "
+                    "the user's message already requested that action, "
+                    "asking again is an ERROR no matter what earlier "
+                    "replies in this conversation did: call the tool NOW — "
+                    "for gated actions the confirmation button IS the "
+                    "question. Never tell the user to say another command "
+                    "for something your tools answer right now — call the "
+                    "tool and include the answer. Keep a permission "
+                    "question ONLY if you are proposing something the user "
+                    "never asked for. Decide again.")
+                continue
+            if executed_tool:
+                # This turn was a command (a tool ran) — commands are
+                # never memory facts. The prompt-level extraction rule was
+                # ignored live twice ("📝 Noted for review: User wants
+                # reminders every hour..."); this is deterministic.
+                orchestrator._skip_extraction.set(True)
             log_event("agent_reply", chat_id=chat_id, steps=step + 1,
                       tier=tier, consider=consider)
             return reply
@@ -644,6 +705,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         calls_seen[signature] = 1
         log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1,
                   consider=consider)
+        executed_tool = True
         try:
             result = await TOOLS[tool]["run"](chat_id, args, raw_text)
         except kernel.ConfirmationRequired:
@@ -676,6 +738,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             # reply itself so its contents never enter a model prompt.
             # History stores a placeholder for the same reason.
             orchestrator._history_redaction.set(f"[showed the {tool} result]")
+            orchestrator._skip_extraction.set(True)  # a command turn, never a fact
             log_event("agent_direct_reply", chat_id=chat_id, tool=tool, steps=step + 1)
             return result["__direct_reply__"]
 

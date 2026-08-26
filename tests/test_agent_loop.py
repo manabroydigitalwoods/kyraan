@@ -788,3 +788,123 @@ async def test_agent_creates_a_recurring_reminder(scripted_model, monkeypatch, t
     assert "Daily" in reply
     records = rstore.list_pending(90)
     assert len(records) == 1 and records[0].repeat == "daily"
+
+
+async def test_deflection_reply_forces_one_re_decide(scripted_model, monkeypatch):
+    """Live failure 2026-08-26 18:19: 'every evening at 8, check tomorrow's
+    calendar...' answered with 'Do you want me to schedule it again?' —
+    the doctrine bullet lost to the model imitating its own earlier bad
+    replies in history. The guard is deterministic: a permission question
+    gets exactly one forced re-decide with the error named."""
+    called = []
+
+    async def fake_dispatch(spec, args):
+        called.append(spec.name)
+        return {"state": "on"}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    prompts = scripted_model([
+        '{"action": "reply", "text": "Sure. Do you want me to schedule it again: every day at 8 PM?"}',
+        '{"action": "call", "tool": "home.get_state", "args": {"entity": "switch.ac"}}',
+        '{"action": "reply", "text": "Done."}',
+    ])
+
+    reply = await agent_loop.run(90, "check the AC every evening")
+    assert reply == "Done."
+    assert called == ["home.get_state"]
+    # the correction reached the model, quoting its own deflection
+    assert "asked permission" in prompts[1]
+    assert "Do you want me to schedule it again" in prompts[1]
+
+
+async def test_second_deflection_stands_as_a_genuine_offer(scripted_model, monkeypatch):
+    """A reply the model stands by after being confronted is a proactive
+    offer, not a deflection — the guard fires once, never loops."""
+    async def no_dispatch(spec, args):
+        raise AssertionError("no tool should run")
+
+    monkeypatch.setattr(reg, "dispatch", no_dispatch)
+    offer = "You mentioned forgetting water — do you want me to set hourly reminders?"
+    scripted_model([
+        f'{{"action": "reply", "text": "{offer}"}}',
+        f'{{"action": "reply", "text": "{offer}"}}',
+    ])
+
+    reply = await agent_loop.run(90, "I keep forgetting to drink water these days")
+    assert reply == offer
+
+
+async def test_tool_executing_turn_skips_fact_extraction(scripted_model, monkeypatch):
+    """Live failure 2026-08-26 18:20: the water-reminder command produced
+    '📝 Noted for review: User wants reminders every hour...' — a command
+    stored as a fact. Any turn that executed a tool must set the
+    extraction skip, deterministically."""
+    async def fake_dispatch(spec, args):
+        return {"state": "on"}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    scripted_model([
+        '{"action": "call", "tool": "home.get_state", "args": {"entity": "switch.ac"}}',
+        '{"action": "reply", "text": "The AC is on."}',
+    ])
+
+    token = orchestrator._skip_extraction.set(False)
+    try:
+        await agent_loop.run(90, "is the AC on?")
+        assert orchestrator._skip_extraction.get() is True
+    finally:
+        orchestrator._skip_extraction.reset(token)
+
+
+async def test_plain_reply_turn_still_allows_extraction(scripted_model, monkeypatch):
+    """The converse property: a statement turn (no tool ran) must NOT set
+    the skip — that is where real facts come from."""
+    async def no_dispatch(spec, args):
+        raise AssertionError("no tool should run")
+
+    monkeypatch.setattr(reg, "dispatch", no_dispatch)
+    scripted_model(['{"action": "reply", "text": "Noted — congratulations!"}'])
+
+    token = orchestrator._skip_extraction.set(False)
+    try:
+        await agent_loop.run(90, "my sister got a new job at the hospital")
+        assert orchestrator._skip_extraction.get() is False
+    finally:
+        orchestrator._skip_extraction.reset(token)
+
+
+async def test_empty_task_list_steers_to_reminders(scripted_model, monkeypatch):
+    """Live 2026-08-26 18:30: 'task list' answered 'empty' while the water
+    reminders existed — the owner says 'tasks' for both stores. An empty
+    tasks.list result must carry the steer to check reminders.list."""
+    async def no_dispatch(spec, args):
+        raise AssertionError("tasks.list is store-backed, no adapter")
+
+    monkeypatch.setattr(reg, "dispatch", no_dispatch)
+    prompts = scripted_model([
+        '{"action": "call", "tool": "tasks.list", "args": {}}',
+        '{"action": "call", "tool": "reminders.list", "args": {}}',
+        '{"action": "reply", "text": "No agent tasks, but your water reminder is active."}',
+    ])
+
+    reply = await agent_loop.run(90, "task list")
+    assert "water reminder" in reply
+    assert "call reminders.list NOW" in prompts[1]
+
+
+async def test_homework_reply_counts_as_deflection(scripted_model, monkeypatch):
+    """'If you want, I can list them — just say "list reminders"' is
+    homework for something a tool answers right now; the guard fires."""
+    async def no_dispatch(spec, args):
+        raise AssertionError("no adapter call expected")
+
+    monkeypatch.setattr(reg, "dispatch", no_dispatch)
+    prompts = scripted_model([
+        '{"action": "reply", "text": "If you want, I can list your reminders — just say \\"list reminders\\"."}',
+        '{"action": "call", "tool": "reminders.list", "args": {}}',
+        '{"action": "reply", "text": "You have 1 reminder: drink water hourly."}',
+    ])
+
+    reply = await agent_loop.run(90, "we have setup some tasks but you said empty task")
+    assert "1 reminder" in reply
+    assert "homework" in prompts[1]
