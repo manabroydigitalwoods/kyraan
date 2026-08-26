@@ -744,3 +744,27 @@ def test_pending_proposals_never_enter_cloud_prompts(monkeypatch, tmp_path):
     # cheap (local ollama) tier: the fact is visible
     local_block = agent_loop._pending_block("cheap")
     assert "A very private pending fact" in local_block
+
+
+def test_home_tool_spec_carries_the_real_entity_roster():
+    """Soak week day 1: the model guessed entity names, failed against
+    the allowlist, then asked the OWNER for internal ids. The tool spec
+    now carries the exact configured roster."""
+    block = agent_loop._tools_block()
+    assert "EXACTLY these" in block
+    assert "switch.ac" in block
+
+
+async def test_home_state_timestamps_are_humanized(monkeypatch):
+    """A raw UTC ISO string leaked into a reply verbatim (and 5.5h off
+    the owner's clock) — last_changed is humanized at the executor."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+
+    async def fake_run_tool(call, **kwargs):
+        return {"entity": "switch.ac", "state": "on",
+                "last_changed": "2026-08-26T10:42:32.966246Z"}
+
+    monkeypatch.setattr(agent_loop.kernel, "run_tool", fake_run_tool)
+    result = await agent_loop._home_get_state(90, {"entity": "switch.ac"}, "is ac on")
+    assert "Z" not in result["last_changed"]
+    assert "4:12 PM" in result["last_changed"]

@@ -140,7 +140,19 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
 
 
 async def _home_get_state(chat_id: int, args: dict, raw_text: str):
-    return await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": args["entity"]}))
+    result = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": args["entity"]}))
+    if isinstance(result, dict) and result.get("last_changed"):
+        # Humanized local time — a raw UTC ISO string leaked into a reply
+        # verbatim ("...at 2026-08-26T10:42:32.966246Z", which is also
+        # 5.5h off the owner's clock).
+        from datetime import datetime
+        from kyraan.control_plane.dnd import _tz
+        try:
+            changed = datetime.fromisoformat(str(result["last_changed"]).replace("Z", "+00:00"))
+            result = {**result, "last_changed": humanize(changed.astimezone(_tz()))}
+        except (ValueError, TypeError):
+            pass
+    return result
 
 
 async def _reminders_create(chat_id: int, args: dict, raw_text: str):
@@ -246,8 +258,8 @@ TOOLS = {
         "run": _email_unread,
     },
     "home.get_state": {
-        "params": '{"entity": "<e.g. switch.ac, sensor.bed_room_temp_temperature>"}',
-        "about": "Read a smart-home entity's state (AC switch, power, energy, bedroom temperature/humidity).",
+        "params": '{"entity": "<one of the entities listed in the about>"}',
+        "about": "Read a smart-home entity's state. PLACEHOLDER_HOME_ENTITIES",
         "run": _home_get_state,
     },
     "reminders.create": {
@@ -365,12 +377,27 @@ Style rules:
   [HEALTH]/[SAFETY]/[EMERGENCY] facts exist to protect the user — weigh
   them whenever health or safety is at stake.
 - Reply in the user's tone: brief, warm, direct. No markdown bold.
+- Times in replies are the user's 12-hour local clock ("4:12 PM") —
+  never a raw ISO/UTC string copied from a tool result.
 - If a tool errors, tell the user honestly what failed; don't retry blindly."""
 
 
+def _home_entity_roster() -> str:
+    """The REAL readable-entity allowlist, injected into the tool spec at
+    prompt-build time — the model was guessing entity names, failing, and
+    then asking the OWNER for internal ids (soak week, day 1)."""
+    server = (kernel.config.load().get("tool_servers") or {}).get("home_assistant") or {}
+    entities = server.get("read_entities") or []
+    return ("Readable entities (EXACTLY these): " + ", ".join(entities)) if entities \
+        else "No home entities configured."
+
+
 def _tools_block() -> str:
-    return "\n".join(f"- {name} {spec['params']}\n    {spec['about']}"
-                     for name, spec in TOOLS.items())
+    lines = []
+    for name, spec in TOOLS.items():
+        about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
+        lines.append(f"- {name} {spec['params']}\n    {about}")
+    return "\n".join(lines)
 
 
 def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
