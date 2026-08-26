@@ -116,6 +116,10 @@ Parallel/ongoing:
 
 ## 3a. Governance, Consent & Boundary Gaps (must decide before Phase 3)
 
+> **RESOLVED 2026-08-27 — the decision record is [governance.md](governance.md)**
+> (all eight gaps decided; Phase 3 is unblocked and must conform to it).
+> The table below remains as the original statement of the gaps.
+
 These are policy decisions, not just technical components — they shape the data model and can't be safely bolted on after multi-user rollout.
 
 | Gap | Why it matters |

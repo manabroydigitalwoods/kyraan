@@ -1,10 +1,9 @@
 # Kyraan Governance — §3a Decisions
 
-Status: **ACCEPTED for the owner's red pen** (2026-08-26). Every section is a
-PROPOSED position with rationale, ending in a **Decide:** line. Editing
-this file and committing it IS the decision record — plan.md §3a says
-these gate Phase 3, and once accepted, Phase 3's data model must conform
-to this document, not the other way around.
+Status: **ACCEPTED 2026-08-27** — every Decide: line below is resolved.
+This file IS the decision record plan.md §3a requires; Phase 3's data
+model must conform to it, not the other way around. Amendments are
+edits + commits here, nothing less formal.
 
 Convention: this file names people by ROLE (owner, spouse, child,
 parents), never by name — it is git-tracked and the repo's PII scrub
@@ -30,6 +29,13 @@ Policy has to start from facts. As of 2026-08-26, live-verified:
 | Public search engines (via local SearXNG) | Search queries only                                                                                                                                                                                                            | web.search                           |
 | **Never leaves**                          | Email body text and summaries, voice audio, FACE TEMPLATES (recognition is fully on-device; only a matched name enters a prompt), pending-review facts (cloud paths), HA device data beyond the prompt's readings, logs/traces | By construction, test-pinned         |
 
+Retention at the destinations: prompts sent to OpenAI are stored by them
+for up to ~30 days for abuse monitoring — not used for training per API
+policy, though legal holds can extend retention; prompt-cache copies
+live minutes-to-an-hour. Maps/weather/search providers see queries
+transiently. The never-leaves row lists exactly the categories no
+third-party retention policy can ever touch.
+
 
 ---
 
@@ -54,7 +60,7 @@ to; revisit when he is old enough to ask.
 - Any family member can say "delete what you know about me" — that maps
 to the existing forget flow and is honored without debate.
 
-**Decide:** adopt as written? / spouse conversation done on (date): 27-08-2026
+**Decide:** Adopted as written. Spouse conversation held 27-08-2026 — consent given; her facts unlock at stage 2 (§8).
 
 ## 2. Work / personal data boundary
 
@@ -76,8 +82,9 @@ covering it, (c) a hard scope separation so a family-context question
 can never pull work data into its prompt. Until all three exist, the
 Work agent of plan.md §5 is DEFERRED, not designed-around.
 
-**Decide:** strict version as written, or name specific work items to
-allow now: 27-08-2026
+**Decide:** Strict version adopted 27-08-2026 — NO work items allowed.
+The Work agent is formally deferred out of Phase 3; Phase 3's agent
+taxonomy is Home/Family (+ owner-personal) only.
 
 ## 3. Third-party model & API data exposure
 
@@ -99,8 +106,8 @@ commit. The capability brief's privacy answer must keep matching it.
 - Standing preference: when a keyless/local option exists at comparable
 quality, prefer it (the SearXNG/Open-Meteo/OSM pattern).
 
-**Decide:** adopt? / any category to pull back from OpenAI (e.g. route
-[HEALTH]-flagged facts to the local tier only): 27-08-2026
+**Decide:** Adopted 27-08-2026 — no pull-backs; [HEALTH]-flagged facts
+continue to the frontier tier under the review-gate consent.
 
 ## 4. Voice & recording consent (flagged for Phase 5)
 
@@ -111,7 +118,7 @@ explicit consent from every household member present, jurisdiction check
 for recording laws, and a visible hardware indicator. Not before
 Phase 5, and this line item blocks it until then.
 
-**Decide:** adopt as written? 27-08-2026
+**Decide:** Adopted as written, 27-08-2026.
 
 ## 5. Maintenance ownership
 
@@ -128,7 +135,7 @@ already true), watchdog restart (already true), 90-day log retention
 - The kill switch is the family-facing "off": anyone in the household
 may ask the owner to engage it, no justification needed.
 
-**Decide:** 2h/week realistic? / different number: 27-08-2026
+**Decide:** Adopted, 27-08-2026 — ~2 hours/week.
 
 ## 6. Review scaling
 
@@ -145,7 +152,7 @@ discovered, a model-tier change, or an extraction-prompt change.
 no auto-apply milestone. Accepted edits gate on scripts/eval.py
 (already the rule).
 
-**Decide:** thresholds (200 / 90% / every-3rd) feel right? 27-08-2026
+**Decide:** Adopted, 27-08-2026 — thresholds 200 reviewed / ≥90% trailing-50 / every-3rd held.
 
 ## 7. Direct correction / undo
 
@@ -160,7 +167,7 @@ deterministic path it lands in the self-review's signal digest.
 (delete the event just created, cancel the reminder just set) without
 naming it. Until built, the per-type cancels are the path.
 
-**Decide:** adopt, with `undo` as a Phase 3 deliverable? 27-08-2026
+**Decide:** Adopted, 27-08-2026 — `undo` is a committed Phase 3 deliverable.
 
 ## 8. Staged rollout
 
@@ -182,7 +189,10 @@ Multi-user identity, per-person visibility rules, and conflict
 resolution (plan §3) are REQUIRED before stage 2 — that is the real
 technical gate between Phase 2 and any family rollout.
 
-**Decide:** sequence and stage-1 exit bar (30 clean days)?27-08-2026
+**Decide:** Adopted, 27-08-2026. The stage-1 30-clean-day clock starts
+27-08-2026 (the day the repository audit's privacy-boundary P1 was
+fixed) — earliest stage-2 ≈ 26 Sep 2026, and any new privacy-boundary
+bug resets the clock.
 
 ---
 
@@ -190,6 +200,6 @@ technical gate between Phase 2 and any family rollout.
 
 ## Adoption
 
-When every **Decide:** line is filled, change Status to ACCEPTED with
-the date, commit, and update plan.md §3a to point here. Phase 3 design
-starts from §0's table and §8's gates as constraints.
+Accepted 2026-08-27 — all eight Decide: lines resolved above. Phase 3
+design starts from §0's table and §8's gates as constraints; plan.md §3a
+points here.
