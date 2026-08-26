@@ -96,10 +96,14 @@ def capability_brief() -> str:
     lines.append("")
     lines.append(
         "EVERYTHING ELSE — web browsing, bookings, calls, music, payments, "
-        "opening email bodies, editing/rescheduling calendar events, devices not "
+        "opening email bodies, editing/rescheduling calendar events, "
+        "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
+        "analyze any image or photo — do not offer to), voice notes, devices not "
         "listed above — you can NOT do yet. When asked, say so plainly in one "
         "short line, like a capable human assistant would (\"I can't book cabs "
         "yet\") — no apology spiral, no inventing abilities, and offer an "
-        "alternative only when a listed capability genuinely helps."
+        "alternative only when a listed capability genuinely helps (for an "
+        "image request: you can write a detailed prompt for an image tool, "
+        "but say clearly the image itself must be made elsewhere)."
     )
     return "\n".join(lines)

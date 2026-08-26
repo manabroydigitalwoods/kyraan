@@ -115,7 +115,11 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             event.set()
         return
     _burst_flushing.add(chat_id)
-    typing = None
+    # Typing starts the moment the message lands — it doubles as the
+    # "seen" receipt (bots can't mark messages read). Starting it only at
+    # composition made it invisible: the fast frontier answers in ~2s and
+    # the indicator never got long enough on screen to render.
+    typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
     try:
         while True:
             # Gather: wait for quiet, patiently while the last message
@@ -143,8 +147,6 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             fragments = _burst_buffers.pop(chat_id, [])
             if not fragments:
                 return
-            if typing is None:
-                typing = asyncio.create_task(_typing_loop(context.bot, chat_id))
             try:
                 async with _lock_for(chat_id):
                     # The burst is evaluated TOGETHER and answered as ONE
@@ -155,14 +157,11 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             except orchestrator.BurstSuperseded:
                 # The user kept typing while the reply was being planned —
                 # nothing ran yet, so retract the draft, fold these
-                # fragments back in front of the newcomers, stop "typing",
-                # and re-read the whole thought.
+                # fragments back in front of the newcomers, and re-read
+                # the whole thought (the typing indicator stays on: Kyraan
+                # is still working on a reply).
                 _burst_buffers[chat_id] = fragments + _burst_buffers.get(chat_id, [])
-                typing.cancel()
-                typing = None
                 continue
-            typing.cancel()
-            typing = None
             for position, (idx, reply) in enumerate(results):
                 source = fragments[min(idx, len(fragments) - 1)][0]
                 markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
@@ -178,6 +177,31 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         _burst_superseded.pop(chat_id, None)
         if typing is not None:
             typing.cancel()
+
+
+async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Photos, voice notes, stickers, files — the text-only handler never
+    fires for these, and the owner got SILENCE (live 2026-08-26: an image
+    with 'can yiu tell me what is this' was simply ignored). Until vision
+    and voice land (Phase 5), the honest reply beats a dropped message."""
+    if update.effective_user is None or update.effective_user.id != _owner_id():
+        return
+    message = update.message
+    if message is None:
+        return
+    kind = ("a photo" if message.photo else
+            "a voice message" if message.voice else
+            "a video" if message.video else
+            "an audio file" if message.audio else
+            "a sticker" if message.sticker else
+            "a file" if message.document else "that kind of message")
+    logger.info("Unsupported media from owner: %s", kind)
+    await message.reply_text(
+        f"I can't open {kind} yet — I only read text for now (seeing images "
+        "and hearing voice notes come in a later phase). Tell me in words "
+        "and I'm all yours.",
+        do_quote=True,
+    )
 
 
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -233,6 +257,11 @@ def run() -> None:
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     app = Application.builder().token(token).concurrent_updates(True).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
+    app.add_handler(MessageHandler(
+        filters.PHOTO | filters.VOICE | filters.VIDEO | filters.AUDIO
+        | filters.Sticker.ALL | filters.Document.ALL,
+        _on_unsupported,
+    ))
     app.add_handler(CallbackQueryHandler(_on_callback, pattern="^kyraan_(yes|no)$"))
 
     _wire_scheduler(app.job_queue, app.bot)

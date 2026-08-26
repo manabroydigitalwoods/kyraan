@@ -165,3 +165,63 @@ async def test_fragment_after_the_safe_point_starts_the_next_round(monkeypatch):
     await telegram_bot._on_message(make_update("first thought"), ctx)
 
     assert replies == ["first thought", "late follow-up"]
+
+
+async def test_photo_message_gets_an_honest_reply_not_silence(monkeypatch):
+    """Live: an image captioned 'can yiu tell me what is this' was simply
+    ignored — the text-only handler never fires for media. Until vision
+    lands, the honest limitation beats a dropped message."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    replies = []
+
+    async def reply_text(reply, reply_markup=None, do_quote=False):
+        replies.append(reply)
+
+    message = SimpleNamespace(photo=[object()], voice=None, video=None,
+                              audio=None, sticker=None, document=None,
+                              reply_text=reply_text)
+    update = SimpleNamespace(effective_user=SimpleNamespace(id=1),
+                             effective_chat=SimpleNamespace(id=9), message=message)
+    await telegram_bot._on_unsupported(update, SimpleNamespace(bot=None))
+    assert len(replies) == 1 and "can't open a photo yet" in replies[0]
+
+    # Non-owner media stays ignored.
+    update.effective_user = SimpleNamespace(id=2)
+    await telegram_bot._on_unsupported(update, SimpleNamespace(bot=None))
+    assert len(replies) == 1
+
+
+async def test_typing_starts_at_message_receipt(monkeypatch):
+    """The indicator doubles as the 'seen' receipt — it must start when
+    the message lands, not when composition begins (live: a ~2s frontier
+    reply never showed typing at all)."""
+    import asyncio as aio
+    from types import SimpleNamespace
+    from kyraan.agents import orchestrator
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    monkeypatch.setattr(telegram_bot, "_BURST_WINDOW_S", 0.2)
+    actions = []
+
+    class FakeBot:
+        async def send_chat_action(self, chat_id, action):
+            actions.append(chat_id)
+
+    async def fake_burst(chat_id, texts, superseded=None):
+        return [(0, "reply")]
+
+    monkeypatch.setattr(orchestrator, "handle_burst", fake_burst)
+
+    async def reply_text(reply, reply_markup=None, do_quote=False):
+        pass
+
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=1), effective_chat=SimpleNamespace(id=9),
+        message=SimpleNamespace(text="hello", reply_text=reply_text))
+    task = aio.get_event_loop().create_task(
+        telegram_bot._on_message(update, SimpleNamespace(bot=FakeBot())))
+    await aio.sleep(0.05)  # inside the gather window, before composition
+    assert actions, "typing action must fire during the gather window"
+    await task
