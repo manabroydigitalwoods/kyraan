@@ -55,7 +55,14 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         log_event("reminder_fire_skipped", reminder_id=reminder_id,
                   reason="already sent" if record else "record gone (cancelled?)")
         return
+    # Atomic claim BEFORE anything external happens — two overlapping
+    # jobs could both pass the sent-check above (P1, and the double-send
+    # was observed live once before the check existed at all).
+    if not store.claim_for_send(reminder_id):
+        log_event("reminder_fire_skipped", reminder_id=reminder_id, reason="claimed by another sender")
+        return
     if not kernel.can_send_proactively():
+        store.release_claim(reminder_id)
         assert _schedule_fn is not None
         _schedule_fn(
             reminder_id,

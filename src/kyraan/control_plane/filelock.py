@@ -23,3 +23,11 @@ def locked(path: Path):
             yield
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """Write-then-rename: a concurrent reader sees the old file or the
+    new one, never a half-written JSON (external review P2)."""
+    tmp = Path(str(path) + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)

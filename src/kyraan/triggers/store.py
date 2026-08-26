@@ -3,7 +3,7 @@ on startup so a restart doesn't lose pending reminders.
 """
 import json
 
-from kyraan.control_plane.filelock import locked
+from kyraan.control_plane.filelock import atomic_write_text, locked
 import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,6 +20,8 @@ class Reminder:
     text: str
     when_iso: str
     sent: bool = False
+    claimed_at: str = ""  # F4: set atomically before delivery; a stale
+                          # claim (>120s) is a crashed sender's lease
 
 
 def _load_all() -> list[dict]:
@@ -29,7 +31,7 @@ def _load_all() -> list[dict]:
 
 
 def _save_all(records: list[dict]) -> None:
-    REMINDERS_PATH.write_text(json.dumps(records, indent=2))
+    atomic_write_text(REMINDERS_PATH, json.dumps(records, indent=2))
 
 
 def add(chat_id: int, text: str, when_iso: str) -> Reminder:
@@ -67,6 +69,44 @@ def _mark_sent_locked(reminder_id: str) -> None:
         if r["id"] == reminder_id:
             r["sent"] = True
     _save_all(records)
+
+
+def claim_for_send(reminder_id: str, lease_seconds: int = 120) -> bool:
+    """Atomically claim a reminder for delivery (external review P1: two
+    overlapping jobs could both observe sent=False and both deliver).
+    True = this caller owns the send; a live unexpired claim or an
+    already-sent record returns False. A stale claim is a crashed
+    sender's lease and may be taken over."""
+    from datetime import datetime, timedelta, timezone
+
+    with locked(REMINDERS_PATH):
+        records = _load_all()
+        for record in records:
+            if record["id"] != reminder_id:
+                continue
+            if record.get("sent"):
+                return False
+            claimed = record.get("claimed_at") or ""
+            if claimed:
+                try:
+                    age = datetime.now(timezone.utc) - datetime.fromisoformat(claimed)
+                    if age < timedelta(seconds=lease_seconds):
+                        return False
+                except ValueError:
+                    pass
+            record["claimed_at"] = datetime.now(timezone.utc).isoformat()
+            _save_all(records)
+            return True
+        return False
+
+
+def release_claim(reminder_id: str) -> None:
+    with locked(REMINDERS_PATH):
+        records = _load_all()
+        for record in records:
+            if record["id"] == reminder_id:
+                record["claimed_at"] = ""
+        _save_all(records)
 
 
 def cancel(reminder_id: str) -> bool:

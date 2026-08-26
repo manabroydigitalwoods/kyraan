@@ -56,13 +56,17 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     """
     relative_path = relative_path.strip().lower()  # 'Preferences/x.md' == 'preferences/x.md' — seen live rejected for a capital P
     _validate_path(relative_path)
+    import uuid
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     safe_name = relative_path.replace("/", "__")
-    proposal_path = PENDING_DIR / f"{ts}__{safe_name}"
+    # uuid suffix + exclusive create: two same-target facts in one second
+    # silently overwrote each other (external review P1).
+    proposal_path = PENDING_DIR / f"{ts}-{uuid.uuid4().hex[:6]}__{safe_name}"
     meta_line = f"meta: {json.dumps(meta, ensure_ascii=False)}\n" if meta else ""
-    proposal_path.write_text(
-        f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n{meta_line}---\n\n{content}\n"
-    )
+    with open(proposal_path, "x") as handle:
+        handle.write(
+            f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n{meta_line}---\n\n{content}\n"
+        )
     return proposal_path
 
 

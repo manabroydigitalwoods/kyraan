@@ -12,8 +12,28 @@ from kyraan.tools.registry import ToolError, TransientToolError
 
 _TOKEN_URL = "https://oauth2.googleapis.com/token"
 
+# One inbox check was doing SIX refresh round-trips (external review P2):
+# cache the short-lived access token until 60s before expiry.
+import threading
+import time as _time
+
+_token_lock = threading.Lock()
+_cached_token: str | None = None
+_cached_until: float = 0.0
+
 
 def access_token() -> str:
+    global _cached_token, _cached_until
+    with _token_lock:
+        if _cached_token and _time.monotonic() < _cached_until:
+            return _cached_token
+        token, expires_in = _refresh()
+        _cached_token = token
+        _cached_until = _time.monotonic() + max(expires_in - 60, 30)
+        return token
+
+
+def _refresh() -> tuple:
     client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "").strip()
     client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
     refresh_token = os.environ.get("GOOGLE_OAUTH_REFRESH_TOKEN", "").strip()
@@ -30,7 +50,8 @@ def access_token() -> str:
     }).encode()
     try:
         with urllib.request.urlopen(urllib.request.Request(_TOKEN_URL, data=body), timeout=8) as resp:
-            return json.loads(resp.read())["access_token"]
+            payload = json.loads(resp.read())
+            return payload["access_token"], int(payload.get("expires_in", 3600))
     except urllib.error.HTTPError as exc:
         if exc.code >= 500:
             raise TransientToolError(f"Google token endpoint returned {exc.code}") from exc

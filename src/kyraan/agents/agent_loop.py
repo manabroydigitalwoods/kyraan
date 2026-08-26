@@ -22,7 +22,7 @@ Safety is layered, not replaced:
 import json
 
 from kyraan.agents.capabilities import capability_brief
-from kyraan.control_plane import kernel
+from kyraan.control_plane import kernel, kill_switch
 from kyraan.control_plane.dnd import humanize, local_now
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store as memory_store
@@ -48,11 +48,15 @@ async def _calendar_list(chat_id: int, args: dict, raw_text: str):
 
 
 async def _calendar_create(chat_id: int, args: dict, raw_text: str):
-    start = scheduler._sanitize_iso(str(args["start"]))
-    end = scheduler._sanitize_iso(str(args["end"]))
-    if scheduler._parse_when(start) < local_now():
+    # Normalize, don't just validate: _parse_when repairs offset-dropping
+    # (a bare Z in a non-UTC home is wall-clock intent) and the dispatched
+    # value must be the REPAIRED one — the raw model string sent a 7 PM
+    # IST event 5.5 hours wrong.
+    start_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["start"])))
+    end_dt = scheduler._parse_when(scheduler._sanitize_iso(str(args["end"])))
+    if start_dt < local_now():
         raise kernel.ToolFailed("that start time is in the past — ask the user for the intended date")
-    call_args = {"title": args["title"], "start": start, "end": end}
+    call_args = {"title": args["title"], "start": start_dt.isoformat(), "end": end_dt.isoformat()}
     if args.get("location"):
         call_args["location"] = args["location"]
     return await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
@@ -65,8 +69,24 @@ async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
 
 
 async def _email_unread(chat_id: int, args: dict, raw_text: str):
-    return await kernel.run_tool(kernel.ToolCall(
+    result = await kernel.run_tool(kernel.ToolCall(
         "email.unread", {"limit": min(int(args.get("limit", 5)), 10)}))
+    from kyraan.agents import orchestrator
+    if not orchestrator._cloud_tier_in_use():
+        return result  # all-local models: nothing leaves the machine anyway
+    # §3a boundary, restored for the agent path: sender/subject metadata
+    # must never enter a cloud prompt. The reply is composed HERE in
+    # Python and returned as a direct reply — the model decided TO check
+    # email but never sees what's in it.
+    total = result.get("unread_estimate", 0)
+    messages = result.get("messages", [])
+    if not messages:
+        return {"__direct_reply__": "No unread emails."}
+    lines = [f"You have about {total} unread. Latest:"]
+    for m in messages:
+        sender = str(m.get("from", "?")).split("<")[0].strip().strip('"') or "?"
+        lines.append(f"- {sender}: {m.get('subject', '(no subject)')}")
+    return {"__direct_reply__": "\n".join(lines)}
 
 
 async def _home_get_state(chat_id: int, args: dict, raw_text: str):
@@ -74,6 +94,13 @@ async def _home_get_state(chat_id: int, args: dict, raw_text: str):
 
 
 async def _reminders_create(chat_id: int, args: dict, raw_text: str):
+    async def handler(_a: dict):
+        return await _reminders_create_gated(chat_id, args, raw_text)
+    return await kernel.run_skill(
+        kernel.SkillCall("reminders.create", {"text": str(args.get("text", ""))}), handler)
+
+
+async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     when_iso = scheduler._sanitize_iso(str(args["when_iso"]))
     scheduler._parse_when(when_iso)  # validate before anything persists
     from kyraan.agents import orchestrator
@@ -98,6 +125,13 @@ async def _reminders_list(chat_id: int, args: dict, raw_text: str):
 
 
 async def _reminders_cancel(chat_id: int, args: dict, raw_text: str):
+    async def handler(_a: dict):
+        return await _reminders_cancel_gated(chat_id, args)
+    return await kernel.run_skill(
+        kernel.SkillCall("reminders.cancel", {"id": str(args.get("reminder_id", ""))}), handler)
+
+
+async def _reminders_cancel_gated(chat_id: int, args: dict):
     wanted = str(args["reminder_id"]).lower()
     match = next((r for r in scheduler.store.list_pending(chat_id)
                   if r.id.startswith(wanted)), None)
@@ -310,12 +344,14 @@ def _describe_call(tool: str, args: dict) -> str:
 
 def _memory_block(message: str) -> str:
     """Engine-ranked memory (safety-critical + identity always, the rest
-    by relevance and recency, budgeted) — falls back to the flat dump
-    until the index exists."""
+    by relevance and recency, budgeted). The flat Markdown dump is a
+    MIGRATION fallback only: once an index exists it is the sole
+    authority — falling back on an empty result resurrected forgotten
+    and discretion-filtered facts (external review, P1)."""
     from kyraan.memory import engine
-    return (engine.build_context(message)
-            or memory_store.load_all_facts()
-            or "(no facts stored yet)")
+    if engine._index_path().exists():
+        return engine.build_context(message) or "(no facts stored yet)"
+    return memory_store.load_all_facts() or "(no facts stored yet)"
 
 
 async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
@@ -324,6 +360,10 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
     (frontier loop -> cheap loop -> legacy classifier). One brain, two
     tiers: G-02's dual-system drift is closed by construction."""
     from kyraan.agents import orchestrator  # late: avoids a module cycle
+
+    if kill_switch.is_engaged():
+        log_event("blocked_kill_switch", skill="agent.loop", args={"chat_id": chat_id})
+        raise kernel.KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
 
     system = _AGENT_SYSTEM.format(
         capabilities=capability_brief(),
@@ -434,12 +474,13 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier") -> str:
             # (seen live: days="few days", three blind retries).
             result = {"error": f"{tool}: {str(exc)[:200]}"}
 
-        if tool == "email.unread":
-            # Data boundary: with a cloud tier active, the history records
-            # a placeholder instead of senders/subjects (same rule as the
-            # classifier path).
-            if orchestrator._cloud_tier_in_use():
-                orchestrator._history_redaction.set("[showed the unread email summary]")
+        if isinstance(result, dict) and "__direct_reply__" in result:
+            # Privacy short-circuit: the executor composed the user-facing
+            # reply itself so its contents never enter a model prompt.
+            # History stores a placeholder for the same reason.
+            orchestrator._history_redaction.set(f"[showed the {tool} result]")
+            log_event("agent_direct_reply", chat_id=chat_id, tool=tool, steps=step + 1)
+            return result["__direct_reply__"]
 
         rendered = json.dumps(result, ensure_ascii=False)
         transcript += f"\nTOOL {tool} -> {rendered[:2000]}"

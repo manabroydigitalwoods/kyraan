@@ -218,3 +218,30 @@ def test_doubled_offset_keeps_the_first(monkeypatch):
     monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
     parsed = _parse_when("2026-08-25T13:26:44+05:30+04:00")
     assert parsed.utcoffset().total_seconds() == 5.5 * 3600
+
+
+async def test_concurrent_fires_deliver_exactly_once(isolated_store):
+    """External review P1: two overlapping jobs could both observe
+    sent=False and both deliver. The atomic claim admits exactly one."""
+    import asyncio
+
+    r = store.add(chat_id=0, text="once only", when_iso="2099-01-01T10:00:00+00:00")
+    sends = []
+
+    async def slow_send(chat_id, text):
+        await asyncio.sleep(0.05)  # both fires overlap inside the send window
+        sends.append(text)
+
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=slow_send)
+    await asyncio.gather(scheduler.fire(r.id, 0, r.text), scheduler.fire(r.id, 0, r.text))
+    assert sends == ["Reminder: once only"]
+
+
+async def test_dnd_reschedule_releases_the_claim(isolated_store, monkeypatch):
+    from kyraan.control_plane import kernel
+
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda: False)
+    r = store.add(chat_id=0, text="held", when_iso="2099-01-01T10:00:00+00:00")
+    scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
+    await scheduler.fire(r.id, 0, r.text)
+    assert store.get(r.id).claimed_at == ""  # the 15-min retry can claim again

@@ -857,16 +857,29 @@ async def _cancel_event(chat_id: int, text: str) -> str:
             unique.append(e)
 
     async def handler(args: dict) -> str:
-        deleted, already_gone = [], []
-        for e in unique:
-            result = await kernel.run_tool(kernel.ToolCall(
-                "calendar.delete_event", {"event_id": e["id"], "title": e["title"]}))
+        # Per-event isolation + a COMPLETE receipt (external review P1: a
+        # batch beyond the kernel's 8-step rail deleted partially with a
+        # generic error and no account of what happened).
+        deleted, already_gone, untouched = [], [], []
+        stop_reason = ""
+        for i, e in enumerate(unique):
+            try:
+                result = await kernel.run_tool(kernel.ToolCall(
+                    "calendar.delete_event", {"event_id": e["id"], "title": e["title"]}))
+            except kernel.ToolFailed as exc:
+                stop_reason = str(exc)
+                untouched = [x["title"] for x in unique[i:]]
+                break
             (already_gone if result.get("already_gone") else deleted).append(e["title"])
         parts = []
         if deleted:
             parts.append("Deleted from your calendar: " + ", ".join(f'"{t}"' for t in deleted))
         if already_gone:
             parts.append("Already gone: " + ", ".join(f'"{t}"' for t in already_gone))
+        if untouched:
+            parts.append(f"NOT touched ({stop_reason.split(':')[0]}): "
+                         + ", ".join(f'"{t}"' for t in untouched)
+                         + ' — say "cancel" again for the rest')
         return ". ".join(parts) if parts else "Nothing was deleted."
 
     described = "\n".join(

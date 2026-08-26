@@ -59,22 +59,83 @@ async def test_plain_conversation_replies_without_tools(scripted_model, monkeypa
 
 async def test_read_chain_result_feeds_the_next_decision(scripted_model, monkeypatch):
     """The loop's whole point: call, SEE the result, then answer in its
-    own words — no template."""
+    own words — no template. (Email is excluded: its result deliberately
+    short-circuits, see the privacy test below.)"""
     async def fake_dispatch(spec, args):
-        assert spec.name == "email.unread"
-        return {"unread_estimate": 2, "messages": [
-            {"from": "Suman", "subject": "Invoice", "date": "d"}]}
+        assert spec.name == "home.get_state"
+        return {"entity": "switch.ac", "state": "on", "name": "AC"}
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)
     prompts = scripted_model([
-        '{"action": "call", "tool": "email.unread", "args": {"limit": 5}}',
-        '{"action": "reply", "text": "2 unread — the latest is Suman about an invoice."}',
+        '{"action": "call", "tool": "home.get_state", "args": {"entity": "switch.ac"}}',
+        '{"action": "reply", "text": "Yes — the AC is on."}',
     ])
 
-    reply = await agent_loop.run(90, "any new emails?")
-    assert "Suman" in reply
-    assert "TOOL email.unread" in prompts[1]   # the result reached the model
-    assert "Invoice" in prompts[1]
+    reply = await agent_loop.run(90, "is the AC on?")
+    assert "AC is on" in reply
+    assert "TOOL home.get_state" in prompts[1]   # the result reached the model
+    assert '"on"' in prompts[1]
+
+
+async def test_email_metadata_never_enters_a_cloud_prompt(scripted_model, monkeypatch):
+    """§3a restored for the agent path (external review P1): with a cloud
+    tier active, the email executor composes the reply in Python and
+    short-circuits the loop — sender names and subjects appear in NO
+    model prompt, and history stores a placeholder."""
+    async def fake_dispatch(spec, args):
+        return {"unread_estimate": 2, "messages": [
+            {"from": '"Suman Das" <s@x.com>', "subject": "Invoice pending", "date": "d"}]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+    prompts = scripted_model([
+        '{"action": "call", "tool": "email.unread", "args": {"limit": 5}}',
+    ])
+
+    token = orchestrator._history_redaction.set(None)
+    try:
+        reply = await agent_loop.run(90, "any new emails?")
+        assert "Suman Das: Invoice pending" in reply       # the user sees it
+        assert all("Invoice" not in p for p in prompts)    # no model ever did
+        assert orchestrator._history_redaction.get() == "[showed the email.unread result]"
+    finally:
+        orchestrator._history_redaction.reset(token)
+
+
+async def test_forgotten_facts_stay_forgotten_in_the_memory_block(monkeypatch, tmp_path):
+    """External review P1: an existing-but-empty index must NOT fall back
+    to the Markdown tree, which still holds forgotten facts' text."""
+    from kyraan.memory import engine
+    from kyraan.memory import store as mstore
+
+    (mstore.MEMORY_ROOT / "people").mkdir(parents=True, exist_ok=True)
+    (mstore.MEMORY_ROOT / "people" / "father.md").write_text("- Father's name is Deven Roy\n")
+
+    # No index yet: migration fallback may show the tree.
+    assert "Deven Roy" in agent_loop._memory_block("anything")
+
+    engine.migrate_from_tree()
+    fact_id = engine.active_entries()[0]["id"]
+    engine.forget([fact_id])
+    block = agent_loop._memory_block("who is my father?")
+    assert "Deven Roy" not in block                        # forgotten stays forgotten
+
+
+async def test_kill_switch_blocks_the_whole_loop(monkeypatch):
+    """External review P1: reminders (and every other executor) must be
+    unreachable with the kill switch engaged — checked at loop entry."""
+    from kyraan.control_plane import kill_switch
+
+    def must_not_call(**kwargs):
+        raise AssertionError("no model call with the kill switch engaged")
+
+    monkeypatch.setattr(agent_loop.router, "call", must_not_call)
+    kill_switch.engage("test")
+    try:
+        with pytest.raises(kernel.KillSwitchEngaged):
+            await agent_loop.run(90, "remind me to test at 9pm")
+    finally:
+        kill_switch.disengage()
 
 
 async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, monkeypatch):
@@ -304,3 +365,33 @@ async def test_degraded_tier_carries_the_self_awareness_note(scripted_model):
     finally:
         al.router.call = original
     assert "LOCAL backup model" in systems[0]
+
+
+async def test_calendar_create_dispatches_the_normalized_time(scripted_model, monkeypatch):
+    """External review P1: a model emitting 19:00Z for a 7 PM wall-clock
+    intent validated fine but dispatched the raw Z string — 5.5 hours
+    wrong in the user's home timezone. The NORMALIZED value must go out."""
+    monkeypatch.setenv("KYRAAN_TIMEZONE", "Asia/Kolkata")
+    dispatched = {}
+
+    async def fake_dispatch(spec, args):
+        dispatched.update(args)
+        return {"id": "ev1", "link": "l", "title": args["title"]}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    monkeypatch.setattr(kernel.config, "skill_config",
+                        lambda name: {"permission": "auto", "model_tier": "cheap"})
+    scripted_model([
+        '{"action": "call", "tool": "calendar.create_event", '
+        '"args": {"title": "Call", "start": "2099-01-02T19:00:00Z", "end": "2099-01-02T20:00:00Z"}}',
+    ])
+
+    async def no_facts(raw_text, context="", insist=False):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
+    ask = await agent_loop.run(90, "add call at 7pm on jan 2 2099")
+    assert "About to create" in ask
+    await orchestrator.handle_message(chat_id=90, raw_text="yes")
+    assert dispatched["start"].endswith("+05:30")   # wall-clock kept, zone repaired
+    assert "T19:00:00" in dispatched["start"]

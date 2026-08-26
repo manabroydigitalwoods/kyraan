@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from kyraan.control_plane import config
-from kyraan.control_plane.filelock import locked
+from kyraan.control_plane.filelock import atomic_write_text, locked
 from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
 
@@ -45,7 +45,7 @@ def _record_cost(cost_usd: float) -> None:
         key = local_now().date().isoformat()
         ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
         COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
 
 
 def _provider_token_limit(provider: str) -> int:
@@ -66,7 +66,7 @@ def _record_tokens(provider: str, usage: "Usage") -> None:
         key = f"tokens:{provider}:{local_now().date().isoformat()}"
         ledger[key] = int(ledger.get(key, 0)) + total
         COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
 
 
 def quota_alert_due() -> str:
@@ -85,8 +85,12 @@ def quota_alert_due() -> str:
         marker = f"quota_alerted:{provider}:{day}"
         if ledger.get(marker):
             continue
-        ledger[marker] = True
-        COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+        with locked(COST_LEDGER_PATH):
+            ledger = _read_ledger()  # re-read under the lock
+            if ledger.get(marker):
+                continue
+            ledger[marker] = True
+            atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
         log_event("quota_alert", provider=provider, used=used, limit=limit)
         return (
             f"{provider} is at {used * 100 // limit}% of its {limit:,}-token free daily "
@@ -106,14 +110,15 @@ def budget_alert_due() -> bool:
     spent = today_cost_usd()
     if (spent / budget) * 100 < budget_alert_threshold_pct():
         return False
-    ledger = _read_ledger()
-    key = local_now().date().isoformat()
-    alerted = ledger.get("alerted_dates", [])
-    if key in alerted:
-        return False
-    ledger["alerted_dates"] = alerted + [key]
-    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-    COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
+    with locked(COST_LEDGER_PATH):
+        ledger = _read_ledger()
+        key = local_now().date().isoformat()
+        alerted = ledger.get("alerted_dates", [])
+        if key in alerted:
+            return False
+        ledger["alerted_dates"] = alerted + [key]
+        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
     log_event("budget_alert", spent_today=spent, budget=budget)
     return True
 
@@ -446,14 +451,15 @@ def _token_guard(prompt: str, system: str, tier: str) -> None:
             "guard — a context assembler is leaking; check token_guard_blocked in events.jsonl"
         )
     if estimated > _TOKEN_GUARD_WARN:
-        ledger = _read_ledger()
         marker = f"token_warned:{tier}:{local_now().date().isoformat()}"
-        if not ledger.get(marker):
-            ledger[marker] = True
-            COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-            COST_LEDGER_PATH.write_text(json.dumps(ledger, indent=2))
-            log_event("token_guard_warn", tier=tier, estimated_tokens=estimated,
-                      warn_limit=_TOKEN_GUARD_WARN)
+        with locked(COST_LEDGER_PATH):
+            ledger = _read_ledger()
+            if not ledger.get(marker):
+                ledger[marker] = True
+                COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+                atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+                log_event("token_guard_warn", tier=tier, estimated_tokens=estimated,
+                          warn_limit=_TOKEN_GUARD_WARN)
 
 
 async def acall(**kwargs) -> RoutedResponse:

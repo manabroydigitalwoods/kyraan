@@ -165,7 +165,20 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
             result = await asyncio.wait_for(registry.dispatch(spec, call.args), timeout=spec.timeout_s)
             log_event("tool_result", tool=spec.name, ok=True, attempt=attempt)
             return result
-        except (registry.TransientToolError, asyncio.TimeoutError) as exc:
+        except asyncio.TimeoutError as exc:
+            if spec.side_effects == "write":
+                # A timeout CANNOT cancel work already running in the
+                # adapter's worker thread — the command may still land
+                # after this failure (external review P1). Say so, and
+                # never retry a write whose outcome is unknown: that is
+                # how duplicates happen.
+                log_event("tool_result", tool=spec.name, ok=False, error="timeout, outcome unknown")
+                raise ToolFailed(
+                    f"{spec.name} timed out — the command MAY still have gone "
+                    "through; check the actual state before retrying") from exc
+            last_exc = exc
+            log_event("tool_retry", tool=spec.name, attempt=attempt, error=str(exc))
+        except registry.TransientToolError as exc:
             last_exc = exc
             log_event("tool_retry", tool=spec.name, attempt=attempt, error=str(exc))
         except registry.ToolError as exc:

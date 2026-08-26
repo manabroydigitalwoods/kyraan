@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store
-from kyraan.control_plane.filelock import locked
+from kyraan.control_plane.filelock import atomic_write_text, locked
 
 INDEX_NAME = "index.json"
 
@@ -65,7 +65,7 @@ def _load() -> list:
 
 def _save(entries: list) -> None:
     _index_path().parent.mkdir(parents=True, exist_ok=True)
-    _index_path().write_text(json.dumps(entries, indent=1, ensure_ascii=False))
+    atomic_write_text(_index_path(), json.dumps(entries, indent=1, ensure_ascii=False))
 
 
 def _words(text: str) -> set:

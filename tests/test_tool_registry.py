@@ -288,3 +288,27 @@ def test_server_transport_validation(patched_cfg):
     patched_cfg({"t.x": _tool(server="bad")}, servers={"bad": {"transport": "mcp-stdio"}})
     with pytest.raises(ValueError, match="needs a command"):
         registry.load()
+
+
+async def test_write_timeout_reports_unknown_outcome_and_never_retries(patched_cfg, monkeypatch):
+    """External review P1: a timeout cannot cancel the worker thread — the
+    command may still land. A write says so honestly and is never blindly
+    retried (that is how duplicates happen)."""
+    patched_cfg({"t.write": _tool(permission="confirm", side_effects="write",
+                                  failure={"retries": 2, "timeout_s": 0.05, "on_failure": "surface"})})
+    attempts = []
+
+    async def hang(spec, args):
+        attempts.append(1)
+        await asyncio.sleep(1)
+
+    monkeypatch.setattr(registry, "dispatch", hang)
+    monkeypatch.setattr(kernel.config, "skill_config",
+                        lambda name: {"permission": "confirm", "model_tier": "cheap"})
+
+    async def handler(args):
+        return await kernel.run_tool(kernel.ToolCall("t.write", {"x": "y"}))
+
+    with pytest.raises(kernel.ToolFailed, match="MAY still have gone"):
+        await kernel.run_skill(kernel.SkillCall("s.write", {}, confirmed=True), handler)
+    assert len(attempts) == 1  # no blind retry of an unknown-outcome write
