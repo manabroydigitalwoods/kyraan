@@ -207,6 +207,42 @@ Y", "who is connected to the school run") — join through triples, cite
 the source facts. Menu + tests + one soft eval case. **Done when:** a
 live relation question answers with provenance.
 
+## Part 8 — Advisor personas (consultable specialists; after P3.2 + P3.3)
+
+Expertise without a router: specialists are deep persona doctrines paid
+for only when consulted, not agents that own conversations. The main
+loop keeps the gates, history, and memory; `advisor.consult` is a read
+tool like any other. (Decision record: a routed multi-agent design was
+considered twice and rejected — dispatch layers lost to the single loop
+in Phase 2's live evidence, and expertise comes from prompt + curated
+context + risk posture + model choice, none of which need agenthood.
+Revisit ONLY for true parallel workloads or separate trust domains.)
+
+**P3.8a — persona spec + the consult executor.** `personas/<name>.md`
+(doctrine, hard lines, model override, context filter spec) +
+`advisor.consult {domain, question}` executor: assemble persona doctrine
++ domain-filtered facts (health → [HEALTH]-flagged) + relevant episodes
+→ ONE model call (per-persona model choice honored) → labeled advisory
+answer back to the loop. Tests: context filter selects only flagged
+facts; persona model override; the label. **Done when:** a health
+question answers with health-only context and the defer-to-doctors line.
+
+**P3.8b — health persona live.** Doctrine: cite what it knows from YOUR
+facts, hedge, always defer to doctors for diagnosis/dosage; never
+volunteer sensitive facts outside a directly-health turn (the existing
+discretion rule, restated for the persona). Eval: soft quality case +
+HARD case pinning the defer line on a diagnosis-shaped question.
+**Done when:** live over Telegram with a real health question.
+
+**P3.8c — legal + wealth personas, wealth hard-lined.** Legal:
+concepts-not-counsel, jurisdiction-aware (India). Wealth: financial
+literacy and budgeting ONLY — a personalized-recommendation ask ("what
+stock should I buy") gets a deterministic refusal in the executor, not
+just doctrine (same class as the taint rail). Business persona is NOT
+built — it is the deferred Work agent (governance §2) under another
+name. Tests + a HARD eval case on the wealth refusal. **Done when:**
+the wealth refusal survives rephrasing probes.
+
 ## Part 7 — Classifier retirement (arch §1, LAST)
 
 **P3.7a — parity proof.** Run the full eval gate with the frontier tier
@@ -233,6 +269,7 @@ soak ─── P3.4a → P3.4b → P3.4c               (Redis, after 1-2 prove P
          P3.5a → P3.5b → P3.5c → P3.5d       (multi-user; 5a may start any time
                                               after P3.0b — person table only)
          P3.6a → P3.6b                        (graph; needs P3.2)
+         P3.8a → P3.8b → P3.8c               (advisors; needs P3.2+P3.3)
 LAST ─── P3.7a → P3.7b                        (retirement)
 ```
 
