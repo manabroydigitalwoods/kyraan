@@ -363,6 +363,11 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     + base64.b64encode(image_bytes).decode())
         reply = await photo.answer(chat_id, data_url, caption,
                                    recognized=recognized["names"])
+        hint_name = faces.enroll_hint(caption) if faces.available() else None
+        if hint_name:
+            reply += (f'\n\n(Want me to recognize this face later? Send a solo '
+                      f'photo of them captioned "remember this face as '
+                      f'{hint_name}" — face data stays on this machine.)')
     except photo.VisionUnavailable:
         reply = ("I can't see photos right now (the vision model is "
                  "unavailable) — tell me in words for now.")

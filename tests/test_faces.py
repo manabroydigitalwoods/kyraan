@@ -39,6 +39,17 @@ def test_enroll_match_and_forget(monkeypatch):
     assert faces.enrolled_names() == []
 
 
+def test_enroll_hint_on_naming_captions(monkeypatch):
+    """Live: "this kiaan" was expected to save the face; the hint offers
+    the real phrase — but never for enrolled names or ordinary captions."""
+    assert faces.enroll_hint("this kiaan") == "kiaan"
+    assert faces.enroll_hint("This is Ruma!") == "Ruma"
+    assert faces.enroll_hint("what is this?") is None
+    assert faces.enroll_hint("remember this face as Maan") is None  # real phrase, not a hint case
+    monkeypatch.setattr(faces, "enrolled_names", lambda: ["Kiaan"])
+    assert faces.enroll_hint("this is kiaan") is None  # already enrolled
+
+
 def test_enroll_needs_exactly_one_face(monkeypatch):
     monkeypatch.setattr(faces, "_detect_and_embed", lambda b: [])
     with pytest.raises(ValueError, match="no face"):

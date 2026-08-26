@@ -35,12 +35,33 @@ _ENROLL_RE = re.compile(
     re.IGNORECASE)
 
 
+_NAMING_RE = re.compile(
+    r"^\s*this\s+(?:is\s+)?([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$",
+    re.IGNORECASE)
+
+
 def enroll_request(caption: str):
     """The enrollment caption, parsed deterministically — returns the
     name or None. Never model-inferred: storing a biometric on a guessed
     intent would be wrong in a new way."""
     m = _ENROLL_RE.match(caption or "")
     return m.group(1).strip() if m else None
+
+
+def enroll_hint(caption: str):
+    """A caption that NAMES someone ("this kiaan", "this is Ruma") without
+    the enrollment phrase — seen live 2026-08-26: the owner captioned
+    "this kiaan" expecting the face to be saved, and nothing offered the
+    real phrase. Returns the name to hint about, or None. The hint is
+    discoverability only; enrollment itself stays behind the exact phrase
+    + confirm gate."""
+    m = _NAMING_RE.match(caption or "")
+    if not m:
+        return None
+    name = m.group(1).strip()
+    if name.lower() in {n.lower() for n in enrolled_names()}:
+        return None  # already enrolled — no hint needed
+    return name
 
 
 def available() -> bool:
