@@ -75,7 +75,78 @@ def _unread(limit: int) -> dict:
     return {"unread_estimate": total, "messages": items}
 
 
+_BODY_CHAR_CAP = 6000  # per message, before local summarization
+
+
+def bodies_enabled() -> bool:
+    import os
+    return os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
+
+
+def _decode_part(data: str) -> str:
+    import base64
+    try:
+        return base64.urlsafe_b64decode(data + "===").decode(errors="replace")
+    except Exception:
+        return ""
+
+
+def _extract_text(payload: dict) -> str:
+    """Prefer text/plain anywhere in the MIME tree; fall back to
+    tag-stripped text/html."""
+    import re as _re
+    plain, html = [], []
+
+    def walk(part):
+        mime = part.get("mimeType", "")
+        data = (part.get("body") or {}).get("data")
+        if data and mime.startswith("text/plain"):
+            plain.append(_decode_part(data))
+        elif data and mime.startswith("text/html"):
+            html.append(_decode_part(data))
+        for child in part.get("parts") or []:
+            walk(child)
+
+    walk(payload)
+    if plain:
+        return "\n".join(plain)
+    import html as _html
+    return _html.unescape(_re.sub(r"<[^>]+>", " ", " ".join(html)))
+
+
+def _read(query: str, limit: int) -> list:
+    if not bodies_enabled():
+        # Defense in depth: the flag gates the adapter too, not just the
+        # menu — and the error tells the owner the exact opt-in path.
+        raise ToolError(
+            "email bodies are disabled — to enable local-only reading, set "
+            "KYRAAN_EMAIL_BODIES=local in .env, re-run "
+            "scripts/setup_google_oauth.py (grants gmail.readonly), restart"
+        )
+    listing = _api(f"/messages?labelIds=UNREAD&maxResults=15")
+    wanted = [w for w in str(query or "").lower().split() if w]
+    out = []
+    for ref in listing.get("messages", []):
+        if len(out) >= limit:
+            break
+        msg = _api(f"/messages/{ref['id']}?format=full")
+        sender = _header(msg, "From")
+        subject = _header(msg, "Subject") or "(no subject)"
+        if wanted and not any(w in f"{sender} {subject}".lower() for w in wanted):
+            continue
+        body = _extract_text(msg.get("payload") or {}).strip()
+        out.append({
+            "from": sender, "subject": subject, "date": _header(msg, "Date"),
+            "body": body[:_BODY_CHAR_CAP],
+        })
+    return out
+
+
 async def call(tool_name: str, args: dict) -> object:
     if tool_name == "email.unread":
         return await asyncio.to_thread(_unread, args.get("limit", 5))
+    if tool_name == "email.read":
+        return await asyncio.to_thread(
+            _read, str(args.get("query", "") or ""),
+            max(1, min(int(args.get("limit", 2) or 2), 3)))
     raise ToolError(f"gmail adapter does not provide {tool_name!r}")

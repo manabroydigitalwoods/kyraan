@@ -412,6 +412,22 @@ linter measures. First report immediately found: 981/1483 frontier calls
 today were full cache misses (expected on a day with ~15 prompt-editing
 deploys — recheck on a quiet day), and one duplicated usage-report rule.
 
+**5a-5c (2026-08-26, last block of the day):** (a) the nightly
+self-review gained a PROMPT CRITIC (`self_review.prompt_critic`): a
+deterministic digest of the day's guard firings, tool failures, and
+cache/latency stats plus the STATIC prompt sections (never memory or
+pending facts) goes to the frontier model for at most 3 proposed prompt
+edits with evidence — proposals only, edits stay human, gated on
+scripts/eval.py; a critic crash never sinks the review. (b) email bodies
+local-only, built but OFF until the owner opts in: KYRAAN_EMAIL_BODIES=
+local in .env → re-run setup_google_oauth.py (requests gmail.readonly
+instead of the metadata-only scope) → restart. email.read fetches unread
+bodies (query-filterable), the executor summarizes them with the LOCAL
+model and short-circuits the reply — content never enters a cloud prompt
+or history, and the executor refuses outright if the cheap tier isn't
+local. (c) CI: .github/workflows/tests.yml runs the full suite on every
+push/PR — no secrets in CI by design (tests fake all providers).
+
 ## Next steps
 
 1. Revoke + reissue the bot token via BotFather (it passed through a chat

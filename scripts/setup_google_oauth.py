@@ -32,12 +32,19 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 REPO = Path(__file__).resolve().parents[1]
+load_dotenv(REPO / ".env")  # BEFORE SCOPES: the gmail scope reads the env
 SCOPES = [
     "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/gmail.metadata",  # security round: metadata-ONLY
-    # scope — bodies are impossible at Google's level, not just by our
-    # code's restraint (gmail.py fetches format=metadata, compatible).
-    # Switched from gmail.readonly 2026-08-26; re-run this script once.
+    # Default: metadata-ONLY scope — bodies are impossible at Google's
+    # level, not just by our code's restraint. Setting
+    # KYRAAN_EMAIL_BODIES=local in .env BEFORE running this script
+    # requests gmail.readonly instead: bodies become fetchable, and the
+    # runtime then processes them exclusively with the LOCAL model
+    # (never a cloud tier) — the §3a boundary moves from "unreadable"
+    # to "never leaves the machine", by explicit owner choice.
+    ("https://www.googleapis.com/auth/gmail.readonly"
+     if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
+     else "https://www.googleapis.com/auth/gmail.metadata"),
 ]
 
 

@@ -53,7 +53,10 @@ def capability_brief() -> str:
     if _has_env("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"):
         lines.append('- Create calendar events — each one needs the owner\'s explicit yes ("add lunch friday 1pm to my calendar").')
         lines.append('- Cancel/delete calendar events — the exact events are named and need the owner\'s explicit yes ("cancel the 3pm meeting").')
-        lines.append('- Check unread email: senders and subjects ONLY, never message bodies (a deliberate privacy boundary — say so if asked to open/summarize an email, and point to Gmail).')
+        if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local":
+            lines.append('- Check unread email (senders/subjects), and READ email bodies on request — bodies are summarized by the local model on this computer and never leave the machine.')
+        else:
+            lines.append('- Check unread email: senders and subjects ONLY, never message bodies (a deliberate privacy boundary — say so if asked to open/summarize an email, and point to Gmail).')
     else:
         not_connected.append("Calendar event creation and email checking (needs the Google OAuth setup)")
 
@@ -134,9 +137,11 @@ def capability_brief() -> str:
         voice_cannot = "voice notes, "
     browsing_cannot = ("opening full web pages (search snippets are the limit), "
                        if _has_env("SEARXNG_URL") else "web browsing, ")
+    email_cannot = ("" if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
+                    else "opening email bodies, ")
     lines.append(
         f"EVERYTHING ELSE — {browsing_cannot}bookings, calls, music, payments, "
-        "opening email bodies, editing/rescheduling calendar events, "
+        f"{email_cannot}editing/rescheduling calendar events, "
         "GENERATING OR VIEWING IMAGES (you cannot create, draft, see, or "
         f"analyze any image or photo — do not offer to), {voice_cannot}devices not "
         "listed above — you can NOT do yet. When asked, say so plainly in one "

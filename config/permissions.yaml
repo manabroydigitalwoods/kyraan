@@ -313,6 +313,19 @@ tools:
       retries: 2
       timeout_s: 12
       on_failure: surface
+  email.read:
+    description: Read unread email BODIES (optionally filtered by sender/subject words) — only when KYRAAN_EMAIL_BODIES=local and the gmail.readonly scope was re-consented. Bodies are summarized by the LOCAL model inside the executor and never enter a cloud prompt; the reply is composed in Python (direct-reply short-circuit, like email.unread).
+    server: gmail
+    permission: auto
+    side_effects: read
+    params:
+      query: {type: string}
+      limit: {type: number}
+    returns: "list of {from, subject, date, body} — consumed inside the executor only"
+    failure:
+      retries: 1
+      timeout_s: 25
+      on_failure: surface
   home.get_state:
     description: Read one allowlisted Home Assistant entity's state (AC switch, power/energy sensors).
     server: home_assistant
@@ -391,6 +404,10 @@ self_review:
   enabled: true
   time: "21:45"   # before quiet hours; Kyraan critiques its own day —
                   # proposes only, never self-modifies
+  prompt_critic: true   # nightly prompt-edit PROPOSALS from the day's
+                        # guard/tool/cache signals — static prompt
+                        # sections only (never memory or pending facts);
+                        # accepted edits gate on scripts/eval.py
 
 voice:
   enabled: true

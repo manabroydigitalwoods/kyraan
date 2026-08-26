@@ -172,6 +172,44 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     return {"__direct_reply__": "\n".join(lines)}
 
 
+_EMAIL_SUMMARY_SYSTEM = (
+    "Summarize this one email for its busy owner in 2-3 plain sentences: "
+    "who it's from, what they want or say, any deadline/amount/action "
+    "needed. No preamble, no markdown.")
+
+
+async def _email_read(chat_id: int, args: dict, raw_text: str):
+    """§3a moved, not broken: bodies are fetched only under the owner's
+    explicit opt-in, summarized by the LOCAL model right here, and the
+    reply short-circuits — no body, and no summary of one, ever enters a
+    cloud prompt or the conversation history."""
+    from kyraan.control_plane import config as _config
+    cheap_provider = _config.load()["model_tiers"].get("cheap", {}).get("provider", "")
+    if not router.provider_is_local(cheap_provider):
+        return {"__direct_reply__": (
+            "I can only read email bodies with a LOCAL model, and the cheap "
+            "tier currently points at a cloud provider — not reading them. "
+            "Point the cheap tier back at Ollama to re-enable.")}
+    messages = await kernel.run_tool(kernel.ToolCall(
+        "email.read", {"query": str(args.get("query", "") or ""),
+                       "limit": min(int(args.get("limit", 2) or 2), 3)}))
+    if not messages:
+        return {"__direct_reply__": "No unread emails match that."}
+    lines = []
+    for m in messages:
+        sender = str(m.get("from", "?")).split("<")[0].strip().strip('"') or "?"
+        try:
+            summary = (await router.acall(
+                prompt=f"From: {m.get('from')}\nSubject: {m.get('subject')}\n\n{m.get('body', '')}",
+                system=_EMAIL_SUMMARY_SYSTEM, tier="cheap", max_tokens=220)).text.strip()
+        except Exception as exc:
+            log_event("email_read_summary_error", error=str(exc)[:150])
+            summary = "(couldn't summarize this one locally)"
+        lines.append(f"📧 {sender} — {m.get('subject', '(no subject)')}\n{summary}")
+    lines.append("(read locally on this machine — the content never left it)")
+    return {"__direct_reply__": "\n\n".join(lines)}
+
+
 async def _home_get_state(chat_id: int, args: dict, raw_text: str):
     result = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": args["entity"]}))
     if isinstance(result, dict) and result.get("last_changed"):
@@ -449,6 +487,15 @@ TOOLS = {
         "about": "Unread email senders and subjects ONLY — bodies are never available, by design.",
         "run": _email_unread,
     },
+    "email.read": {
+        "params": '{"query": "<optional sender/subject words>", "limit": 2}',
+        "about": ("Read and summarize unread email BODIES — processed entirely "
+                  "by the local model, content never leaves the machine. Use "
+                  "when the user asks what an email says ('what does the Axis "
+                  "Bank mail say?' -> query 'axis bank'). The result IS the "
+                  "reply — you will not see the content."),
+        "run": _email_read,
+    },
     "home.get_state": {
         "params": '{"entity": "<one of the entities listed in the about>"}',
         "about": "Read a smart-home entity's state. PLACEHOLDER_HOME_ENTITIES",
@@ -707,6 +754,10 @@ def _tools_block(read_only: bool = False) -> str:
             continue
         if name == "routes.eta" and not _routes.configured():
             continue  # same rule: no key, no menu entry, no false ability
+        if name == "email.read":
+            from kyraan.tools import gmail as _gmail
+            if not _gmail.bodies_enabled():
+                continue  # owner hasn't opted into local body reading
         about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
         lines.append(f"- {name} {spec['params']}\n    {about}")
     return "\n".join(lines)
@@ -773,7 +824,8 @@ def _memory_block(message: str) -> str:
 
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "usage.report", "memory.pending_list",
-                    "web.search", "weather.get", "places.nearby", "routes.eta"}
+                    "web.search", "weather.get", "places.nearby", "routes.eta",
+                    "email.read"}
 
 
 async def run(chat_id: int, raw_text: str, tier: str = "frontier",
