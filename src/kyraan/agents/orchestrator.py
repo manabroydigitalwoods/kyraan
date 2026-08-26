@@ -205,6 +205,10 @@ _REMIND_WORDS = (
 # too: list the pending facts, take approve/reject deterministically.
 _pending_reviews: dict = {}
 
+# The model-driven loop is the primary path in production; the classifier
+# tests flip this off to exercise the fallback path in isolation.
+AGENT_LOOP_ENABLED = True
+
 
 def _load_review_proposals() -> list:
     items = []
@@ -716,6 +720,22 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     if remaining:
                         parts.append(f"{remaining} still pending — say \"review memory\" to see them.")
                     return "\n".join(parts) if parts else "Nothing changed."
+
+        # The model-driven tool loop is the PRIMARY brain (2026-08-26): a
+        # frontier model reads the conversation + memory + tool menu and
+        # decides — chaining reads, composing its own replies, hitting the
+        # same kernel gates for every tool. The classifier path below is
+        # its fallback: degraded mode (cloud down) or any loop failure.
+        if AGENT_LOOP_ENABLED:
+            try:
+                from kyraan.agents import agent_loop
+                return await agent_loop.run(chat_id, raw_text)
+            except KillSwitchEngaged:
+                raise
+            except agent_loop.AgentUnavailable as exc:
+                log_event("agent_fallback_classifier", error=str(exc)[:200])
+            except Exception as exc:
+                log_event("agent_loop_error", error=str(exc), error_type=type(exc).__name__)
 
         # Structured JSON intent classification needs more reliability than
         # the cheap tier's local 3B model consistently gives — verified

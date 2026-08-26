@@ -136,6 +136,12 @@ skills:
                           # review step IS the gate, so proposing is safe to
                           # run on every message (still kill-switch-gated)
     model_tier: cheap
+  agent.action:
+    permission: auto      # the wrapper the agent loop stashes a confirm-
+                          # gated tool call in — the WRITE inside is still
+                          # tool-gated (confirm), so the owner's yes is
+                          # what actually unlocks it, same as calendar.create
+    model_tier: cheap
   memory.review:
     permission: auto      # lists pending facts; the promote/reject itself
                           # runs only on the owner's explicit deterministic

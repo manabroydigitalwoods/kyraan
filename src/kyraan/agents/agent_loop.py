@@ -1,0 +1,350 @@
+"""The model-driven tool loop — Kyraan's primary brain since 2026-08-26.
+
+One frontier model sees the conversation, the owner's saved memory, and a
+menu of callable tools, then decides: call a tool (and see its result), or
+reply. This replaces classify-and-dispatch as the first path because the
+classifier architecture kept failing on questions no rule anticipated
+("are these latest emails?", "show me kiaan memories", "can you cancel") —
+each needed a hand-written rule; a reader with tools needs none.
+
+Safety is layered, not replaced:
+- Every tool still runs through kernel.run_tool: kill switch, permission
+  gates, loop rails, audit log. A confirm-gated write raises
+  ConfirmationRequired here exactly as it does everywhere — the loop turns
+  it into the standard ask, and the owner's yes runs the EXACT stashed
+  call, byte-identical.
+- The loop runs on the FRONTIER tier only. Any provider failure or
+  unparseable decision raises AgentUnavailable and the orchestrator falls
+  back to the proven classifier path — degraded mode is unchanged.
+- Deterministic guards (time-fragment patience, confirm words, review
+  decisions) run BEFORE the loop in the orchestrator, as always.
+"""
+import json
+
+from kyraan.agents.capabilities import capability_brief
+from kyraan.control_plane import kernel
+from kyraan.control_plane.dnd import humanize, local_now
+from kyraan.control_plane.logging_setup import log_event
+from kyraan.memory import store as memory_store
+from kyraan.model_router import router
+from kyraan.triggers import scheduler
+
+_MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
+
+
+class AgentUnavailable(Exception):
+    """The loop can't run (provider down, or the model can't produce a
+    usable decision) — the caller falls back to the classifier path."""
+
+
+# --- tool executors -------------------------------------------------------
+# Each returns a JSON-serializable result for the model to read, or raises
+# kernel.ConfirmationRequired (writes) / kernel.ToolFailed (surfaced).
+
+async def _calendar_list(chat_id: int, args: dict, raw_text: str):
+    events = await kernel.run_tool(kernel.ToolCall(
+        "calendar.list_events", {"start": args["start"], "end": args["end"]}))
+    return events[:20]
+
+
+async def _calendar_create(chat_id: int, args: dict, raw_text: str):
+    start = scheduler._sanitize_iso(str(args["start"]))
+    end = scheduler._sanitize_iso(str(args["end"]))
+    if scheduler._parse_when(start) < local_now():
+        raise kernel.ToolFailed("that start time is in the past — ask the user for the intended date")
+    call_args = {"title": args["title"], "start": start, "end": end}
+    if args.get("location"):
+        call_args["location"] = args["location"]
+    return await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
+
+
+async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall(
+        "calendar.delete_event",
+        {"event_id": args["event_id"], "title": args.get("title", "")}))
+
+
+async def _email_unread(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall(
+        "email.unread", {"limit": min(int(args.get("limit", 5)), 10)}))
+
+
+async def _home_get_state(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": args["entity"]}))
+
+
+async def _reminders_create(chat_id: int, args: dict, raw_text: str):
+    when_iso = scheduler._sanitize_iso(str(args["when_iso"]))
+    scheduler._parse_when(when_iso)  # validate before anything persists
+    from kyraan.agents import orchestrator
+    when_iso = orchestrator._anchor_clock_time(raw_text, when_iso)
+    if orchestrator.is_time_fragment(str(args["text"])):
+        raise kernel.ToolFailed("the reminder text is just a time phrase — ask the user what the reminder is FOR")
+    existing = scheduler.find_duplicate(chat_id, args["text"], when_iso)
+    if existing:
+        return {"duplicate": True, "id": existing.id[:8], "text": existing.text,
+                "when": humanize(existing.when_iso)}
+    reminder = scheduler.create_reminder(chat_id, args["text"], when_iso)
+    return {"created": True, "id": reminder.id[:8], "text": args["text"],
+            "when": humanize(when_iso)}
+
+
+async def _reminders_list(chat_id: int, args: dict, raw_text: str):
+    return [{"id": r.id[:8], "text": r.text, "when": humanize(r.when_iso)}
+            for r in scheduler.store.list_pending(chat_id)]
+
+
+async def _reminders_cancel(chat_id: int, args: dict, raw_text: str):
+    wanted = str(args["reminder_id"]).lower()
+    match = next((r for r in scheduler.store.list_pending(chat_id)
+                  if r.id.startswith(wanted)), None)
+    if match is None:
+        raise kernel.ToolFailed(f"no pending reminder with id {wanted!r} — list reminders first")
+    scheduler.cancel_reminder(match.id)
+    return {"cancelled": True, "text": match.text}
+
+
+async def _memory_pending(chat_id: int, args: dict, raw_text: str):
+    from kyraan.agents import orchestrator
+    return [{"n": i + 1, "fact": fact, "target": target}
+            for i, (_, target, fact) in enumerate(orchestrator._load_review_proposals())]
+
+
+TOOLS = {
+    "calendar.list_events": {
+        "params": '{"start": "<ISO datetime>", "end": "<ISO datetime>"}',
+        "about": "Events on the Google Calendar in a time window (each has id/title/start/recurring).",
+        "run": _calendar_list,
+    },
+    "calendar.create_event": {
+        "params": '{"title": "...", "start": "<ISO>", "end": "<ISO>", "location": "optional"}',
+        "about": "Create a calendar event. Asks the owner to confirm first — that is automatic.",
+        "run": _calendar_create,
+    },
+    "calendar.delete_event": {
+        "params": '{"event_id": "<id from calendar.list_events>", "title": "<its title>"}',
+        "about": "Delete ONE event by id (list first to get ids). Confirm is automatic. Deleting a recurring event removes its whole series — warn in your ask context.",
+        "run": _calendar_delete,
+    },
+    "email.unread": {
+        "params": '{"limit": 5}',
+        "about": "Unread email senders and subjects ONLY — bodies are never available, by design.",
+        "run": _email_unread,
+    },
+    "home.get_state": {
+        "params": '{"entity": "<e.g. switch.ac, sensor.bed_room_temp_temperature>"}',
+        "about": "Read a smart-home entity's state (AC switch, power, energy, bedroom temperature/humidity).",
+        "run": _home_get_state,
+    },
+    "reminders.create": {
+        "params": '{"text": "<what to remind>", "when_iso": "<ISO with the user\'s +05:30 offset>"}',
+        "about": "Set a reminder delivered as a Telegram message. Only when the user asked to be reminded/woken/alerted.",
+        "run": _reminders_create,
+    },
+    "reminders.list": {
+        "params": "{}",
+        "about": "The user's pending reminders (id, text, when).",
+        "run": _reminders_list,
+    },
+    "reminders.cancel": {
+        "params": '{"reminder_id": "<id prefix from reminders.list>"}',
+        "about": "Cancel one pending reminder by id (list first if unsure).",
+        "run": _reminders_cancel,
+    },
+    "memory.pending_list": {
+        "params": "{}",
+        "about": "Facts queued for the owner's review, numbered. To approve/reject, tell the user to say \"review memory\" — you cannot approve.",
+        "run": _memory_pending,
+    },
+}
+
+
+def _register_home_switches() -> None:
+    async def on(chat_id, args, raw_text):
+        return await kernel.run_tool(kernel.ToolCall("home.turn_on", {"entity": args["entity"]}))
+
+    async def off(chat_id, args, raw_text):
+        return await kernel.run_tool(kernel.ToolCall("home.turn_off", {"entity": args["entity"]}))
+
+    TOOLS["home.turn_on"] = {
+        "params": '{"entity": "switch.ac"}',
+        "about": "Switch a plug ON. Only when the user asked. Confirm is automatic.",
+        "run": on,
+    }
+    TOOLS["home.turn_off"] = {
+        "params": '{"entity": "switch.ac"}',
+        "about": "Switch a plug OFF. Only when the user asked. Confirm is automatic.",
+        "run": off,
+    }
+
+
+_register_home_switches()
+
+
+_AGENT_SYSTEM = """You are Kyraan, Manab's personal assistant, deciding how to
+handle his latest message. The current date/time is {now} (the user's own
+timezone — a stated clock time is always wall-clock in this zone).
+
+{capabilities}
+
+Known facts, from the owner-reviewed memory — treat as true; never invent
+personal facts beyond these and the conversation:
+{facts}
+
+Stated but still awaiting the owner's review (usable in conversation, not
+yet permanent):
+{pending_facts}
+
+TOOLS you can call (results come back to you before you answer):
+{tools}
+
+DECIDE with ONE JSON object, nothing else:
+  {{"action": "reply", "text": "<your reply to the user>"}}
+  {{"action": "call", "tool": "<tool name>", "args": {{...}}}}
+
+Rules:
+- Ordinary conversation, questions about yourself, questions about what was
+  already said or shown, and anything answerable from the facts and the
+  conversation: just reply. Do not call tools you don't need.
+- Live data (calendar, email, reminders, home) must come from a tool call in
+  THIS exchange — never from memory of earlier listings, never invented.
+- Chain when needed: list before you delete, read before you summarize. You
+  will see each result before deciding again.
+- Write tools (create/delete/switch) run only after the owner's yes — the
+  system asks automatically; NEVER claim the action already happened.
+- Never promise future actions ("I'll check") — either call the tool now or
+  say what to ask for. A reply is the END of your turn.
+- Reply in the user's tone: brief, warm, direct. No markdown bold.
+- If a tool errors, tell the user honestly what failed; don't retry blindly.
+
+The conversation so far:
+{history}"""
+
+
+def _tools_block() -> str:
+    return "\n".join(f"- {name} {spec['params']}\n    {spec['about']}"
+                     for name, spec in TOOLS.items())
+
+
+def _describe_call(tool: str, args: dict) -> str:
+    """The confirm ask the owner sees — concrete, named values."""
+    if tool == "calendar.create_event":
+        return (f"About to create a calendar event: \"{args.get('title')}\" "
+                f"{humanize(str(args.get('start')))} → {humanize(str(args.get('end')))}")
+    if tool == "calendar.delete_event":
+        return f"About to DELETE \"{args.get('title') or args.get('event_id')}\" from your Google Calendar"
+    if tool == "home.turn_on":
+        return f"Turn ON {str(args.get('entity', '')).split('.')[-1].replace('_', ' ')}?"
+    if tool == "home.turn_off":
+        return f"Turn OFF {str(args.get('entity', '')).split('.')[-1].replace('_', ' ')}?"
+    return f"Run {tool} with {json.dumps(args)}?"
+
+
+async def run(chat_id: int, raw_text: str) -> str:
+    """One agentic exchange. Returns the reply; raises AgentUnavailable to
+    hand the message to the classifier fallback."""
+    from kyraan.agents import orchestrator  # late: avoids a module cycle
+
+    system = _AGENT_SYSTEM.format(
+        now=local_now().isoformat(),
+        capabilities=capability_brief(),
+        facts=memory_store.load_all_facts() or "(no facts stored yet)",
+        pending_facts=memory_store.load_pending_facts() or "(none)",
+        tools=_tools_block(),
+        history=orchestrator._history_block(chat_id),
+    )
+    transcript = f"USER: {raw_text}"
+    malformed_retries = 0
+
+    for step in range(_MAX_STEPS):
+        try:
+            response = router.call(prompt=transcript, system=system,
+                                   tier="frontier", force_json=True)
+        except router.ModelProviderError as exc:
+            raise AgentUnavailable(str(exc)) from exc
+
+        try:
+            decision = json.loads(router.strip_code_fence(response.text))
+            action = decision["action"]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            malformed_retries += 1
+            if malformed_retries > 1:
+                raise AgentUnavailable(f"unparseable decision: {response.text[:200]}")
+            transcript += "\nSYSTEM: that was not valid decision JSON — one JSON object only."
+            continue
+
+        if action == "reply":
+            reply = str(decision.get("text", "")).strip()
+            if not reply:
+                raise AgentUnavailable("empty reply")
+            log_event("agent_reply", chat_id=chat_id, steps=step + 1)
+            return reply
+
+        if action != "call" or decision.get("tool") not in TOOLS:
+            malformed_retries += 1
+            if malformed_retries > 1:
+                raise AgentUnavailable(f"unknown action/tool: {response.text[:200]}")
+            transcript += ("\nSYSTEM: unknown action or tool — use "
+                           "{\"action\": \"reply\"|\"call\"} with a listed tool.")
+            continue
+
+        tool = decision["tool"]
+        args = decision.get("args") or {}
+        log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1)
+        try:
+            result = await TOOLS[tool]["run"](chat_id, args, raw_text)
+        except kernel.ConfirmationRequired:
+            # The standard confirm flow, verbatim: stash the EXACT call;
+            # the owner's yes replays it byte-identical through the kernel.
+            captured_tool, captured_args = tool, dict(args)
+
+            async def confirmed_handler(_a, _t=captured_tool, _ar=captured_args):
+                outcome = await TOOLS[_t]["run"](chat_id, _ar, raw_text)
+                return _confirmed_reply(_t, _ar, outcome)
+
+            call = kernel.SkillCall("agent.action", {"tool": tool}, )
+            return await orchestrator._gated(
+                chat_id, call, confirmed_handler,
+                describe=_describe_call(tool, args))
+        except kernel.KillSwitchEngaged:
+            raise
+        except kernel.ToolFailed as exc:
+            result = {"error": str(exc)}
+        except Exception as exc:  # an executor bug must not brick the chat
+            log_event("agent_tool_error", tool=tool, error=str(exc),
+                      error_type=type(exc).__name__)
+            result = {"error": f"{tool} failed unexpectedly"}
+
+        if tool == "email.unread":
+            # Data boundary: with a cloud tier active, the history records
+            # a placeholder instead of senders/subjects (same rule as the
+            # classifier path).
+            if orchestrator._cloud_tier_in_use():
+                orchestrator._history_redaction.set("[showed the unread email summary]")
+
+        rendered = json.dumps(result, ensure_ascii=False)
+        transcript += f"\nTOOL {tool} -> {rendered[:2000]}"
+
+    raise AgentUnavailable("step cap reached without a reply")
+
+
+def _confirmed_reply(tool: str, args: dict, outcome) -> str:
+    """Post-confirmation replies are templated, not model-composed — the
+    loop ended at the ask; this is the receipt."""
+    if isinstance(outcome, dict) and outcome.get("error"):
+        return f"That failed: {outcome['error']}"
+    if tool == "calendar.create_event":
+        link = outcome.get("link", "") if isinstance(outcome, dict) else ""
+        return f"Event created on your calendar: \"{args.get('title')}\" at {humanize(str(args.get('start')))}\n{link}".strip()
+    if tool == "calendar.delete_event":
+        if isinstance(outcome, dict) and outcome.get("already_gone"):
+            return f"\"{args.get('title') or args.get('event_id')}\" was already gone."
+        return f"Deleted from your calendar: \"{args.get('title') or args.get('event_id')}\""
+    if tool in ("home.turn_on", "home.turn_off"):
+        wanted = "on" if tool.endswith("on") else "off"
+        if isinstance(outcome, dict) and outcome.get("converged") is False:
+            return (f"I sent the {wanted} command, but the device hasn't confirmed the "
+                    f"switch yet — check it in a moment.")
+        name = str(args.get("entity", "")).split(".")[-1].replace("_", " ")
+        return f"Done — the {name} is {wanted}."
+    return f"Done: {tool}."
