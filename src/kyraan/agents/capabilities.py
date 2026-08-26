@@ -27,6 +27,7 @@ def capability_brief() -> str:
     lines.append('- Reminders: create, list, cancel; they arrive as Telegram messages ("remind me to X at 7pm").')
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
+    lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
 
     not_connected = []
 

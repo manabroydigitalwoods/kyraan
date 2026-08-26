@@ -104,6 +104,11 @@ async def _reminders_cancel(chat_id: int, args: dict, raw_text: str):
     return {"cancelled": True, "text": match.text}
 
 
+async def _usage_report(chat_id: int, args: dict, raw_text: str):
+    from kyraan.model_router import usage_report
+    return usage_report.usage_summary(days=int(args.get("days", 7)))
+
+
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents import orchestrator
     return [{"n": i + 1, "fact": fact, "target": target}
@@ -150,6 +155,11 @@ TOOLS = {
         "params": '{"reminder_id": "<id prefix from reminders.list>"}',
         "about": "Cancel one pending reminder by id (list first if unsure).",
         "run": _reminders_cancel,
+    },
+    "usage.report": {
+        "params": '{"days": "<1-31; vague ranges map here: few days/this week=7, month=30. Never ask which>"}',
+        "about": "Kyraan's own AI usage: per-day model calls, input/output/cached tokens, cost in USD, and the live daily budget picture. For 'how much did we spend', 'token usage this week', 'are we near the budget'. days defaults to 7 — call directly, don't ask.",
+        "run": _usage_report,
     },
     "memory.pending_list": {
         "params": "{}",
@@ -204,9 +214,15 @@ doctrine, in order:
    not just the last message; a fragment continues the thought before it.
 2. HAVE — which of the tools and known facts cover it?
 3. NEED — what's missing? If a required detail only the user knows is
-   missing, reply with ONE specific question. Never guess it.
-4. CAN — is it within the tools at all? If not, say so plainly in one
-   line; never invent an ability, never promise a workaround you can't do.
+   missing, reply with ONE specific question. Never guess it. But a
+   detail with a sensible default ("last few days" -> a tool's default
+   window) is NOT missing — use the default instead of asking.
+4. CAN — is it within the tools at all? If a listed tool answers the
+   question, CALL IT NOW — never tell the user to rephrase or to "say"
+   some phrase for something you can do yourself this turn (seen live:
+   a spend question got "Say 'report AI spend'" instead of the report).
+   If no tool covers it, say so plainly in one line; never invent an
+   ability, never promise a workaround you can't do.
 5. HOW — the shortest tool chain that does it: list before delete, read
    before summarize. You see each result before deciding again.
 6. OKAY FOR THE USER — would the outcome surprise or harm them? Prefer
