@@ -50,3 +50,24 @@ async def test_check_photo_uses_the_stash_or_says_expired(monkeypatch):
     monkeypatch.setattr(faces, "recent_photo", lambda chat_id: None)
     with _pytest.raises(kernel.ToolFailed, match="expire after 10 minutes"):
         await loop_tools._faces_check_photo(7, {}, "")
+
+
+async def test_persons_add_is_gated_and_grants_nothing(monkeypatch):
+    """Owner (2026-08-28): friends become CONTACTS — registry rows with
+    no chat and stage none, addressable but access-less."""
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    import pytest as _pytest
+    calls = []
+    monkeypatch.setattr(persons, "list_persons", lambda: [("owner",), ("kamal",)])
+    monkeypatch.setattr(persons, "enroll",
+                        lambda pid, chat, stage, consented:
+                        calls.append((pid, chat, stage, consented)))
+    with _pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._persons_add(7, {"name": "Titu Roy"}, "")
+    dup = await loop_tools._persons_add(7, {"name": "Kamal"}, "")
+    assert dup["added"] is False          # no confirm ask for a no-op
+    with _pytest.raises(kernel.ToolFailed):
+        await loop_tools._persons_add(7, {"name": "owner"}, "")
+    assert calls == []                    # nothing written without a yes

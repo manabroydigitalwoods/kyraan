@@ -663,6 +663,30 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
             for h in hits]
 
 
+async def _persons_add(chat_id: int, args: dict, raw_text: str):
+    """Add a CONTACT to the person registry (owner: "they are my friend
+    so dont we create person and graph memory?", 2026-08-28): a row with
+    no chat and stage none — it grants NOTHING (no access, no messages),
+    it makes the person ADDRESSABLE: document subject links, "show X's
+    documents", graph queries keyed to them."""
+    import asyncio as _aio
+
+    from kyraan.store import persons
+    name = str(args.get("name", "")).strip()
+    if not 2 <= len(name) <= 40:
+        raise kernel.ToolFailed("give the person's name (2-40 chars)")
+    person_id = name.lower().replace(" ", "_").replace("-", "_")
+    if person_id == "owner":
+        raise kernel.ToolFailed("the owner is not a contact")
+    existing = {p[0] for p in persons.list_persons()}
+    if person_id in existing:
+        return {"added": False, "note": f"{name} is already in the registry"}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("persons.add", dict(args))
+    await _aio.to_thread(persons.enroll, person_id, None, "none", None)
+    return {"added": True, "person_id": person_id, "name": name}
+
+
 async def _faces_list(chat_id: int, args: dict, raw_text: str):
     """The COMPLETE truth about stored face data — the model claimed
     "Yes, I have Suman's face data" twice, live, for a face that was
@@ -985,6 +1009,16 @@ TOOLS = {
                   "called it."),
         "run": _documents_rename,
     },
+    "persons.add": {
+        "params": '{"name": "<the person\'s name>"}',
+        "about": ("Add a friend/contact to the person registry so they're "
+                  "trackable: documents can link to them, \"show Kamal's "
+                  "documents\" works, graph facts key to them. Grants NO "
+                  "access of any kind. Use when the user says to track/"
+                  "add/remember a person (\"add Kamal as a person\", "
+                  "\"track my friend Titu\")."),
+        "run": _persons_add,
+    },
     "faces.list": {
         "params": "{}",
         "about": ("Which faces are actually enrolled for recognition — the "
@@ -1186,6 +1220,7 @@ UNDO_MAP = {
         ("rules.cancel", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
     "rules.cancel": lambda a, r, p: None,  # re-creation needs the full spec
+    "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
     "email.draft": lambda a, r, p: (
         ("email.draft_delete", {"draft_id": r["draft_id"]})
         if isinstance(r, dict) and r.get("draft_id") else None),
@@ -1345,6 +1380,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "documents.rename":
         return (f'About to rename the saved document matching '
                 f'"{args.get("query")}" to "{args.get("new_name")}"')
+    if tool == "persons.add":
+        return (f"About to add \"{args.get('name')}\" to the person "
+                "registry as a CONTACT — no chat access, no messages, no "
+                "visibility into anything; it only makes them addressable "
+                "(documents can link to them, facts key to them)")
     if tool == "email.draft":
         target = (f'a REPLY to the email matching "{args.get("reply_to_query")}"'
                   if args.get("reply_to_query")
@@ -1407,6 +1447,12 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "documents.rename" and isinstance(outcome, dict):
         return (f'Renamed the document "{outcome.get("prior")}" → '
                 f'"{outcome.get("now")}" — ask for it by that name anytime.')
+    if tool == "persons.add" and isinstance(outcome, dict):
+        if not outcome.get("added"):
+            return outcome.get("note", "Already in the registry.")
+        return (f'"{outcome.get("name")}" added to the people I track — '
+                "documents and facts can now link to them. (No access of "
+                "any kind was granted.)")
     if tool == "email.draft" and isinstance(outcome, dict):
         return (f'Draft saved in your Gmail (to {outcome.get("to")}, '
                 f'subject "{outcome.get("subject")}") — open Gmail to '
