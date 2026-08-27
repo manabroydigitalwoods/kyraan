@@ -39,6 +39,24 @@ def _owner_private(update: Update) -> bool:
             and getattr(update.effective_chat, "type", None) == "private")
 
 
+def _authorized(update: Update) -> str | None:
+    """P3.5a: who this update is from — 'owner' (env check, unchanged,
+    never touches a store), an enrolled person id at stage >=
+    read_mostly in a PRIVATE chat, or None (rejected exactly as before
+    Phase 3). Media/voice/location handlers stay owner-only until
+    P3.5b/c scope tools and visibility for other stages."""
+    if _owner_private(update):
+        return "owner"
+    if (update.effective_chat is None
+            or getattr(update.effective_chat, "type", None) != "private"
+            or update.effective_user is None
+            or update.effective_user.id != update.effective_chat.id):
+        return None
+    from kyraan.store import persons
+    row = persons.person_for_chat(update.effective_chat.id)
+    return row[0] if row else None
+
+
 def _plain(text: str) -> str:
     """Models emit markdown bold/italic; replies are sent without
     parse_mode (entity-parse errors on unbalanced markers would eat whole
@@ -75,7 +93,7 @@ def _confirm_keyboard(chat_id: int) -> InlineKeyboardMarkup | None:
 
 async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    if not _owner_private(update):
+    if _authorized(update) is None:
         await query.answer()
         return
     await query.answer()
@@ -130,9 +148,16 @@ def _lock_for(chat_id: int) -> asyncio.Lock:
 
 
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not _owner_private(update):
-        logger.warning("Ignored non-owner or non-private update (user=%s chat=%s)",
+    person = _authorized(update)
+    if person is None:
+        logger.warning("Ignored unauthorized update (user=%s chat=%s)",
                        update.effective_user, update.effective_chat)
+        return
+    if person != "owner":
+        # An enrolled person gets the TEXT pipeline; face enrollment is
+        # a biometric write and stays an owner ceremony (P3.5a scope —
+        # tool/visibility scoping per stage lands in P3.5b/c).
+        await _ingest(update, context, update.message.text or "")
         return
 
     from kyraan.agents import faces, orchestrator
