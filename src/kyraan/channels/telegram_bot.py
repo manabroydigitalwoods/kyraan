@@ -93,7 +93,7 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # action while this old button waited on the lock — and the stale Yes
     # would then confirm the NEWER action.
     async with _lock_for(chat_id):
-        if nonce != orchestrator._confirmation_nonce.get(chat_id, ""):
+        if nonce != orchestrator.current_confirmation_nonce(chat_id):
             await context.bot.send_message(
                 chat_id=chat_id,
                 text="That button belongs to an earlier ask and is no longer "
