@@ -65,9 +65,10 @@ def _upsert(conn, entry: dict, persons: set) -> None:
     conn.execute(
         """INSERT INTO fact (id, legacy_id, subject, subject_reviewed, owner,
                              content, kind, flags, era, sphere, visibility,
-                             exposure, active, created_at, source_msg)
+                             exposure, active, created_at, source_msg,
+                             importance, term, target)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                   'owner', 'cloud_ok', %s, %s, %s)
+                   'owner', 'cloud_ok', %s, %s, %s, %s, %s, %s)
            ON CONFLICT (id) DO UPDATE SET
                content = EXCLUDED.content,
                kind = EXCLUDED.kind,
@@ -75,6 +76,9 @@ def _upsert(conn, entry: dict, persons: set) -> None:
                era = EXCLUDED.era,
                sphere = EXCLUDED.sphere,
                active = EXCLUDED.active,
+               importance = EXCLUDED.importance,
+               term = EXCLUDED.term,
+               target = EXCLUDED.target,
                -- an owner-reviewed subject is never clobbered by a resync
                subject = CASE WHEN fact.subject_reviewed THEN fact.subject
                               ELSE EXCLUDED.subject END,
@@ -84,7 +88,9 @@ def _upsert(conn, entry: dict, persons: set) -> None:
          entry["content"], entry.get("kind", "other"),
          sorted(entry.get("flags") or []),
          entry.get("era"), entry.get("sphere"), bool(entry.get("active")),
-         created, str(entry.get("source", ""))[:500]))
+         created, str(entry.get("source", ""))[:500],
+         entry.get("importance", "normal"), entry.get("term", "long"),
+         entry.get("target")))
 
 
 def sync_entries(conn, entries: list) -> None:

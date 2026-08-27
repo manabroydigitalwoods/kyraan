@@ -212,11 +212,55 @@ def active_entries() -> list:
     return [e for e in entries if e["active"]]
 
 
+def _pg_candidates(message: str) -> list | None:
+    """P3.2b: the candidate pool from Postgres — safety/critical/identity
+    facts, FTS matches on the message, and the newest 100 (so zero-overlap
+    facts can still fill spare budget exactly as file mode allows). Only
+    RETRIEVAL changes; ranking below is the same code. Returns None on
+    any failure so the caller falls back to files."""
+    import re as _re
+    from kyraan.store import pg as _pg
+    terms = [w for w in _words(message) if _re.fullmatch(r"[a-z0-9]+", w)]
+    tsquery = " | ".join(terms)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=_SHORT_TERM_DAYS)
+    try:
+        with _pg.connection() as conn:
+            rows = conn.execute(
+                """SELECT legacy_id, content, target, kind, term, importance,
+                          flags, era, sphere, created_at
+                   FROM fact
+                   WHERE active AND owner = 'owner'
+                         AND NOT (term = 'short' AND created_at < %s)
+                         AND (flags && ARRAY['health','safety','emergency','danger']
+                              OR importance = 'critical' OR kind = 'identity'
+                              OR (%s <> '' AND to_tsvector('english', content)
+                                              @@ to_tsquery('english', %s))
+                              OR id IN (SELECT id FROM fact WHERE active
+                                        ORDER BY created_at DESC LIMIT 100))
+                   ORDER BY created_at, legacy_id""",
+                (cutoff, tsquery, tsquery or "x")).fetchall()
+    except Exception as exc:
+        log_event("memory_backend_fallback", backend="pg",
+                  reason=str(exc)[:200])
+        return None
+    return [{"id": r[0], "content": r[1], "target": r[2], "kind": r[3],
+             "term": r[4], "importance": r[5], "flags": list(r[6] or []),
+             "era": r[7], "sphere": r[8], "created": r[9].isoformat(),
+             "active": True, "superseded_by": None} for r in rows]
+
+
 def build_context(message: str = "", budget_chars: int = 3500) -> str:
     """The memory block for a prompt: safety-critical and identity facts
     ALWAYS included; the rest ranked by relevance to the current message,
-    then importance, then recency — filled to budget, never blind-cut."""
-    entries = active_entries()
+    then importance, then recency — filled to budget, never blind-cut.
+    KYRAAN_MEMORY_BACKEND=pg swaps candidate RETRIEVAL to Postgres
+    (P3.2b); the ranking/discretion code below is shared verbatim."""
+    import os as _os
+    entries = None
+    if _os.environ.get("KYRAAN_MEMORY_BACKEND", "files").strip().lower() == "pg":
+        entries = _pg_candidates(message)
+    if entries is None:
+        entries = active_entries()
     if not entries:
         return ""
     message_words = _words(message)

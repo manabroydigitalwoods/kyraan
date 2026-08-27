@@ -44,6 +44,8 @@ def test_schema_v1_tables_exist_with_audit_columns():
             "SELECT column_name FROM information_schema.columns WHERE table_name='fact'")}
         # the design-audit columns are the point of schema v2
         assert {"legacy_id", "subject_reviewed", "exposure", "visibility"} <= cols
+        # 002: the read path's ranking columns (P3.2b)
+        assert {"importance", "term", "target"} <= cols
         # triple: one row per supporting fact (no bare head/relation/tail unique)
         uniques = [r[0] for r in conn.execute(
             "SELECT indexdef FROM pg_indexes WHERE tablename='triple'")]
