@@ -144,3 +144,26 @@ def test_promote_hook_fires_extraction(monkeypatch):
     fid = engine.add_fact("Sister's name is Mina", "people/mina.md", "test")
     assert done.wait(timeout=5), "the promote hook never ran"
     assert seen == {"fact_id": fid, "content": "Sister's name is Mina"}
+
+
+def test_person_names_normalize_to_registry_ids(monkeypatch):
+    """The resolver joins graph nodes to the person hub: every edge
+    about a registered person lands on THE person id; an alias edge
+    that collapses to a self-loop is dropped (the alias table holds
+    that knowledge now); unknown names stay free-form."""
+    from kyraan.store import persons, triples
+    monkeypatch.setattr(persons, "name_map",
+                        lambda: {"kamal": "kamal", "maan": "owner",
+                                 "owner": "owner", "titu": "titu_roy"})
+    raw = ('{"triples": ['
+           '{"head": "Kamal", "relation": "friend_of", "tail": "owner"}, '
+           '{"head": "maan", "relation": "named", "tail": "owner"}, '
+           '{"head": "owner", "relation": "has_pet", "tail": "tomi"}]}')
+    from kyraan.model_router import router
+    monkeypatch.setattr(router, "call",
+                        lambda **kw: type("R", (), {"text": raw})())
+    clean = triples.extract_triples("some fact")
+    assert ("kamal", "friend_of", "owner") in clean
+    assert ("owner", "has_pet", "tomi") in clean       # free-form kept
+    assert all(h != t for h, t, *_ in [(h, t) for h, _, t in clean])
+    assert not any(h == "maan" for h, _, t in clean)   # self-loop dropped

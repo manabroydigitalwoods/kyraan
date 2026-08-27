@@ -24,6 +24,52 @@ _cache: dict = {}
 _CACHE_TTL_S = 60
 
 
+def name_map() -> dict:
+    """Every name that resolves to a person: {'kamal': 'kamal', 'titu':
+    'titu_roy', 'maan': 'owner', 'titu roy': 'titu_roy', ...} — ids,
+    ids-with-spaces, and stored aliases, all lowercased. TTL-cached like
+    chat resolution; fail-open to empty (resolution is enrichment, never
+    a gate)."""
+    now = time.monotonic()
+    cached = _cache.get("__name_map__")
+    if cached and now - cached[0] < _CACHE_TTL_S:
+        return cached[1]
+    mapping: dict = {}
+    try:
+        with pg.connection() as conn:
+            rows = conn.execute("SELECT id, aliases FROM person").fetchall()
+        for pid, aliases in rows:
+            mapping[pid] = pid
+            mapping[pid.replace("_", " ")] = pid
+            for alias in aliases or []:
+                mapping[alias.strip().lower()] = pid
+    except Exception:
+        return {}
+    _cache["__name_map__"] = (now, mapping)
+    return mapping
+
+
+def resolve(name: str) -> str | None:
+    """The one deterministic name -> person-id join, or None for a name
+    the registry doesn't know (free-form graph nodes stay free-form)."""
+    return name_map().get(str(name or "").strip().lower().replace("-", "_")) \
+        or name_map().get(str(name or "").strip().lower().replace("_", " "))
+
+
+def add_alias(person_id: str, alias: str) -> None:
+    alias = alias.strip().lower()
+    if not alias:
+        return
+    with pg.connection() as conn:
+        conn.execute(
+            """UPDATE person SET aliases = (
+                   SELECT coalesce(array_agg(DISTINCT a), '{}')
+                   FROM unnest(aliases || %s::text[]) a)
+               WHERE id = %s""", ([alias], person_id))
+        conn.commit()
+    _cache.pop("__name_map__", None)
+
+
 def unreviewed_active_facts() -> int:
     with pg.connection() as conn:
         count, = conn.execute(

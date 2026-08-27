@@ -72,8 +72,21 @@ def extract_triples(content: str, exposure: str = "cloud_ok") -> list:
         head = _slug(row.get("head", ""))
         relation = _slug(row.get("relation", ""))
         tail = _slug(row.get("tail", ""))
+        # Name resolution (2026-08-28): a head/tail naming a REGISTERED
+        # person (or alias) stores the registry id — every edge about
+        # Kamal lands on THE kamal node, "maan" collapses into owner.
+        # Unknown names stay free-form (places, pets, strangers).
+        try:
+            from kyraan.store import persons
+            head = persons.resolve(head) or head
+            tail = persons.resolve(tail) or tail
+        except Exception:
+            pass
         # Deterministic sanity, model-independent: a tail restating the
-        # relation ("started_smoking"→"smoking") or a self-loop is noise.
+        # relation ("started_smoking"→"smoking") or a self-loop is noise
+        # (alias collapse can CREATE self-loops — "maan named owner"
+        # becomes owner→owner: correctly dropped, the alias table is
+        # where that knowledge lives now).
         if not (head and relation and tail) or head == tail:
             continue
         if tail in relation or relation in tail:

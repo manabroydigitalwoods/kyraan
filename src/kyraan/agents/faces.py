@@ -136,6 +136,17 @@ def available() -> bool:
 
 
 def _slug(name: str) -> str:
+    """Template file key: the REGISTRY person id when the name resolves
+    (so "Titu"/"Titu Roy"/"titu-roy" are one template, formally joined
+    to the person row), a plain slug otherwise — enrollment must never
+    require registration first."""
+    try:
+        from kyraan.store import persons
+        resolved = persons.resolve(name)
+        if resolved:
+            return resolved
+    except Exception:
+        pass
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "face"
 
 

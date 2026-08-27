@@ -169,8 +169,10 @@ def test_rename_undo_swaps_names_back():
 
 @pytest.fixture
 def _household(monkeypatch):
-    monkeypatch.setattr(documents, "_registry_ids",
-                        lambda: ["owner", "kiaan", "ruma"])
+    monkeypatch.setattr(documents, "_name_map",
+                        lambda: {"owner": "owner", "kiaan": "kiaan",
+                                 "ruma": "ruma", "titu": "titu_roy",
+                                 "titu roy": "titu_roy"})
 
 
 def test_subjects_from_name_is_possessive_only(_household):
@@ -239,3 +241,11 @@ async def test_documents_read_returns_full_text(doc_db):
     with _mock.patch.object(documents, "search", lambda c, q, k=1: []):
         empty = await loop_tools._documents_read(7, {"query": "nothing"}, "")
     assert empty["found"] == 0
+
+
+def test_alias_names_resolve_to_subjects(_household):
+    """The resolver joins names people actually type: "Titu's invoice"
+    links titu_roy even though the id never appears in the title."""
+    assert documents.subjects_from_name("Titu's electricity invoice") \
+        == ["titu_roy"]
+    assert documents.valid_subjects(["Titu Roy"]) == ["titu_roy"]

@@ -53,45 +53,53 @@ def _chunks(text: str) -> list:
     return pieces or [text.strip()]
 
 
-def _registry_ids() -> list:
+def _name_map() -> dict:
+    """Every known name/alias -> person id (the persons resolver)."""
     try:
         from kyraan.store import persons
-        return [p[0] for p in persons.list_persons()]
+        return persons.name_map()
     except Exception:
-        return []
+        return {}
+
+
+def _registry_ids() -> list:
+    return sorted(set(_name_map().values()))
 
 
 def valid_subjects(candidates) -> list:
-    """Only ids from the person registry are ever stored as a document's
-    subjects — the model may PROPOSE them, the registry decides (house
-    pattern). Owner is never a subject: his docs are his by default."""
+    """Only persons the registry RESOLVES are ever stored as a document's
+    subjects — the model may PROPOSE names, the resolver decides (house
+    pattern; aliases count: "Titu" -> titu_roy). Owner is never a
+    subject: his docs are his by default."""
     if isinstance(candidates, str):
         candidates = [candidates]
-    ids = set(_registry_ids())
+    mapping = _name_map()
     out = []
     for candidate in candidates or []:
-        wanted = str(candidate or "").strip().lower().replace(" ", "_")
-        if wanted and wanted != "owner" and wanted in ids and wanted not in out:
-            out.append(wanted)
+        wanted = str(candidate or "").strip().lower()
+        pid = mapping.get(wanted) or mapping.get(wanted.replace(" ", "_"))
+        if pid and pid != "owner" and pid not in out:
+            out.append(pid)
     return out
 
 
 def subjects_from_name(title: str) -> list:
-    """Deterministic subjects from a human title: every enrolled person
-    named possessively ("Kiaan's vaccination card", "Ruma and Kiaan's
-    policy") or as "for <name>". Plain mentions don't count — a shop
-    called "Ruma Stores" must not tag the doc as being about Ruma."""
+    """Deterministic subjects from a human title: every known person
+    NAME OR ALIAS used possessively ("Kiaan's vaccination card", "Titu's
+    invoice"), with "and", or as "for/about <name>". Plain mentions
+    don't count — a shop called "Ruma Stores" must not tag the doc as
+    being about Ruma."""
     import re
     low = str(title or "").lower()
     out = []
-    for pid in _registry_ids():
-        if pid == "owner":
+    for name, pid in _name_map().items():
+        if pid == "owner" or pid in out:
             continue
-        name = re.escape(pid.replace("_", " "))
-        if re.search(rf"\b{name}(?:[’']s\b|\s+and\b)"
-                     rf"|\b(?:for|about) {name}\b", low):
+        pattern = re.escape(name)
+        if re.search(rf"\b{pattern}(?:[’']s\b|\s+and\b)"
+                     rf"|\b(?:for|about) {pattern}\b", low):
             out.append(pid)
-    return out
+    return sorted(out)
 
 
 def ingest(chat_id: int, kind: str, text: str, caption: str = "",
