@@ -73,11 +73,20 @@ _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 # with no tool call, and reminder.list honestly showed nothing). Matched
 # against the draft only when nothing was written; one forced re-decide.
 _FALSE_SUCCESS_RE = re.compile(
-    r"\b(?:i(?:'|’)?ve (?:set|created|added|scheduled|cancell?ed)"
-    r"|i(?:'|’)?ll remind you"
+    r"\b(?:i(?:'|’)?ve (?:set|created|added|scheduled|cancell?ed|noted|saved|remembered)"
     r"|reminder (?:is |has been )?(?:set|created|scheduled)"
     r"|(?:event|task) (?:is |has been |was )?(?:created|scheduled|added|cancell?ed)"
-    r"|i (?:have |just )?(?:set|created|scheduled|added|cancell?ed) (?:a|the|your))\b",
+    r"|i (?:have |just )?(?:set|created|scheduled|added|cancell?ed|noted|saved) (?:a|the|your|that))\b",
+    re.IGNORECASE)
+# Promising the action instead of doing it is the same failure in the
+# future tense ("I'll set a reminder... Is that correct?" — degraded
+# run 2), and narrating a lookup ("Let me check your reminders") is its
+# read-side twin: both end the turn with nothing done.
+_FALSE_PROMISE_RE = re.compile(
+    r"\bi(?:'|’)?ll (?:set|create|add|schedule|cancel|remind you|note|save)\b",
+    re.IGNORECASE)
+_NARRATION_RE = re.compile(
+    r"\A(?:sure\W{0,3}|ok(?:ay)?\W{0,3})?let me (?:check|look|see|get|fetch|pull)\b",
     re.IGNORECASE)
 
 
@@ -331,7 +340,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     # homework); the third answer stands either way
     executed_tool = False
     wrote_this_turn = False  # a WRITE tool ran and did not error
-    false_success_corrected = False
+    false_success_corrections = 0  # up to two forced re-decides
     web_tainted = False  # web text entered this turn — no more write tools
 
     for step in range(_MAX_STEPS):
@@ -393,21 +402,35 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
                     "do, a brief acknowledgment IS the right reply — never "
                     "answer a question they didn't ask instead. Decide again.")
                 continue
-            if (not false_success_corrected and not wrote_this_turn
-                    and not read_only and _FALSE_SUCCESS_RE.search(reply)):
-                # P3.7a false-success rail: the draft claims a write that
-                # never ran. One forced re-decide — the honest paths out
-                # are CALLING the tool or admitting nothing happened.
-                false_success_corrected = True
+            violation = None
+            if not read_only and not wrote_this_turn:
+                if _FALSE_SUCCESS_RE.search(reply):
+                    violation = "CLAIMS an action was done"
+                elif _FALSE_PROMISE_RE.search(reply):
+                    violation = "PROMISES an action instead of doing it"
+            if (violation is None and not executed_tool
+                    and _NARRATION_RE.search(reply)):
+                violation = "NARRATES checking instead of calling the tool"
+            if violation and false_success_corrections < 2:
+                # P3.7a false-success rail: no write ran, yet the draft
+                # claims/promises/narrates one. The honest exits are
+                # CALLING the tool or admitting nothing happened.
+                false_success_corrections += 1
                 log_event("agent_false_success_corrected", chat_id=chat_id,
-                          tier=tier, draft=reply[:150])
+                          tier=tier, violation=violation, draft=reply[:150])
                 transcript += (
-                    "\nSYSTEM: STOP — your draft says an action was done "
-                    f"(\"{reply[:120]}\") but NO write tool ran this turn. "
-                    "Claiming an action you did not perform is the worst "
-                    "failure this assistant can make. Either CALL the tool "
-                    "that actually does it NOW, or reply honestly that it "
-                    "has not been done. Decide again.")
+                    f"\nSYSTEM: STOP — your draft {violation} "
+                    f"(\"{reply[:120]}\") but NO such tool ran this turn. "
+                    "Claiming or promising an action you did not perform is "
+                    "the worst failure this assistant can make. Either CALL "
+                    "the tool that actually does it NOW and then answer "
+                    "from its result, or reply honestly that it has not "
+                    "been done. Memory is different: saving happens "
+                    "AUTOMATICALLY after your reply — never claim to have "
+                    "noted or saved anything; a plain acknowledgment of "
+                    "what the user said is the correct reply. Never end "
+                    "with a verification question like 'Is that correct?' "
+                    "— act, then state what you did. Decide again.")
                 continue
             if executed_tool:
                 # This turn was a command (a tool ran) — commands are

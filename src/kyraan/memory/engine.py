@@ -499,7 +499,37 @@ def forget(entry_ids: list) -> list:
             review_scaling.on_forgotten(forgotten)
         except Exception as exc:
             log_event("review_scaling_check_failed", reason=str(exc)[:120])
+        _purge_matching_pending(forgotten)
     return forgotten
+
+
+def _purge_matching_pending(forgotten_contents: list) -> None:
+    """P3.7a resurrection channel closed: a PENDING proposal restating a
+    forgotten fact re-enters local prompts through the pending block —
+    found live when an eval fact 'resurrected' from the review queue.
+    Forgetting a fact drops queued proposals that state it (word
+    containment / 2+ overlap, the find_matches rule). Dispute notices
+    are resolutions, not restatements — untouched."""
+    try:
+        forgotten_words = [w for w in (_words(c) for c in forgotten_contents) if w]
+        for path in store.PENDING_DIR.glob("*.md"):
+            text = path.read_text()
+            if "\ndispute:" in text:
+                continue
+            _, _, rest = text.partition("---\n")
+            _, _, body = rest.partition("---\n")
+            body_words = _words(body.strip().lstrip("- ").strip())
+            if not body_words:
+                continue
+            for words in forgotten_words:
+                if (body_words <= words or words <= body_words
+                        or len(body_words & words) >= 2):
+                    path.unlink(missing_ok=True)
+                    log_event("memory_pending_purged_by_forget",
+                              proposal=path.name)
+                    break
+    except Exception as exc:
+        log_event("pending_purge_failed", reason=str(exc)[:120])
 
 
 def consolidate(keep_id: str, dup_ids: list) -> list:

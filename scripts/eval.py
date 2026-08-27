@@ -130,6 +130,44 @@ _SEED_EPISODE = ("user: by the way my favourite eval fruit is dragonfruit\n"
                  "assistant: Noted — dragonfruit it is.")
 
 
+def _purge_eval_reminders() -> None:
+    """Remove chat-7900 reminders THROUGH the mirror: post-cutover reads
+    come from PG, so a bare file rewrite left ghost rows that made
+    reminder.create honestly say 'Already set' (degraded run 1)."""
+    records = [r for r in json.loads(store.REMINDERS_PATH.read_text())
+               if r["chat_id"] != CHAT] if store.REMINDERS_PATH.exists() else []
+    store.REMINDERS_PATH.write_text(json.dumps(records, indent=2))
+    from kyraan.store import promises
+    promises.mirror_reminders(records)
+
+
+def _fresh_eval_state() -> None:
+    """Each run starts with a FRESH conversation — Redis made session
+    state survive processes (P3.4a), so the pre-P3.4 assumption that a
+    new eval process means a clean window stopped holding: a prior run's
+    replies leaked into prompts (degraded run 1 resurfaced 'dragonfruit'
+    from its own failing reply)."""
+    _purge_eval_reminders()
+    # Eval-artifact proposals from killed/older runs poison the pending
+    # block of LOCAL prompts (found live: 'dragonfruit' resurrected from
+    # the review queue). Real owner proposals never match these markers.
+    for path in memory_store.PENDING_DIR.glob("*.md"):
+        text = path.read_text().lower()
+        if any(marker in text for marker in
+               ("eval snack", "eval fruit", "murukku", "dragonfruit",
+                "water the plants")):
+            path.unlink()
+    orchestrator._history[CHAT].clear()
+    orchestrator._summary_backlog[CHAT] = []
+    from kyraan.control_plane.filelock import atomic_write_text, locked
+    from kyraan.agents import session
+    with locked(session._summaries_path()):
+        summaries = session._load_summaries()
+        if summaries.pop(str(CHAT), None) is not None:
+            atomic_write_text(session._summaries_path(),
+                              json.dumps(summaries, ensure_ascii=False, indent=1))
+
+
 def _rig_resurrection_gate() -> None:
     """P3.3d: seed a fact + an old episode about it, verify recall finds
     the episode, then FORGET the fact through the real engine path (file
@@ -187,6 +225,7 @@ async def main() -> int:
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None,
                    send_fn=None, only_chat=CHAT)
     kill_switch.disengage()
+    _fresh_eval_state()
     _rig_resurrection_gate()
     pre_proposals = {p.name for p in memory_store.PENDING_DIR.glob("*")}
 
@@ -217,8 +256,7 @@ async def main() -> int:
             failures.append((case.id, reply[:200]))
 
     # cleanup: this chat's reminders + proposals created by this run
-    records = [r for r in json.loads(store.REMINDERS_PATH.read_text()) if r["chat_id"] != CHAT]
-    store.REMINDERS_PATH.write_text(json.dumps(records, indent=2))
+    _purge_eval_reminders()
     for p in memory_store.PENDING_DIR.glob("*"):
         if p.name not in pre_proposals:
             p.unlink()

@@ -320,6 +320,14 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
             return ("\n\n⚠️ I couldn't distill a durable fact from that to queue "
                     "for review — state it directly, like \"remember that Aarav "
                     "was born in October 2025\".")
+        if "?" not in raw_text:
+            # P3.7a: a STATEMENT that extracted nothing may be a fact we
+            # already hold (the model skips what the conversation already
+            # knows — qwen especially). Deterministic check, honest note:
+            # silence read as "not saved" in the degraded eval.
+            from kyraan.memory import engine as _engine
+            if _engine.find_matches(raw_text):
+                return "\n\n📝 I already have that saved in memory."
         return ""
     facts = "; ".join(f.lstrip("- ").strip() for f in queued)
     return f"\n\n📝 Noted for review: {facts}"

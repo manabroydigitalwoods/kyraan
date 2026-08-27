@@ -109,3 +109,44 @@ async def test_cheap_fallback_marks_the_turn_degraded(monkeypatch):
     reply = await orchestrator._dispatch(940_001, "what's the capital of France?")
     assert reply == "from cheap"
     assert seen["degraded"] is True
+
+async def test_promise_and_narration_are_corrected(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "reply", "consider": "…",
+         "text": "I'll set a reminder to call your mom at 9:00 PM. Is that correct?"},
+        {"action": "reply", "consider": "…",
+         "text": "Let me check your pending reminders for you."},
+        {"action": "reply", "consider": "honest now",
+         "text": "I haven't set anything yet — say the word and I will."},
+    ])
+    events = []
+    monkeypatch.setattr(agent_loop, "log_event",
+                        lambda name, **kw: events.append((name, kw.get("violation", ""))))
+    reply = await agent_loop.run(5, "set a reminder for mom", tier="cheap")
+    assert "haven't set anything" in reply
+    rails = [v for n, v in events if n == "agent_false_success_corrected"]
+    assert len(rails) == 2 and "PROMISES" in rails[0] and "NARRATES" in rails[1]
+
+
+async def test_memory_claim_is_corrected(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "reply", "consider": "…",
+         "text": "I've noted that your favourite snack is murukku. Is that correct?"},
+        {"action": "reply", "consider": "plain ack", "text": "Murukku — nice choice!"},
+    ])
+    reply = await agent_loop.run(5, "my favourite snack is murukku", tier="cheap")
+    assert reply == "Murukku — nice choice!"
+
+
+def test_forget_purges_matching_pending_proposals():
+    from kyraan.memory import engine
+    from kyraan.memory import store as memory_store
+    fid = engine.add_fact("Favourite fruit is dragonfruit", "preferences/f.md", "t")
+    memory_store.propose_fact("preferences/f.md",
+                              "Favourite fruit is dragonfruit", "restated")
+    memory_store.propose_fact("preferences/g.md",
+                              "Morning walk at 6am daily", "unrelated")
+    engine.forget([fid])
+    bodies = [p.read_text() for p in memory_store.PENDING_DIR.glob("*.md")]
+    assert not any("dragonfruit" in b for b in bodies)   # purged with the fact
+    assert any("Morning walk" in b for b in bodies)      # unrelated survives
