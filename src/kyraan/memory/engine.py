@@ -300,7 +300,10 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
     (P3.2b); the ranking/discretion code below is shared verbatim."""
     import os as _os
     entries = None
-    if _os.environ.get("KYRAAN_MEMORY_BACKEND", "files").strip().lower() == "pg":
+    # P3.2c cutover (2026-08-27, owner waived the remaining soak days):
+    # pg is the DEFAULT read path; =files is the rollback lever. Writes
+    # stay dual and files remain the authority indefinitely.
+    if _os.environ.get("KYRAAN_MEMORY_BACKEND", "pg").strip().lower() == "pg":
         entries = _pg_candidates(message)
     if entries is None:
         entries = active_entries()

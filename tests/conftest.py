@@ -40,18 +40,23 @@ def _classifier_path_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_fact_mirroring(monkeypatch):
+def _no_fact_mirroring(monkeypatch, tmp_path):
     """The memory tree is isolated below, but the P3.2a/P3.2d mirrors
     would still write into the LIVE Postgres container — off by default;
     the pg-marked sync tests re-enable them and clean up their own rows."""
-    from kyraan.store import facts, promises, triples
+    from kyraan.store import facts, promises, sync_state, triples
     monkeypatch.setattr(facts, "MIRROR_ENABLED", False)
     monkeypatch.setattr(promises, "MIRROR_ENABLED", False)
     monkeypatch.setattr(triples, "EXTRACT_ENABLED", False)
-    # And the soak flags: a dev shell that sourced .env must not flip
-    # test backends to pg.
-    monkeypatch.delenv("KYRAAN_MEMORY_BACKEND", raising=False)
-    monkeypatch.delenv("KYRAAN_PROMISES_BACKEND", raising=False)
+    # sync_state persists to data/pg_sync_state.json — a pg-down TEST
+    # wrote a real stale mark and live reads then refused PG for hours
+    # (found live 2026-08-27: 73 fallback events, all test pollution).
+    monkeypatch.setattr(sync_state, "STATE_PATH",
+                        tmp_path / "pg_sync_state.json")
+    # Post-cutover the CODE default is pg — unit tests pin files
+    # explicitly (delenv alone would now mean pg).
+    monkeypatch.setenv("KYRAAN_MEMORY_BACKEND", "files")
+    monkeypatch.setenv("KYRAAN_PROMISES_BACKEND", "files")
 
 
 @pytest.fixture(autouse=True)
@@ -89,3 +94,8 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")
     from kyraan.agents import faces
     monkeypatch.setattr(faces, "FACES_DIR", tmp_path / "faces")
+    # The PG sync-state file is shared by four stores AND written by the
+    # live bot on this same machine — an unisolated test run contends
+    # with it over a real file lock. Same rule as every other store.
+    from kyraan.store import sync_state
+    monkeypatch.setattr(sync_state, "STATE_PATH", tmp_path / "pg_sync_state.json")

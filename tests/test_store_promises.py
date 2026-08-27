@@ -61,7 +61,9 @@ def backend(request, monkeypatch):
         yield "pg"
         pg.reset_pool_for_tests()  # next test rebuilds on the real DSN
     else:
-        monkeypatch.delenv("KYRAAN_PROMISES_BACKEND", raising=False)
+        # post-cutover the code default is pg — files needs the explicit
+        # rollback lever
+        monkeypatch.setenv("KYRAAN_PROMISES_BACKEND", "files")
         yield "files"
 
 

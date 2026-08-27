@@ -8,8 +8,8 @@ def _seed_file_fact():
     return engine.add_fact("Likes filter coffee", "preferences/coffee.md", "test")
 
 
-def test_default_backend_never_touches_pg(monkeypatch):
-    monkeypatch.delenv("KYRAAN_MEMORY_BACKEND", raising=False)
+def test_files_flag_never_touches_pg(monkeypatch):
+    monkeypatch.setenv("KYRAAN_MEMORY_BACKEND", "files")  # the rollback lever
 
     def boom(message):
         raise AssertionError("files mode must not call _pg_candidates")
@@ -17,6 +17,17 @@ def test_default_backend_never_touches_pg(monkeypatch):
     monkeypatch.setattr(engine, "_pg_candidates", boom)
     _seed_file_fact()
     assert "filter coffee" in engine.build_context("coffee?")
+
+
+def test_unset_env_defaults_to_pg(monkeypatch):
+    # P3.2c cutover: pg is the default read path
+    monkeypatch.delenv("KYRAAN_MEMORY_BACKEND", raising=False)
+    called = []
+    monkeypatch.setattr(engine, "_pg_candidates",
+                        lambda message: called.append(message) or None)
+    _seed_file_fact()
+    engine.build_context("coffee?")
+    assert called == ["coffee?"]
 
 
 def test_pg_backend_uses_pg_candidates(monkeypatch):

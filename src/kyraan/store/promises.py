@@ -36,8 +36,11 @@ _DEFAULTS = {"sent": False, "claimed_at": "", "takeover": False, "repeat": "",
 
 
 def backend() -> str:
+    # P3.2d cutover (2026-08-27, owner waived the remaining soak days):
+    # pg is the DEFAULT read path; =files is the rollback lever. Writes
+    # stay dual and files remain the authority indefinitely.
     import os
-    return os.environ.get("KYRAAN_PROMISES_BACKEND", "files").strip().lower()
+    return os.environ.get("KYRAAN_PROMISES_BACKEND", "pg").strip().lower()
 
 
 def _guarded_mirror(kind: str, sync) -> bool:
