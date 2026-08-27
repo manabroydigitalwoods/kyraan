@@ -462,6 +462,11 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # confirm gate still stands (seen live 2026-08-26 23:08: the
         # natural caption described the photo instead of enrolling).
         enroll_name = faces.enroll_request(caption) or faces.enroll_from_text(caption)
+        if enroll_name is None and faces.self_claim(caption):
+            # "its me": the owner asserting identity IS enrollment
+            # intent for their own face — confirm gate still owns the
+            # biometric write, so a "no" costs nothing.
+            enroll_name = faces.owner_display_name()
         if enroll_name is None and not caption.strip():
             # The bot's own last reply may have ASKED for this photo
             # ("send a photo to save Kamal's face") — a captionless photo

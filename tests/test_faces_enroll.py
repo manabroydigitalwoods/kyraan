@@ -126,3 +126,16 @@ def test_completed_undo_matrix_shapes():
     # unobserved prior => honestly not undoable
     assert UNDO_MAP["calendar.delete_event"]({}, {}, None) is None
     assert UNDO_MAP["memory.forget"]({}, {}, None) is None
+
+
+def test_self_claim_reads_its_me_variants(monkeypatch):
+    from kyraan.agents import faces
+    for yes in ("its me", "It's me", "this is me", "that's me!", "its me."):
+        assert faces.self_claim(yes)
+    for no in ("its me and kamal", "who is this?", "me at the beach", ""):
+        assert not faces.self_claim(no)
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "name_map",
+                        lambda: {"owner": "owner", "maan": "owner",
+                                 "manab roy": "owner", "kamal": "kamal"})
+    assert faces.owner_display_name() == "Manab Roy"

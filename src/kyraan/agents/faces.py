@@ -55,6 +55,32 @@ def enroll_request(caption: str):
     return m.group(1).strip() if m else None
 
 
+_SELF_RE = re.compile(
+    r"^\s*(?:it'?s|this is|that'?s)\s+me\s*[.!]?\s*$", re.IGNORECASE)
+
+
+def self_claim(caption: str) -> bool:
+    """A photo captioned "its me" is the OWNER asserting identity — the
+    natural moment to enroll their face (live 2026-08-28 01:58: the
+    selfie got a scene description; the owner's own face had never been
+    enrolled, so Kyraan could not recognize its own owner)."""
+    return bool(_SELF_RE.match(caption or ""))
+
+
+def owner_display_name() -> str:
+    """The owner's human name from their registry aliases (the tracked
+    code never hardcodes personal names) — longest alias, title-cased."""
+    try:
+        from kyraan.store import persons
+        aliases = [n for n, pid in persons.name_map().items()
+                   if pid == "owner" and n != "owner"]
+        if aliases:
+            return max(aliases, key=len).title()
+    except Exception:
+        pass
+    return "Me"
+
+
 _INVITE_RE = re.compile(
     r"(?:save|remember|store)\s+([A-Z][\w .'-]{1,30}?)[’']s\s+face",
     re.IGNORECASE)
