@@ -15,17 +15,134 @@ from kyraan.control_plane import logging_setup
 from kyraan.control_plane.logging_setup import log_chat, log_event
 from kyraan.model_router import router
 
-# Rolling per-chat conversation window: the qa.answer prompt's only session
-# memory. In-memory on purpose (like _pending_confirmations) — a restart
-# forgets the conversation, which is honest, and durable facts are the
-# memory tree's job, not this window's.
+# Rolling per-chat conversation window: the qa.answer prompt's only
+# session memory. P3.4a: behind KYRAAN_SESSION_BACKEND=redis the window
+# lives in Redis (so a restart no longer forgets the conversation);
+# default memory keeps the historical behavior byte-for-byte, and a
+# Redis failure flips the process to memory with one logged event
+# (redis_kv's dead-mode contract). The proxies below keep the module
+# API identical — callers still index, append, extend, len, iterate.
 _HISTORY_MAX_ENTRIES = 40  # 20 exchanges — 20 rolled out mid-session live
                            # ("you never shared Fpol data" after 17 turns)
-_history: dict = defaultdict(lambda: deque(maxlen=_HISTORY_MAX_ENTRIES))
+
+from kyraan.store import redis_kv  # noqa: E402
+
+
+class _ChatHistory:
+    """One chat's window: deque-shaped API over Redis or memory."""
+
+    def __init__(self, chat_id):
+        self._key = redis_kv.key("hist", chat_id)
+        self._mem = deque(maxlen=_HISTORY_MAX_ENTRIES)
+
+    def _items(self) -> list:
+        items = redis_kv.list_all(self._key)
+        if items is None:
+            return list(self._mem)
+        return [tuple(x) for x in items]
+
+    def append(self, entry) -> None:
+        if not redis_kv.list_append(self._key, list(entry),
+                                    maxlen=_HISTORY_MAX_ENTRIES):
+            self._mem.append(tuple(entry))
+
+    def extend(self, entries) -> None:
+        for entry in entries:
+            self.append(entry)
+
+    def clear(self) -> None:
+        redis_kv.delete(self._key)
+        self._mem.clear()
+
+    def __len__(self):
+        return len(self._items())
+
+    def __bool__(self):
+        return len(self) > 0
+
+    def __getitem__(self, index):
+        return self._items()[index]
+
+    def __iter__(self):
+        return iter(self._items())
+
+    def __reversed__(self):
+        return reversed(self._items())
+
+
+class _ChatBacklog:
+    """One chat's summary backlog: list-shaped API over Redis or memory."""
+
+    def __init__(self, chat_id):
+        self._key = redis_kv.key("backlog", chat_id)
+        self._mem: list = []
+
+    def _items(self) -> list:
+        items = redis_kv.list_all(self._key)
+        if items is None:
+            return list(self._mem)
+        return [tuple(x) for x in items]
+
+    def _set(self, items) -> None:
+        if not redis_kv.list_set(self._key, [list(x) for x in items]):
+            self._mem = [tuple(x) for x in items]
+
+    def append(self, entry) -> None:
+        if not redis_kv.list_append(self._key, list(entry)):
+            self._mem.append(tuple(entry))
+
+    def __radd__(self, other):  # `chunk + backlog_proxy` in _roll_summary
+        return list(other) + self._items()
+
+    def __len__(self):
+        return len(self._items())
+
+    def __bool__(self):
+        return len(self) > 0
+
+    def __getitem__(self, index):
+        return self._items()[index]
+
+    def __iter__(self):
+        return iter(self._items())
+
+
+class _PerChat(dict):
+    """defaultdict-shaped mapping of chat_id → proxy. Assigning a plain
+    iterable replaces the proxy's CONTENT (tests and _roll_summary assign
+    lists), never the proxy itself."""
+
+    def __init__(self, factory):
+        super().__init__()
+        self._factory = factory
+
+    def __missing__(self, chat_id):
+        proxy = self._factory(chat_id)
+        dict.__setitem__(self, chat_id, proxy)
+        return proxy
+
+    def __setitem__(self, chat_id, value):
+        if isinstance(value, (_ChatHistory, _ChatBacklog)):
+            dict.__setitem__(self, chat_id, value)
+            return
+        proxy = self[chat_id]
+        if isinstance(proxy, _ChatHistory):
+            proxy.clear()
+            proxy.extend(value)
+        else:
+            proxy._set(list(value))
+
+    def get(self, chat_id, default=None):
+        proxy = self[chat_id]
+        items = proxy._items()
+        return items if items else default
+
+
+_history: dict = _PerChat(_ChatHistory)
 
 # C (harness pack): entries pushed off the history window collect here
 # until a chunk is worth condensing into the rolling session summary.
-_summary_backlog: dict = defaultdict(list)
+_summary_backlog: dict = _PerChat(_ChatBacklog)
 _SUMMARY_CHUNK = 10
 _SUMMARIES_PATH = None  # resolved lazily (test isolation patches the dir)
 
