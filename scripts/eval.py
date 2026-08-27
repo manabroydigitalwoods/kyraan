@@ -98,6 +98,15 @@ CASES = [
          [["hospital", "Hospital"]], hard=False),
     Case("web.current_fact", "who is the current prime minister of india?",
          [["Modi"]], hard=False),
+    # P3.1c: the undo command, end to end — create, undo-ask naming the
+    # concrete inverse, yes executes it, and the reminder is really gone.
+    # HARD: deterministic path (needs the local Postgres container up).
+    Case("undo.create", "remind me to water the plants at 8:30pm today",
+         [["8:30 PM"], ["remind", "Reminder set"]]),
+    Case("undo.ask", "undo",
+         [["cancel the reminder"], ["water the plants"], ["reply \"yes\""]]),
+    Case("undo.confirm", "yes", [["undone"]]),
+    Case("undo.gone", "any reminders?", [], must_not=["water the plants"]),
 ]
 
 
@@ -156,6 +165,13 @@ async def main() -> int:
     for p in memory_store.PENDING_DIR.glob("*"):
         if p.name not in pre_proposals:
             p.unlink()
+    try:  # this run's action_log rows (best-effort; PG may be down)
+        from kyraan.store import pg
+        with pg.connection() as conn:
+            conn.execute("DELETE FROM action_log WHERE chat_id = %s", (CHAT,))
+            conn.commit()
+    except Exception:
+        pass
 
     print(f"\nHARD: {hard_pass}/{hard_total}   soft: {soft_pass}/{soft_total}")
     if failures:

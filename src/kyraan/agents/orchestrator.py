@@ -57,6 +57,15 @@ _FORGET_FACE_RE = _re.compile(
     r"^\s*forget\s+(?:the\s+)?face\s+(?:of\s+)?(.{2,40}?)\s*[.!]?\s*$",
     _re.IGNORECASE)
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
+# P3.1c: bare "undo" or a targeted "undo the reminder/task/event/...".
+_UNDO_RE = _re.compile(
+    r"^\s*undo(?:\s+(?:the\s+|that\s+|my\s+|last\s+)*"
+    r"(reminder|task|event|meeting|switch|light|ac|plug|face)s?)?"
+    r"\s*[.!]?\s*$", _re.IGNORECASE)
+_UNDO_TARGETS = {"reminder": "reminders.", "task": "tasks.",
+                 "event": "calendar.", "meeting": "calendar.",
+                 "switch": "home.", "light": "home.", "ac": "home.",
+                 "plug": "home.", "face": "faces."}
 
 # Session state (history window, rolling summaries, transcript seeding)
 # lives in session.py — re-exported so orchestrator remains the address
@@ -605,6 +614,14 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        undo_match = _UNDO_RE.match(raw_text)
+        if undo_match:
+            # Deterministic, like forget-face: reversing an action must
+            # never depend on a model's routing choice (P3.1c).
+            _skip_extraction.set(True)
+            return await _undo_command(
+                chat_id, _UNDO_TARGETS.get((undo_match.group(1) or "").lower()))
+
         if _is_review_request(raw_text):
             # Deterministic: the review flow OWNS these phrases. Routed
             # through the agent loop, "review memory" listed the queue via
@@ -780,6 +797,94 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # generic and safe.
         log_event("handle_message_error", raw_text=raw_text, error=str(exc), error_type=type(exc).__name__)
         return "Something went wrong handling that — try again, or rephrase."
+
+
+# --- P3.1c: the undo command ----------------------------------------------
+
+def _describe_undo(action) -> str:
+    """The confirm ask names the INVERSE concretely — the owner approves
+    a specific reversal, not a vague 'undo'."""
+    a, ua = action.args, action.undo_args or {}
+    if action.tool == "calendar.create_event":
+        return f'Undo: delete the event "{ua.get("title") or a.get("title", "")}" I just created'
+    if action.tool == "reminders.create":
+        return f'Undo: cancel the reminder "{a.get("text", "")}" I just set'
+    if action.tool == "tasks.schedule":
+        return f'Undo: cancel the scheduled task "{str(a.get("instruction", ""))[:60]}"'
+    if action.tool == "faces.remember":
+        return f'Undo: delete the face I just saved as "{ua.get("name", "")}"'
+    if action.tool in ("home.turn_on", "home.turn_off"):
+        back = "on" if action.undo_tool == "home.turn_on" else "off"
+        return f'Undo: switch {ua.get("entity", "")} back {back}'
+    return f"Undo the last action ({action.tool})"
+
+
+_UNDO_TARGET_WORD = {"reminders.": "reminder", "tasks.": "task",
+                     "calendar.": "event", "home.": "switch",
+                     "faces.": "face"}
+
+
+async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
+    import asyncio as _aio
+
+    from kyraan.store import actions as _actions
+    try:
+        action = await _aio.to_thread(
+            (lambda: _actions.last_action_of(chat_id, tool_prefix))
+            if tool_prefix else (lambda: _actions.last_action(chat_id)))
+    except Exception as exc:
+        log_event("undo_store_unreachable", chat_id=chat_id, error=str(exc)[:200])
+        return ("I can't reach the action log right now, so undo isn't "
+                "available — the action itself is unaffected.")
+    if action is None:
+        what = (f"recent {_UNDO_TARGET_WORD.get(tool_prefix, 'such')} action"
+                if tool_prefix else "recent action")
+        return f"Nothing to undo — I have no {what} on record."
+    if not action.undoable:
+        # Head honesty (audit P1): never silently reach past an
+        # irreversible newest action — name it, then name what a
+        # TARGETED undo could still reach.
+        reply = f"Your last action ({action.tool}) can't be undone."
+        try:
+            reachable = await _aio.to_thread(_actions.last_undoable, chat_id)
+        except Exception:
+            reachable = None
+        if reachable and not tool_prefix:
+            word = next((w for p, w in _UNDO_TARGET_WORD.items()
+                         if reachable.tool.startswith(p)), None)
+            if word:
+                reply += (f' Still reversible: say "undo the {word}" to '
+                          f"{_describe_undo(reachable)[6:].strip()}.")
+        return reply
+
+    async def _run_undo(_a: dict) -> str:
+        ut, ua = action.undo_tool, dict(action.undo_args or {})
+        try:
+            if ut in ("calendar.delete_event", "home.turn_on", "home.turn_off"):
+                await kernel.run_tool(kernel.ToolCall(ut, ua))
+            elif ut == "reminders.cancel":
+                from kyraan.agents import loop_tools
+                await loop_tools._reminders_cancel_gated(
+                    chat_id, {"reminder_id": ua["reminder_id"]})
+            elif ut == "tasks.cancel":
+                from kyraan.agents import loop_tools
+                await loop_tools._task_cancel(chat_id, ua, "")
+            elif ut == "faces.forget":
+                from kyraan.agents import faces as _faces
+                if not _faces.forget(str(ua.get("name", ""))):
+                    raise kernel.ToolFailed("that face is no longer stored")
+            else:
+                raise kernel.ToolFailed(f"no undo executor for {ut}")
+        except kernel.ToolFailed as exc:
+            # The original action stays on the log — it was NOT undone.
+            return f"Couldn't undo that: {exc}"
+        await _aio.to_thread(_actions.mark_undone, action.id)
+        log_event("action_undone", chat_id=chat_id, tool=action.tool,
+                  undo_tool=ut)
+        return f"Done — undone. ({_describe_undo(action)[6:].strip()})"
+
+    return await _gated(chat_id, SkillCall("undo.last", {"tool": action.tool}),
+                        _run_undo, describe=_describe_undo(action))
 
 
 async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> str:

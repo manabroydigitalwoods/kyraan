@@ -187,6 +187,9 @@ skills:
   faces.forget:
     permission: confirm   # deleting a biometric is also deliberate
     model_tier: cheap
+  undo.last:
+    permission: confirm   # P3.1c: reversing an action is itself an action —
+    model_tier: cheap     # the ask names the concrete inverse before it runs
   home.query:
     permission: auto      # read-only: AC state + power/energy readout
     model_tier: cheap

@@ -85,6 +85,19 @@ def last_action_of(chat_id: int, tool_prefix: str) -> Action | None:
     return _row_to_action(row) if row else None
 
 
+def last_undoable(chat_id: int) -> Action | None:
+    """The newest action that CAN be undone — only for naming what a
+    targeted undo could still reach when the head is irreversible; the
+    plain `undo` command must use last_action and never this."""
+    with pg.connection() as conn:
+        row = conn.execute(
+            f"""SELECT {_COLS} FROM action_log
+                WHERE chat_id = %s AND undone_at IS NULL
+                      AND undo_tool IS NOT NULL
+                ORDER BY done_at DESC LIMIT 1""", (chat_id,)).fetchone()
+    return _row_to_action(row) if row else None
+
+
 def mark_undone(action_id: str) -> None:
     with pg.connection() as conn:
         conn.execute(
