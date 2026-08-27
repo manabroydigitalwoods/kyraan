@@ -170,7 +170,11 @@ async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, m
     assert dispatched == []  # nothing deleted before the yes
 
     result = await orchestrator.handle_message(chat_id=90, raw_text="yes")
-    assert dispatched == [("calendar.delete_event", {"event_id": "ev9", "title": "Test Event"})]
+    # the confirmed replay first OBSERVES the event (prior capture — the
+    # delete is undoable since the P3.1d completion), then deletes
+    assert dispatched == [
+        ("calendar.get_event", {"event_id": "ev9"}),
+        ("calendar.delete_event", {"event_id": "ev9", "title": "Test Event"})]
     assert "Deleted from your calendar" in result and "Test Event" in result
 
 

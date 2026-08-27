@@ -641,6 +641,47 @@ def resweep_forgotten() -> int:
     return swept
 
 
+def unforget(entry_ids: list) -> list:
+    """The forget inverse (undo matrix completion, 2026-08-28):
+    reactivate entries and lift their suppression marks from episodes
+    and documents. Pending proposals purged at forget time stay gone —
+    an undo restores the fact, not the queue's history."""
+    restored, changed = [], []
+    with locked(_index_path()):
+        entries = _load()
+        for entry in entries:
+            if entry["id"] in entry_ids and not entry["active"]:
+                entry["active"] = True
+                restored.append(entry["content"])
+                changed.append(entry)
+        _save(entries)
+        if changed:
+            _mirror(changed, all_entries=entries)
+            _unsweep_episodes(changed)
+    for content in restored:
+        log_event("memory_unforgotten", content=content[:80])
+    return restored
+
+
+def _unsweep_episodes(changed: list) -> None:
+    try:
+        from kyraan.store import facts, pg
+        if not facts.MIRROR_ENABLED:
+            return
+        with pg.connection() as conn:
+            for entry in changed:
+                fact_id = facts.fact_uuid(entry["id"])
+                for table in ("episode", "document"):
+                    conn.execute(
+                        f"""UPDATE {table} SET suppressed_by =
+                                array_remove(suppressed_by, %s)
+                            WHERE %s = ANY(suppressed_by)""",
+                        (fact_id, fact_id))
+            conn.commit()
+    except Exception as exc:
+        log_event("episode_suppress_deferred", reason=str(exc)[:200])
+
+
 def _sweep_episodes(changed: list) -> None:
     """P3.3d: forget cascades to episodes — a forgotten fact must never
     resurface through recall (audit P1). Deferred failures are re-swept

@@ -488,7 +488,8 @@ async def _rules_cancel(chat_id: int, args: dict, raw_text: str):
     except ValueError as exc:
         raise kernel.ToolFailed(str(exc))
     receipt = f'Watch rule removed: "{rule.description}".'
-    return {"__direct_reply__": receipt, "__history__": receipt}
+    return {"__direct_reply__": receipt, "__history__": receipt,
+            "id": rule.id}
 
 
 async def _memory_forget(chat_id: int, args: dict, raw_text: str):
@@ -685,6 +686,59 @@ async def _persons_add(chat_id: int, args: dict, raw_text: str):
         raise kernel.ConfirmationRequired("persons.add", dict(args))
     await _aio.to_thread(persons.enroll, person_id, None, "none", None)
     return {"added": True, "person_id": person_id, "name": name}
+
+
+async def _persons_profile(chat_id: int, args: dict, raw_text: str):
+    """ONE deterministic aggregation of everything known about a person
+    (undo-matrix batch, 2026-08-28): registry row, aliases, facts naming
+    them, saved documents about them, graph edges, face status — so
+    "tell me about Titu" never depends on the model remembering to
+    chain four separate tools."""
+    import asyncio as _aio
+    import re as _re
+
+    from kyraan.store import persons
+    name = str(args.get("name", "")).strip()
+    if len(name) < 2:
+        raise kernel.ToolFailed("give the person's name")
+    person_id = persons.resolve(name)
+    if not person_id:
+        return {"found": False,
+                "note": (f"{name!r} is not in the person registry — "
+                         "documents/facts may still mention them by text; "
+                         'offer "add {name} as a person" to track them')}
+    names = sorted({n for n, pid in persons.name_map().items()
+                    if pid == person_id})
+
+    def _gather():
+        from kyraan.agents import faces
+        from kyraan.memory import engine
+        from kyraan.store import documents, triples
+        pattern = _re.compile(
+            r"\b(?:" + "|".join(_re.escape(n) for n in names) + r")\b",
+            _re.IGNORECASE)
+        facts_about = [e["content"] for e in engine.active_entries()
+                       if pattern.search(e["content"])][:12]
+        docs = [f'{d["caption"]} ({d["date"]})' for d in
+                documents.list_documents(chat_id, person=person_id)]
+        edges = [f'{r["head"]} —{r["relation"]}→ {r["tail"]}'
+                 for r in triples.relations_for(person_id)][:12]
+        face = (person_id in [n.lower().replace(" ", "_").replace("-", "_")
+                              for n in faces.enrolled_names()]
+                if faces.available() else False)
+        return facts_about, docs, edges, face
+
+    try:
+        facts_about, docs, edges, face = await _aio.to_thread(_gather)
+    except Exception as exc:
+        raise kernel.ToolFailed(f"profile lookup failed ({str(exc)[:100]})")
+    return {"person": person_id, "also_known_as": names,
+            "facts": facts_about or ["(no approved facts name them yet)"],
+            "documents": docs or ["(none)"],
+            "graph": edges or ["(no relations yet)"],
+            "face_recognition": "enrolled" if face else "no face data",
+            "note": ("present with bullets; facts are owner-reviewed "
+                     "truth, graph edges carry provenance")}
 
 
 async def _faces_list(chat_id: int, args: dict, raw_text: str):
@@ -1009,6 +1063,14 @@ TOOLS = {
                   "called it."),
         "run": _documents_rename,
     },
+    "persons.profile": {
+        "params": '{"name": "<person name or alias>"}',
+        "about": ("Everything known about ONE person in one call — "
+                  "registry, facts, documents, graph relations, face "
+                  "status. THE tool for \"tell me about Titu\", \"what do "
+                  "you know about Kamal\", \"who is Suman\"."),
+        "run": _persons_profile,
+    },
     "persons.add": {
         "params": '{"name": "<the person\'s name>"}',
         "about": ("Add a friend/contact to the person registry so they're "
@@ -1219,7 +1281,9 @@ UNDO_MAP = {
     "rules.create": lambda a, r, p: (
         ("rules.cancel", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
-    "rules.cancel": lambda a, r, p: None,  # re-creation needs the full spec
+    "rules.cancel": lambda a, r, p: (
+        ("rules.reactivate", {"rule_id": r["id"]})
+        if isinstance(r, dict) and r.get("id") else None),
     "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
     "email.draft": lambda a, r, p: (
         ("email.draft_delete", {"draft_id": r["draft_id"]})
@@ -1238,11 +1302,26 @@ UNDO_MAP = {
     "faces.remember": _undo_faces_remember,
     "home.turn_on": _undo_home_switch,
     "home.turn_off": _undo_home_switch,
-    # Real writes whose inverses need payload capture (deferred P3.1d):
-    "calendar.delete_event": lambda a, r, p: None,
-    "reminders.cancel": lambda a, r, p: None,
-    "tasks.cancel": lambda a, r, p: None,
-    "memory.forget": lambda a, r, p: None,
+    # P3.1d completed (2026-08-28): the destroys' inverses re-create
+    # from the record capture_prior observed before the write.
+    "calendar.delete_event": lambda a, r, p: (
+        ("calendar.create_event",
+         {"title": p.get("title", "(restored event)"),
+          "start": p["start"], "end": p["end"]})
+        if p and p.get("start") and p.get("end") else None),
+    "reminders.cancel": lambda a, r, p: (
+        ("reminders.recreate", {k: p.get(k) for k in
+         ("text", "when_iso", "repeat", "interval_minutes",
+          "window_start", "window_end")})
+        if p and p.get("text") and p.get("when_iso") else None),
+    "tasks.cancel": lambda a, r, p: (
+        ("tasks.recreate", {"instruction": p["instruction"],
+                            "when_iso": p["when_iso"],
+                            "repeat": p.get("repeat", "")})
+        if p and p.get("instruction") and p.get("when_iso") else None),
+    "memory.forget": lambda a, r, p: (
+        ("memory.unforget", {"entry_ids": p["entry_ids"]})
+        if p and p.get("entry_ids") else None),
 }
 
 
@@ -1261,6 +1340,37 @@ async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
             return {**state, "_tool": tool} if isinstance(state, dict) else None
         except Exception:
             return None  # unobserved prior ⇒ the write logs as not undoable
+    # Undo matrix completion (2026-08-28) — the P3.1d deferrals: each
+    # inverse needs the record observed BEFORE the destroy.
+    if tool == "calendar.delete_event":
+        try:
+            return await kernel.run_tool(kernel.ToolCall(
+                "calendar.get_event", {"event_id": str(args.get("event_id"))}))
+        except Exception:
+            return None
+    if tool == "reminders.cancel":
+        try:
+            from kyraan.triggers import store as _rstore
+            reminder = _rstore.get(str(args.get("reminder_id", "")))
+            return dict(vars(reminder)) if reminder else None
+        except Exception:
+            return None
+    if tool == "tasks.cancel":
+        try:
+            from kyraan.triggers import agent_tasks as _tasks
+            return next((dict(r) for r in _tasks._load()
+                         if r.get("id") == str(args.get("task_id", ""))), None)
+        except Exception:
+            return None
+    if tool == "memory.forget":
+        try:
+            from kyraan.memory import engine as _engine
+            matches = _engine.find_matches(str(args.get("fact", "")))
+            return {"entry_ids": [m["id"] for m in matches],
+                    "contents": [m["content"] for m in matches]} \
+                if matches else None
+        except Exception:
+            return None
     return None
 
 
@@ -1404,7 +1514,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "memory.pending_list", "memory.recall_episodes",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
-                    "faces.check_photo",
+                    "faces.check_photo", "persons.profile",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 

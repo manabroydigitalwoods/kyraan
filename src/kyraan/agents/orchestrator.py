@@ -921,6 +921,22 @@ def _describe_undo(action) -> str:
     if action.tool == "email.draft":
         return (f'Undo: delete the Gmail draft "{a.get("subject") or ""}" '
                 "I just saved")
+    if action.tool == "calendar.delete_event":
+        return (f'Undo: re-create the event '
+                f'"{ua.get("title") or "(restored event)"}" I deleted'
+                + _age_note(action))
+    if action.tool == "reminders.cancel":
+        return (f'Undo: re-create the reminder "{ua.get("text", "")}" '
+                "I cancelled" + _age_note(action))
+    if action.tool == "tasks.cancel":
+        return (f'Undo: re-schedule the task '
+                f'"{str(ua.get("instruction", ""))[:60]}" I cancelled'
+                + _age_note(action))
+    if action.tool == "rules.cancel":
+        return "Undo: switch that cancelled watch rule back on"
+    if action.tool == "memory.forget":
+        return ("Undo: RESTORE to memory what I forgot "
+                f'(matching "{a.get("fact", "")}")' + _age_note(action))
     return f"Undo the last action ({action.tool})"
 
 
@@ -966,8 +982,32 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
         ut, ua = action.undo_tool, dict(action.undo_args or {})
         try:
             if ut in ("calendar.delete_event", "calendar.update_event",
+                      "calendar.create_event",
                       "home.turn_on", "home.turn_off"):
                 await kernel.run_tool(kernel.ToolCall(ut, ua))
+            elif ut == "reminders.recreate":
+                scheduler.create_reminder(
+                    chat_id, ua["text"], ua["when_iso"],
+                    repeat=ua.get("repeat") or "",
+                    interval_minutes=int(ua.get("interval_minutes") or 0),
+                    window_start=ua.get("window_start") or "",
+                    window_end=ua.get("window_end") or "")
+            elif ut == "tasks.recreate":
+                from kyraan.triggers import agent_tasks as _tasks
+                _tasks.create(chat_id, ua["instruction"], ua["when_iso"],
+                              repeat=ua.get("repeat") or "")
+            elif ut == "rules.reactivate":
+                from kyraan.triggers import event_rules
+                try:
+                    event_rules.reactivate(chat_id, ua["rule_id"])
+                except ValueError as exc:
+                    raise kernel.ToolFailed(str(exc))
+            elif ut == "memory.unforget":
+                from kyraan.memory import engine as _engine
+                if not await _aio.to_thread(_engine.unforget,
+                                            list(ua.get("entry_ids") or [])):
+                    raise kernel.ToolFailed(
+                        "those facts are no longer restorable")
             elif ut == "reminders.cancel":
                 from kyraan.agents import loop_tools
                 await loop_tools._reminders_cancel_gated(

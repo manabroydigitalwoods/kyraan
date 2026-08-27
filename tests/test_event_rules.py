@@ -155,3 +155,13 @@ def test_undo_entry_cancels_the_new_rule():
     assert UNDO_MAP["rules.create"](
         {}, {"created": True, "id": "ab12cd34"}, None
     ) == ("rules.cancel", {"rule_id": "ab12cd34"})
+
+def test_cancel_then_reactivate_round_trips():
+    rule = _rule()
+    event_rules.cancel(7, rule.id)
+    assert event_rules.list_active(7) == []
+    back = event_rules.reactivate(7, rule.id)
+    assert back.id == rule.id and back.active
+    assert [r.id for r in event_rules.list_active(7)] == [rule.id]
+    with pytest.raises(ValueError):
+        event_rules.reactivate(7, rule.id)  # already active

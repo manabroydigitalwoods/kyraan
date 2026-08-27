@@ -117,6 +117,23 @@ def cancel(chat_id: int, rule_id_prefix: str) -> Rule:
     return Rule(**matches[0])
 
 
+def reactivate(chat_id: int, rule_id: str) -> Rule:
+    """The cancel inverse (undo matrix completion, 2026-08-28): a
+    cancelled rule keeps its full spec, so undo just switches it back
+    on — same id, same cooldown history."""
+    with locked(RULES_PATH):
+        records = _load()
+        match = next((r for r in records
+                      if r["id"] == rule_id and r["chat_id"] == chat_id
+                      and not r.get("active")), None)
+        if match is None:
+            raise ValueError("that cancelled rule is no longer there")
+        match["active"] = True
+        _save(records)
+    log_event("event_rule_reactivated", rule_id=rule_id)
+    return Rule(**match)
+
+
 def condition_met(rule: Rule, state: dict, now=None) -> bool:
     """Pure: does this observed entity state satisfy the rule?"""
     now = now or datetime.now(timezone.utc)

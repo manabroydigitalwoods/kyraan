@@ -76,6 +76,10 @@ _DEFLECTION_RE = re.compile(
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 
+# Undoable tools that execute WITHOUT a confirm gate and whose inverse
+# needs pre-write observation. Gated tools capture in confirmed_handler.
+_PRIOR_AT_DISPATCH: frozenset = frozenset()
+
 # Referent dodge (the pronoun disease, third live appearance 2026-08-27
 # 23:41 — the prompt rule lost three times, so this is the rail): a
 # draft asking WHO a pronoun means while the conversation names exactly
@@ -164,8 +168,12 @@ def build_confirmed_handler(chat_id: int, tool: str, args: dict, raw_text: str):
     Redis-persisted stash after a restart: the owner's yes then executes
     the same call byte-identically in the new process."""
     async def confirmed_handler(_a, _t=tool, _ar=dict(args)):
+        # Prior capture only on the CONFIRMED replay — _gated probes this
+        # handler once unconfirmed (expecting ConfirmationRequired), and
+        # capturing there ran observer reads before the owner's yes.
         _prior = (await loop_tools.capture_prior(chat_id, _t, _ar)
-                  if _t in loop_tools.UNDO_MAP else None)
+                  if _t in loop_tools.UNDO_MAP
+                  and kernel.confirmed_context() else None)
         outcome = await TOOLS[_t]["run"](chat_id, _ar, raw_text)
         await loop_tools.record_action(chat_id, _t, _ar, outcome, _prior)
         return _confirmed_reply(_t, _ar, outcome)
@@ -693,9 +701,14 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                   consider=consider)
         executed_tool = True
         try:
-            # P3.1b: state the inverse needs, observed BEFORE the write.
+            # P3.1b prior capture happens in confirmed_handler (the yes-
+            # replay) for every gated tool — capturing HERE ran observer
+            # reads before the listing rails could refuse the call and
+            # doubled every capture (undo-matrix batch, 2026-08-28).
+            # _PRIOR_AT_DISPATCH lists auto-executing undoable tools
+            # whose prior must precede the un-gated run: none today.
             prior = (await loop_tools.capture_prior(chat_id, tool, args)
-                     if tool in loop_tools.UNDO_MAP else None)
+                     if tool in _PRIOR_AT_DISPATCH else None)
             result = await TOOLS[tool]["run"](chat_id, args, raw_text)
             await loop_tools.record_action(chat_id, tool, args, result, prior)
         except kernel.ConfirmationRequired:
