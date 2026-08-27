@@ -89,6 +89,9 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     from kyraan.model_router import router
     from kyraan.triggers import agent_tasks
     from kyraan.triggers import store as reminder_store
+    from kyraan.memory import review_scaling
+    monkeypatch.setattr(review_scaling, "STATS_PATH",
+                        tmp_path / "review_stats.json")
     monkeypatch.setattr(reminder_store, "REMINDERS_PATH", tmp_path / "reminders.json")
     monkeypatch.setattr(agent_tasks, "TASKS_PATH", tmp_path / "agent_tasks.json")
     monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")

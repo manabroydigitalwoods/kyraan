@@ -645,6 +645,13 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
             await _stage("forget_resweep", _resweep)
             await _stage("graph_catch_up", _graph_catch_up)
 
+            # P3.5e: expired 24h objection windows promote nightly.
+            async def _auto_approvals():
+                from kyraan.memory import review_scaling as _scaling
+                await _aio.to_thread(_scaling.sweep_auto_approvals)
+
+            await _stage("auto_approvals", _auto_approvals)
+
             # Semantic dedup scan (owner: "make it automate",
             # 2026-08-27): the model PROPOSES nightly; applying stays
             # behind the owner's yes via the "consolidate memory" chat

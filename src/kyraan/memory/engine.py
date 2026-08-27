@@ -493,6 +493,12 @@ def forget(entry_ids: list) -> list:
         if changed:
             _mirror(changed, all_entries=entries)
             _sweep_episodes(changed)
+    if forgotten:
+        try:  # P3.5e: forgetting a recently auto-approved fact = a wrong
+            from kyraan.memory import review_scaling  # auto-approval
+            review_scaling.on_forgotten(forgotten)
+        except Exception as exc:
+            log_event("review_scaling_check_failed", reason=str(exc)[:120])
     return forgotten
 
 

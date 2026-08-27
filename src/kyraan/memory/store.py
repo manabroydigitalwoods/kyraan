@@ -76,10 +76,17 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     # review queue, not the owner's (review keyed by person, arch §4).
     from kyraan.control_plane import kernel as _kernel
     reviewer = _kernel.viewer_person() or "owner"
+    # P3.5e: in earned `sampled` mode, 2 of every 3 proposals carry a 24h
+    # objection window instead of holding for review — still visible in
+    # the pending queue exactly as today; a reject IS the objection.
+    from kyraan.memory import review_scaling
+    auto_line = ""
+    if not review_scaling.next_proposal_holds():
+        auto_line = f"auto_approve_after: {review_scaling.objection_deadline()}\n"
     with open(proposal_path, "x") as handle:
         handle.write(
             f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n"
-            f"reviewer: {reviewer}\n{meta_line}---\n\n{content}\n"
+            f"reviewer: {reviewer}\n{auto_line}{meta_line}---\n\n{content}\n"
         )
     _os.chmod(proposal_path, 0o600)
     return proposal_path
@@ -140,14 +147,18 @@ def resolve_dispute(proposal_path: Path, keep_new: bool) -> str:
     return outcome
 
 
-def promote(proposal_path: Path) -> Path:
-    """Human-approved: move a proposal into the live memory tree, appending
+def promote(proposal_path: Path, human: bool = True) -> Path:
+    """Approved: move a proposal into the live memory tree, appending
     to the target file if it already exists, and register it with the
-    engine index (classification + supersession)."""
+    engine index (classification + supersession). `human=False` is the
+    P3.5e auto-approval sweep — it never touches the trust counters."""
     if dispute_meta(proposal_path) is not None:
         raise ValueError(
             "this is a DISPUTE notice, not a fact proposal — resolve it via "
             "the chat review flow (approve/reject), not promote")
+    if human:
+        from kyraan.memory import review_scaling
+        review_scaling.record_decision(approved=True)
     text = proposal_path.read_text()
     _, _, rest = text.partition("---\n")
     frontmatter, _, body = rest.partition("---\n")
@@ -206,6 +217,9 @@ def promote(proposal_path: Path) -> Path:
 
 
 def reject(proposal_path: Path) -> None:
+    if dispute_meta(proposal_path) is None:  # dispute resolutions don't count
+        from kyraan.memory import review_scaling
+        review_scaling.record_decision(approved=False)
     proposal_path.unlink()
 
 
