@@ -62,7 +62,10 @@ providers:
                           # IGNORES think:false (verified on 0.30.10) and
                           # Qwen3 then burns 8-12s of hidden reasoning per
                           # call. base_url via OLLAMA_BASE_URL env if set.
-    keep_alive: "2h"      # pin the model in memory between turns — the
+    keep_alive: "30m"     # per-machine override: KYRAAN_OLLAMA_KEEP_ALIVE
+                          # in .env wins over this (qwen3:8b wires 6.3GB —
+                          # a third of an 18GB laptop, noise on a big box).
+                          # Pins the model in memory between turns — the
                           # default 5-min eviction forced a ~20s reload
                           # INSIDE a user turn (live 2026-08-27, "ok that
                           # great" took 23s while qwen3 reloaded)

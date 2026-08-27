@@ -220,6 +220,35 @@ def resolve_base_url(provider_name: str, provider_cfg: dict) -> str:
     return base
 
 
+DEFAULT_KEEP_ALIVE = "30m"
+
+
+def resolve_keep_alive(provider_cfg: dict) -> str:
+    """How long Ollama holds the local model in memory after a call.
+
+    Precedence is env > config > default, the same order resolve_base_url
+    uses. The knob lives in .env because this is a MACHINE decision, not
+    a behavioural one: qwen3:8b wires 6.3GB, which is a third of an 18GB
+    laptop and noise on a bigger box — so it must be tunable without
+    editing tracked config.
+
+    The trade, measured over 2026-08-27's 752 local calls: "2h" cost 0
+    reloads but never released the memory; "30m" costs ~5 reloads/day;
+    Ollama's own 5-minute default costs ~34, at ~20s each, and some land
+    INSIDE a user turn (live 2026-08-27: "ok that great" took 23s while
+    qwen3 reloaded for extraction). 30m keeps the model warm through a
+    conversation — the median gap between local calls is 12 seconds —
+    while releasing the memory once the owner steps away.
+
+    A blank or whitespace-only env value means "unset", not "no
+    keep-alive": an empty string would make Ollama fall back to its own
+    default and silently undo the setting.
+    """
+    return (os.environ.get("KYRAAN_OLLAMA_KEEP_ALIVE", "").strip()
+            or str(provider_cfg.get("keep_alive") or "").strip()
+            or DEFAULT_KEEP_ALIVE)
+
+
 def provider_is_local(provider_name: str) -> bool:
     """Locality of a provider's ENDPOINT, resolved exactly as routing
     resolves it (security round 2, P2: a separate hand-rolled resolution
@@ -432,7 +461,7 @@ def _call_ollama_native(provider_cfg: dict, model: str, prompt: str, system: str
         # 5-minute eviction (or another process loading a different model)
         # forced a ~20s reload INSIDE a user turn, live 2026-08-27: "ok
         # that great" took 23 seconds while qwen3 reloaded for extraction.
-        "keep_alive": provider_cfg.get("keep_alive", "2h"),
+        "keep_alive": resolve_keep_alive(provider_cfg),
         # num_ctx MUST be set explicitly: Ollama's ~4K default silently
         # truncates Kyraan's qa prompt (capabilities + facts + 40-entry
         # history) and the model then answers garbage fragments — seen

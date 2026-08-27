@@ -156,3 +156,39 @@ def test_usage_summary_rolls_up_model_calls_by_local_day(monkeypatch, tmp_path):
     assert abs(today_row["cost_usd"] - 0.0035) < 1e-9
     assert today_row["by_model"] == {"gpt-5.4-nano": 2, "qwen3:8b": 1}
     assert summary["budget"]["daily_budget_usd"] > 0
+
+
+def test_keep_alive_resolves_env_over_config(monkeypatch):
+    """The local model's residency is a MACHINE decision (qwen3:8b wires
+    6.3GB of an 18GB Mac), so .env must override tracked config — same
+    env>config order resolve_base_url uses."""
+    from kyraan.model_router import router
+
+    cfg = {"keep_alive": "2h"}
+    monkeypatch.delenv("KYRAAN_OLLAMA_KEEP_ALIVE", raising=False)
+    assert router.resolve_keep_alive(cfg) == "2h"          # config when no env
+
+    monkeypatch.setenv("KYRAAN_OLLAMA_KEEP_ALIVE", "30m")
+    assert router.resolve_keep_alive(cfg) == "30m"         # env wins
+
+    # blank/whitespace env means UNSET, not "no keep-alive" — an empty
+    # string would hand Ollama its own 5-min default and silently undo
+    # the configured value
+    monkeypatch.setenv("KYRAAN_OLLAMA_KEEP_ALIVE", "   ")
+    assert router.resolve_keep_alive(cfg) == "2h"
+
+    # and with neither, the default is the documented one, never ""
+    monkeypatch.delenv("KYRAAN_OLLAMA_KEEP_ALIVE", raising=False)
+    assert router.resolve_keep_alive({}) == router.DEFAULT_KEEP_ALIVE
+    assert router.resolve_keep_alive({"keep_alive": ""}) == router.DEFAULT_KEEP_ALIVE
+
+
+def test_ollama_payload_carries_the_resolved_keep_alive(monkeypatch):
+    """The value must reach the actual request — the old call site had a
+    hardcoded '2h' fallback, so deleting the config key changed nothing."""
+    import inspect
+    from kyraan.model_router import router
+
+    src = inspect.getsource(router._call_ollama_native)
+    assert "resolve_keep_alive(provider_cfg)" in src
+    assert '"2h"' not in src        # no second source of truth
