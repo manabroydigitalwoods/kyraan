@@ -327,7 +327,18 @@ def test_recall_executor_store_down_is_honest(monkeypatch):
         asyncio.run(loop_tools._memory_recall(5, {"query": "topic"}, ""))
 
 
-def test_tagging_failure_defaults_to_sensitive(monkeypatch):
+def _cloud_down(monkeypatch):
+    from kyraan.model_router import router
+
+    def boom(**kwargs):
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(router, "call", boom)
+
+
+def test_tagging_total_failure_defaults_to_sensitive(monkeypatch):
+    _cloud_down(monkeypatch)
+
     def boom(text):
         raise RuntimeError("model down")
 
@@ -335,9 +346,26 @@ def test_tagging_failure_defaults_to_sensitive(monkeypatch):
     assert episodes.sensitivity_flags("anything") == ["sensitive"]
 
 
-def test_tagging_discards_invented_flags(monkeypatch):
-    # the ultralight models invented labels like "_sensitive"/"grief" —
-    # anything outside the fixed vocabulary must be dropped, not stored
-    monkeypatch.setattr(episodes, "_tag_chat",
-                        lambda text: ["_sensitive", "grief", "health"])
-    assert episodes.sensitivity_flags("x") == ["health"]
+def test_cloud_failure_falls_back_to_local(monkeypatch):
+    _cloud_down(monkeypatch)
+    monkeypatch.setattr(episodes, "_tag_chat", lambda text: ["health"])
+    assert episodes.sensitivity_flags("anything") == ["health"]
+
+
+def test_non_cloud_ok_text_never_reaches_the_router(monkeypatch):
+    from kyraan.model_router import router
+
+    def forbidden(**kwargs):
+        raise AssertionError("local_only text reached the cloud tagger")
+
+    monkeypatch.setattr(router, "call", forbidden)
+    monkeypatch.setattr(episodes, "_tag_chat", lambda text: [])
+    assert episodes.sensitivity_flags("private", exposure="local_only") == []
+
+
+def test_normalize_maps_paraphrases_and_drops_junk():
+    # seen live across probes: nano's "finances"/"legal matters"/"private
+    # family matters", qwen's "_sensitive", gemma's "grief"/"sensory"
+    assert episodes.normalize_flags(
+        ["finances", "legal matters", "_sensitive", "grief", "health",
+         "sensory", "banana"]) == ["emotional", "health", "sensitive"]

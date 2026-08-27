@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 load_dotenv(REPO / ".env")
 
 from kyraan.store.episodes import _TAG_SYSTEM  # noqa: E402 — the REAL prompt
+from kyraan.store.episodes import normalize_flags  # noqa: E402 — and filter
 
 CANDIDATES = ["qwen3:8b", "llama3.2:latest", "qwen3:1.7b", "gemma3:1b"]
 
@@ -47,6 +48,11 @@ PROBES = [
 
 
 def _tag(model: str, text: str) -> list:
+    if model == "nano":  # the frontier tier through the real router
+        from kyraan.model_router import router
+        response = router.call(prompt=text, system=_TAG_SYSTEM,
+                               tier="frontier", force_json=True, max_tokens=128)
+        return json.loads(response.text).get("flags") or []
     req = urllib.request.Request(
         "http://127.0.0.1:11434/api/chat",
         data=json.dumps({
@@ -73,7 +79,7 @@ def probe(model: str) -> dict | None:
     for text, expected in PROBES:
         t0 = time.perf_counter()
         try:
-            got = set(_tag(model, text))
+            got = set(normalize_flags(_tag(model, text)))  # as production does
         except Exception as exc:
             print(f"  ❌ parse/call failed on {text[:40]!r}: {exc}")
             got = set()

@@ -29,12 +29,15 @@ EXCHANGES_PER_EPISODE = 10
 _SENSITIVE_FLAGS = ("health", "safety", "emotional", "sensitive")
 
 _TAG_SYSTEM = """You label a private conversation snippet with sensitivity flags.
-Reply ONLY with JSON: {"flags": [...]} using ONLY these flags, empty list if none apply:
+Reply ONLY with JSON: {"flags": [...]}. The ONLY strings allowed inside
+"flags" are exactly "health", "safety", "emotional", "sensitive" — never
+invent other labels and never use a topic word below as a label. Empty
+list if none apply.
 - "health": illness, symptoms, medication, medical visits
 - "safety": danger, accidents, emergencies
 - "emotional": grief, conflict, fear, distress, relationship strain
-- "sensitive": finances, legal matters, private family matters, anything the
-  person would not want volunteered in unrelated conversation
+- "sensitive": money or finances, legal matters, private family matters,
+  anything the person would not want volunteered in unrelated conversation
 No other keys, no prose."""
 
 
@@ -104,12 +107,49 @@ def _tag_chat(text: str) -> list:
     return json.loads(payload["message"]["content"]).get("flags") or []
 
 
-def sensitivity_flags(text: str) -> list:
-    """LOCAL tagging. Failure = tagged 'sensitive' — the discretion
-    rules (§3) then keep it out of unrelated answers."""
+# Models paraphrase the prompt's TOPIC words as labels ("finances",
+# "legal matters", "grief") no matter how firmly the prompt forbids it —
+# nano did it nondeterministically across two probe runs. Deterministic
+# normalization beats prompt whack-a-mole (the deflection-guard lesson):
+# a paraphrase maps to its parent flag; true junk still drops.
+_FLAG_STEMS = {
+    "health": ("illness", "symptom", "medication", "medical"),
+    "safety": ("danger", "accident", "emergenc"),
+    "emotional": ("grief", "conflict", "fear", "distress", "relationship"),
+    "sensitive": ("money", "financ", "legal", "family matter", "private"),
+}
+
+
+def normalize_flags(raw: list) -> list:
+    out = set()
+    for label in raw:
+        label = str(label).strip().lower().lstrip("_")
+        if label in _SENSITIVE_FLAGS:
+            out.add(label)
+            continue
+        for flag, stems in _FLAG_STEMS.items():
+            if any(stem in label for stem in stems):
+                out.add(flag)
+                break
+    return sorted(out)
+
+
+def sensitivity_flags(text: str, exposure: str = "cloud_ok") -> list:
+    """Tagging: nano (frontier) for cloud_ok text — episode text is
+    built from cloud_text twins, already cloud-safe — with the LOCAL
+    llama3.2 path for any non-cloud_ok episode AND as fallback when the
+    cloud fails; total failure = 'sensitive' (§3 absence discipline)."""
+    if exposure == "cloud_ok":
+        try:
+            from kyraan.model_router import router
+            response = router.call(prompt=text[:4000], system=_TAG_SYSTEM,
+                                   tier="frontier", force_json=True,
+                                   max_tokens=128)
+            return normalize_flags(json.loads(response.text).get("flags") or [])
+        except Exception as exc:
+            log_event("episode_tagging_cloud_failed", error=str(exc)[:150])
     try:
-        flags = _tag_chat(text)
-        return sorted(set(f for f in flags if f in _SENSITIVE_FLAGS))
+        return normalize_flags(_tag_chat(text))
     except Exception as exc:
         log_event("episode_tagging_failed", error=str(exc)[:150])
         return ["sensitive"]
