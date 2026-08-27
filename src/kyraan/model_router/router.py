@@ -383,10 +383,13 @@ def _call_openai_compatible(
         messages.append({"role": "system", "content": system})
     if images:
         # Vision: image data-URLs ride as content parts beside the text.
-        # detail=low pins each image to a small fixed token cost (live
-        # probe 2026-08-26: a whole image at low detail was ~19 tokens).
+        # detail=high (2026-08-28): low pinned each image to ~19 tokens
+        # but downscaled to ~512px — package/label lettering garbled
+        # repeatedly ("OMNIGEL" read as "OMMLNIL", a blank first read on
+        # a card). At Kyraan's photo volume the difference is fractions
+        # of a cent per photo, and document capture IS the workload.
         content = [{"type": "text", "text": prompt}]
-        content += [{"type": "image_url", "image_url": {"url": u, "detail": "low"}}
+        content += [{"type": "image_url", "image_url": {"url": u, "detail": "high"}}
                     for u in images]
         messages.append({"role": "user", "content": content})
     else:

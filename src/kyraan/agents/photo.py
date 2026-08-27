@@ -1,6 +1,6 @@
 """Photo analysis — a Telegram photo becomes one frontier VISION call
-(2026-08-26; live-probed: gpt-5.4-nano reads images, ~19 input tokens per
-image at detail=low — fractions of a cent).
+(2026-08-26; detail=high since 2026-08-28 — low garbled package/label
+lettering; still fractions of a cent per photo at Kyraan's volume).
 
 Deliberately NOT routed through the agent loop: the loop's decision JSON
 can't carry an image, and keeping photo turns tool-free is the taint rule

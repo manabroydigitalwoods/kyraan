@@ -112,7 +112,9 @@ def test_openai_payload_carries_image_parts(monkeypatch):
     content = captured["messages"][-1]["content"]
     assert content[0] == {"type": "text", "text": "what is it?"}
     assert content[1]["image_url"]["url"] == "data:image/png;base64,AA"
-    assert content[1]["image_url"]["detail"] == "low"
+    # high since 2026-08-28: low downscaled to ~512px and garbled
+    # package/label lettering ("OMNIGEL" -> "OMMLNIL")
+    assert content[1]["image_url"]["detail"] == "high"
 
 
 def test_record_exchange_lands_in_history_and_chat_log(monkeypatch):
