@@ -876,6 +876,22 @@ async def _forget_document(chat_id: int, wanted: str) -> str:
 
 # --- P3.1c: the undo command ----------------------------------------------
 
+def _age_note(action) -> str:
+    """A stale target must be visible in the ask: a bare "undo" reached
+    a two-hour-old AC switch and surprised the owner (2026-08-27).
+    Anything older than ~10 minutes names its time."""
+    try:
+        from kyraan.control_plane.dnd import local_now
+        done = action.done_at
+        age_s = (local_now() - done.astimezone(local_now().tzinfo)
+                 ).total_seconds()
+        if age_s > 600:
+            return f" (from {done.astimezone(local_now().tzinfo).strftime('%-I:%M %p')})"
+    except Exception:
+        pass
+    return ""
+
+
 def _describe_undo(action) -> str:
     """The confirm ask names the INVERSE concretely — the owner approves
     a specific reversal, not a vague 'undo'."""
@@ -897,7 +913,8 @@ def _describe_undo(action) -> str:
         return f'Undo: delete the face I just saved as "{ua.get("name", "")}"'
     if action.tool in ("home.turn_on", "home.turn_off"):
         back = "on" if action.undo_tool == "home.turn_on" else "off"
-        return f'Undo: switch {ua.get("entity", "")} back {back}'
+        return (f'Undo: switch {ua.get("entity", "")} back {back}'
+                + _age_note(action))
     if action.tool == "documents.rename":
         return (f'Undo: rename that document back to '
                 f'"{ua.get("new_name", "")}"')
