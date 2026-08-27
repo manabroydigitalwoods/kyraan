@@ -145,10 +145,15 @@ def test_rename_returns_prior_and_scopes_to_chat(doc_db):
     assert rows[0]["caption"] == "Kiaan's vaccination card"
 
 
-async def test_rename_executor_is_confirm_gated():
+@pytest.mark.pg
+async def test_rename_executor_fails_before_asking_on_no_match(doc_db):
+    """The search runs BEFORE the confirm ask (no-op guard, 2026-08-27):
+    a query matching nothing fails immediately instead of asking the
+    owner to approve a rename of a document that doesn't exist. The
+    confirm gate itself is covered by the no-op test below."""
     from kyraan.agents import loop_tools
     from kyraan.control_plane import kernel
-    with pytest.raises(kernel.ConfirmationRequired):
+    with pytest.raises(kernel.ToolFailed, match="no saved document"):
         await loop_tools._documents_rename(
             7, {"query": "immunization", "new_name": "Kiaan's card"}, "")
 
@@ -201,3 +206,20 @@ def test_rename_unions_subjects_never_drops(doc_db, _household):
     documents.rename_document(7, doc_id, "Ruma's copy of the card")
     assert sorted(documents.list_documents(7)[0]["subjects"]) \
         == ["kiaan", "ruma"]
+
+
+@pytest.mark.pg
+async def test_rename_to_the_same_words_is_a_noop_not_an_ask(doc_db, _household):
+    """Owner hit it live (2026-08-27 23:51): a confirm ask to rename
+    "Kamal — profile (kamal.pdf)" to "Kamal — profile PDF" — same words,
+    nothing to approve. Same-token renames answer directly."""
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    documents.ingest(7, "pdf", _CARD, caption="Kamal — profile (kamal.pdf)")
+    out = await loop_tools._documents_rename(
+        7, {"query": "kamal", "new_name": "Kamal — profile PDF"}, "")
+    assert out["renamed"] is False and "already" in out
+    # a genuinely different name still asks
+    with pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._documents_rename(
+            7, {"query": "kamal", "new_name": "Kamal CV 2026"}, "")

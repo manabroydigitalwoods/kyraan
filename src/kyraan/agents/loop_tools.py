@@ -706,8 +706,6 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
     if len(query) < 2 or not 2 <= len(new_name) <= 120:
         raise kernel.ToolFailed(
             "need the document to rename (words that find it) and a short new name")
-    if not kernel.confirmed_context():
-        raise kernel.ConfirmationRequired("documents.rename", dict(args))
     try:
         hits = await _aio.to_thread(documents.search, chat_id, query)
     except Exception as exc:
@@ -716,6 +714,21 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
     if not hits:
         raise kernel.ToolFailed(f"no saved document matches {query!r}")
     doc_id = hits[0]["doc_id"]
+
+    def _tokens(text: str) -> set:
+        import re as _re
+        return set(_re.findall(r"[a-z0-9]+", str(text).lower()))
+
+    if _tokens(hits[0]["caption"]) == _tokens(new_name):
+        # No-op guard (owner hit it live 2026-08-27 23:51: a confirm ask
+        # to rename "Kamal — profile (kamal.pdf)" to "Kamal — profile
+        # PDF"): same words means already named that — never ask the
+        # owner to approve a rename that changes nothing.
+        return {"renamed": False, "already": hits[0]["caption"],
+                "note": f'already named "{hits[0]["caption"]}" — say so, '
+                        "don't claim a change"}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("documents.rename", dict(args))
     prior = await _aio.to_thread(documents.rename_document,
                                  chat_id, doc_id, new_name)
     if prior is None:
