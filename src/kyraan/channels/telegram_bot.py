@@ -702,6 +702,22 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
             await _stage("auto_approvals", _auto_approvals)
 
+            # Cross-person contradiction scan (multi-user audit fix):
+            # undeclared conflicts become the standard dispute state —
+            # both facts flagged, a resolvable notice in the right queue.
+            async def _conflict_scan():
+                from kyraan.control_plane import kernel as _kernel
+                from kyraan.memory import conflicts as _conflicts
+                filed = await _aio.to_thread(_conflicts.nightly_scan)
+                if filed and _kernel.can_send_proactively():
+                    await _send(context, _owner_id(),
+                                f"⚖️ Memory: {filed} cross-person "
+                                "contradiction(s) found — both versions "
+                                'stand as disputed; say "review memory" '
+                                "to resolve.")
+
+            await _stage("conflict_scan", _conflict_scan)
+
             # The nightly doctor: silent when healthy; WARN/FAIL sends
             # the owner the needs-work list (DND-gated like every
             # proactive).

@@ -215,18 +215,38 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
 
 def _subject_owner_for(target: str) -> str:
     """Whose review queue owns a dispute about this target: people/<n>
-    when a person row exists for n, else the owner. PG trouble → owner."""
+    when that person is enrolled at a stage that can actually REVIEW
+    (a notice filed to someone who can't log in is a black hole — the
+    owner holds it until they can), else the owner. PG trouble → owner."""
     name = target.split("/", 1)[1].removesuffix(".md") if target.startswith("people/") else ""
     if not name or name == "owner":
         return "owner"
     try:
         from kyraan.store import pg
         with pg.connection() as conn:
-            row = conn.execute("SELECT 1 FROM person WHERE id = %s",
+            row = conn.execute("SELECT stage FROM person WHERE id = %s",
                                (name,)).fetchone()
-        return name if row else "owner"
+        return name if row and row[0] in ("read_mostly", "full") else "owner"
     except Exception:
         return "owner"
+
+
+def flag_disputed(a_id: str, b_id: str) -> bool:
+    """Mark two facts disputed (both stand; the flags are the visible
+    state until the subject-owner resolves). Idempotent."""
+    changed = []
+    with locked(_index_path()):
+        entries = _load()
+        for entry in entries:
+            if entry["id"] in (a_id, b_id) and entry["active"]:
+                if "disputed" not in (entry.get("flags") or []):
+                    entry["flags"] = sorted(set(entry.get("flags") or [])
+                                            | {"disputed"})
+                    changed.append(entry)
+        if changed:
+            _save(entries)
+            _mirror(changed, all_entries=entries)
+    return bool(changed)
 
 
 def _file_dispute_notice(old_entry: dict, new_entry: dict) -> None:
