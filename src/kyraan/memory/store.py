@@ -72,9 +72,14 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     # silently overwrote each other (external review P1).
     proposal_path = PENDING_DIR / f"{ts}-{uuid.uuid4().hex[:6]}__{safe_name}"
     meta_line = f"meta: {json.dumps(meta, ensure_ascii=False)}\n" if meta else ""
+    # P3.5c: proposals belong to whoever's turn produced them — their
+    # review queue, not the owner's (review keyed by person, arch §4).
+    from kyraan.control_plane import kernel as _kernel
+    reviewer = _kernel.viewer_person() or "owner"
     with open(proposal_path, "x") as handle:
         handle.write(
-            f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n{meta_line}---\n\n{content}\n"
+            f"---\ntarget: {relative_path}\nsource_statement: {source!r}\n"
+            f"reviewer: {reviewer}\n{meta_line}---\n\n{content}\n"
         )
     _os.chmod(proposal_path, 0o600)
     return proposal_path

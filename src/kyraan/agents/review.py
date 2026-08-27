@@ -1,12 +1,16 @@
 """In-chat memory review: proposal loading and the deterministic
-approve/reject decision parser — no model sits between the owner's
+approve/reject decision parser — no model sits between a reviewer's
 decision and a memory write. The stateful flow (_review_memory, the
-session dict) stays in orchestrator.py. Extracted in the G-04 split;
-content unchanged."""
+session dict) stays in orchestrator.py.
+
+P3.5c: the flow is keyed by PERSON, not hardcoded owner — each
+proposal carries a `reviewer:` stamp (missing = legacy = owner), and
+`_load_review_proposals(reviewer)` serves only that person's queue: a
+fact extracted from the spouse's own messages routes to HER review."""
 from kyraan.memory import store as memory_store
 
 
-def _load_review_proposals() -> list:
+def _load_review_proposals(reviewer: str = "owner") -> list:
     items = []
     for path in sorted(memory_store.PENDING_DIR.glob("*.md")):
         text = path.read_text()
@@ -14,6 +18,11 @@ def _load_review_proposals() -> list:
         frontmatter, _, body = rest.partition("---\n")
         target = next((line.split("target:", 1)[1].strip()
                        for line in frontmatter.splitlines() if line.startswith("target:")), "?")
+        owned_by = next((line.split("reviewer:", 1)[1].strip()
+                         for line in frontmatter.splitlines()
+                         if line.startswith("reviewer:")), "owner")
+        if owned_by != reviewer:
+            continue
         items.append((path, target, body.strip().lstrip("- ").strip()))
     return items
 

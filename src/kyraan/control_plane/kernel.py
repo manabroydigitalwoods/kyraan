@@ -62,23 +62,36 @@ def confirmed_context() -> bool:
 # what config's stage_toolsets allowlist names; the menu filter in the
 # agent loop is the polite layer, this is the wall — a model asking for
 # an out-of-scope tool by any phrasing is refused HERE.
-_viewer_stage = contextvars.ContextVar("kyraan_viewer_stage", default="owner")
+_viewer = contextvars.ContextVar("kyraan_viewer", default=("owner", "owner"))
 
 
 def viewer_stage() -> str:
-    return _viewer_stage.get()
+    return _viewer.get()[1]
+
+
+def viewer_person() -> str:
+    """WHO is looking this turn — 'owner' by default; the §4 visibility
+    clause keys on this (P3.5c)."""
+    return _viewer.get()[0]
+
+
+def set_viewer(person: str, stage: str):
+    return _viewer.set((person or "none", stage or "none"))
 
 
 def set_viewer_stage(stage: str):
-    return _viewer_stage.set(stage or "none")
+    """Stage-only form (P3.5b tests/back-compat): a non-owner stage with
+    no named person gets the empty viewer — sees shared facts only."""
+    stage = stage or "none"
+    return _viewer.set(("owner" if stage == "owner" else "", stage))
 
 
 def reset_viewer_stage(token) -> None:
-    _viewer_stage.reset(token)
+    _viewer.reset(token)
 
 
 def stage_allows(name: str, stage: str | None = None) -> bool:
-    stage = stage if stage is not None else _viewer_stage.get()
+    stage = stage if stage is not None else viewer_stage()
     if stage == "owner":
         return True
     allowed = (config.load().get("stage_toolsets") or {}).get(stage) or []
@@ -89,7 +102,7 @@ def stage_allows(name: str, stage: str | None = None) -> bool:
 
 def _stage_gate(kind: str, name: str, args) -> None:
     if not stage_allows(name):
-        log_event("blocked_stage_scope", stage=_viewer_stage.get(),
+        log_event("blocked_stage_scope", stage=viewer_stage(),
                   **{kind: name}, args=args)
         raise ToolFailed(
             f"'{name}' is not available at your access level — "

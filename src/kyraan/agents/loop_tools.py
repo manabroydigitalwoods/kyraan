@@ -499,7 +499,8 @@ async def _faces_remember(chat_id: int, args: dict, raw_text: str):
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents import orchestrator
     return [{"n": i + 1, "fact": fact, "target": target}
-            for i, (_, target, fact) in enumerate(orchestrator._load_review_proposals())]
+            for i, (_, target, fact) in enumerate(
+                orchestrator._load_review_proposals(kernel.viewer_person()))]
 
 
 async def _memory_relations(chat_id: int, args: dict, raw_text: str):

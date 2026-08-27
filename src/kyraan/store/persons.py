@@ -81,6 +81,34 @@ def person_for_chat(chat_id: int) -> tuple | None:
     return result
 
 
+def extraction_enabled(person_id: str) -> bool:
+    """The §4 first-month rule: extraction from a non-owner's messages
+    is OFF unless explicitly enabled per person. Fail-closed."""
+    if person_id == "owner":
+        return True
+    try:
+        with pg.connection() as conn:
+            row = conn.execute(
+                "SELECT extraction_enabled FROM person WHERE id = %s",
+                (person_id,)).fetchone()
+        return bool(row and row[0])
+    except Exception as exc:
+        log_event("person_lookup_failed", person=person_id,
+                  error=str(exc)[:120])
+        return False
+
+
+def set_extraction(person_id: str, enabled: bool) -> None:
+    with pg.connection() as conn:
+        n = conn.execute(
+            "UPDATE person SET extraction_enabled = %s WHERE id = %s",
+            (enabled, person_id.strip().lower())).rowcount
+        conn.commit()
+    if not n:
+        raise ValueError(f"no person {person_id!r}")
+    log_event("person_extraction_set", person=person_id, enabled=enabled)
+
+
 def list_persons() -> list:
     with pg.connection() as conn:
         return conn.execute(

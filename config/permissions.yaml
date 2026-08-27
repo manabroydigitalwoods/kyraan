@@ -470,4 +470,18 @@ stage_toolsets:
     - places
     - routes
     - web.search
-  full: *read_mostly_tools
+  # full (stage 3) adds the person's OWN memory loop: extraction from
+  # their messages (still behind their per-person extraction_enabled
+  # flag) and their own review queue (P3.5c) — never the owner's.
+  full:
+    - qa
+    - agent.action
+    - reminders
+    - calendar.list_events
+    - weather
+    - places
+    - routes
+    - web.search
+    - memory.propose
+    - memory.review
+    - memory.pending_list

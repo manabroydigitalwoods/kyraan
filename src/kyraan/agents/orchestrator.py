@@ -122,7 +122,7 @@ async def _review_memory(chat_id: int, text: str) -> str:
     _history_redaction.set("[showed the pending-review list]")
 
     async def handler(args: dict) -> str:
-        proposals = _load_review_proposals()
+        proposals = _load_review_proposals(kernel.viewer_person())
         if not proposals:
             _pending_reviews.pop(chat_id, None)
             return ("Nothing is pending review — every fact you've approved is "
@@ -402,11 +402,13 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
-    if kernel.viewer_stage() != "owner":
-        # P3.5c's first-month rule, enforced early (P3.5b): extraction
-        # from a non-owner's messages is off by default — their words
-        # must not become facts without their own review flow.
-        _skip_extraction.set(True)
+    if kernel.viewer_person() != "owner":
+        # P3.5c first-month rule: extraction from a non-owner's messages
+        # only with their per-person opt-in flag; proposals then route to
+        # THEIR review queue via the reviewer stamp in propose_fact.
+        from kyraan.store import persons as _persons
+        if not _persons.extraction_enabled(kernel.viewer_person()):
+            _skip_extraction.set(True)
     if not _skip_extraction.get():
         import asyncio as _aio
 
@@ -562,7 +564,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                                 memory_store.reject(path)
                                 discarded.append(fact)
                                 log_event("memory_rejected_via_chat", target=target, fact=fact[:80])
-                        remaining = len(_load_review_proposals())
+                        remaining = len(_load_review_proposals(kernel.viewer_person()))
                         parts = []
                         if saved:
                             parts.append("✅ Saved to memory: " + "; ".join(saved))

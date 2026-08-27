@@ -266,13 +266,26 @@ def _pg_candidates(message: str) -> list | None:
         # deactivation never landed would resurface (Bugbot P1).
         log_event("memory_backend_fallback", backend="pg", reason="mirror stale")
         return None
+    # P3.5c: the §4 visibility clause. The owner sees everything except
+    # subject_only facts of OTHER people (those route to their own
+    # review); any other viewer sees shared facts plus facts about
+    # themselves — nothing else, whatever the retrieval heuristics say.
+    from kyraan.control_plane import kernel as _kernel
+    viewer = _kernel.viewer_person()
+    if viewer == "owner":
+        vis_sql = "AND NOT (visibility = 'subject_only' AND subject <> 'owner')"
+        vis_params: tuple = ()
+    else:
+        vis_sql = "AND (visibility = 'shared' OR subject = %s)"
+        vis_params = (viewer,)
     try:
         with _pg.connection() as conn:
             rows = conn.execute(
-                """SELECT legacy_id, content, target, kind, term, importance,
+                f"""SELECT legacy_id, content, target, kind, term, importance,
                           flags, era, sphere, created_at
                    FROM fact
                    WHERE active AND owner = 'owner'
+                         {vis_sql}
                          AND NOT (term = 'short' AND created_at < %s)
                          AND (flags && ARRAY['health','safety','emergency','danger']
                               OR importance = 'critical' OR kind = 'identity'
@@ -281,7 +294,7 @@ def _pg_candidates(message: str) -> list | None:
                               OR id IN (SELECT id FROM fact WHERE active
                                         ORDER BY created_at DESC LIMIT 100))
                    ORDER BY created_at, legacy_id""",
-                (cutoff, tsquery, tsquery or "x")).fetchall()
+                (*vis_params, cutoff, tsquery, tsquery or "x")).fetchall()
     except Exception as exc:
         log_event("memory_backend_fallback", backend="pg",
                   reason=str(exc)[:200])
@@ -306,6 +319,14 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
     if _os.environ.get("KYRAAN_MEMORY_BACKEND", "pg").strip().lower() == "pg":
         entries = _pg_candidates(message)
     if entries is None:
+        from kyraan.control_plane import kernel as _kernel
+        if _kernel.viewer_person() != "owner":
+            # P3.5c fail-closed: the index file has no visibility
+            # columns, so a non-owner NEVER falls back to it — a pg
+            # outage means they get no facts, not the owner's.
+            log_event("memory_visibility_failclosed",
+                      viewer=_kernel.viewer_person())
+            return ""
         entries = active_entries()
     if not entries:
         return ""
@@ -478,4 +499,7 @@ def memory_context(message: str = "") -> str:
     serves only installs that never migrated."""
     if _index_path().exists():
         return build_context(message) or "(no facts stored yet)"
+    from kyraan.control_plane import kernel as _kernel
+    if _kernel.viewer_person() != "owner":
+        return "(no facts stored yet)"  # P3.5c: the raw dump is owner-only
     return store.load_all_facts() or "(no facts stored yet)"

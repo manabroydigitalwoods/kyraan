@@ -3,6 +3,7 @@
     scripts/enroll_person.py                                   # list
     scripts/enroll_person.py <person_id> <chat_id> <stage> <consent YYYY-MM-DD>
     scripts/enroll_person.py <person_id> none                  # revoke access
+    scripts/enroll_person.py --extraction <person_id> on|off   # §4 first-month flag
 
 Stages: none (no access) | read_mostly | full. Enrolling at any stage
 above none REFUSES while an active fact has an unreviewed subject.
@@ -24,6 +25,10 @@ def main() -> int:
         for pid, chat_id, stage, consented in persons.list_persons():
             print(f"  {pid:12s} stage={stage:12s} chat={chat_id} "
                   f"consented={consented}")
+        return 0
+    if args[0] == "--extraction" and len(args) == 3 and args[2] in ("on", "off"):
+        persons.set_extraction(args[1], args[2] == "on")
+        print(f"{args[1]}: extraction {'enabled' if args[2] == 'on' else 'disabled'}")
         return 0
     if len(args) == 2 and args[1] == "none":
         row = next((r for r in persons.list_persons() if r[0] == args[0]), None)
