@@ -19,6 +19,8 @@ dependencies = [
     "icalendar>=6.0",
     "recurring-ical-events>=3.0",
     "opencv-python>=4.10",  # local face recognition (agents/faces.py)
+    "psycopg[binary,pool]>=3.2",  # Phase 3 stores (store/pg.py)
+    "redis>=5.0",                 # Phase 3 session backend
 ]
 
 [project.optional-dependencies]
@@ -37,5 +39,6 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.pytest.ini_options]
+markers = ["pg: needs the local Postgres container (auto-skips when unreachable)"]
 asyncio_mode = "auto"
 

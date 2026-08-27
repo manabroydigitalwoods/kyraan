@@ -25,6 +25,42 @@ services:
       - ./homeassistant:/config
     restart: unless-stopped
 
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kyraan-postgres
+    environment:
+      - POSTGRES_DB=kyraan
+      - POSTGRES_USER=kyraan
+      # from docker/.env (gitignored) — never in this file
+      - POSTGRES_PASSWORD=${KYRAAN_PG_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"   # localhost-only: single writer, the bot
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data   # state — gitignored, backed up
+                                            # via pg_dump in the nightly tar
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kyraan -d kyraan"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: kyraan-redis
+    ports:
+      - "127.0.0.1:6379:6379"   # localhost-only
+    volumes:
+      - ./redisdata:/data        # AOF persistence: a restart keeps session
+                                 # state; a flush is still allowed to lose it
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   searxng:
     image: searxng/searxng:latest
     container_name: searxng

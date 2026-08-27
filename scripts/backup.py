@@ -26,6 +26,18 @@ def main() -> int:
     os.chmod(dest, 0o700)  # .env rides inside — owner-only, always
     stamp = time.strftime("%Y%m%dT%H%M%S")
     target = dest / f"kyraan-{stamp}.tar.gz"
+    # Postgres joins the tar the day it holds rows (P3.0b): pg_dump via
+    # the container, so no client install needed on the host. A dump
+    # failure is loud but doesn't sink the file backup.
+    pg_sql = REPO / "data" / "pg_dump.sql"
+    dump = subprocess.run(
+        ["docker", "exec", "kyraan-postgres", "pg_dump", "-U", "kyraan", "kyraan"],
+        capture_output=True, text=True)
+    if dump.returncode == 0:
+        pg_sql.write_text(dump.stdout)
+    else:
+        print(f"pg_dump skipped: {dump.stderr[:150]}", file=sys.stderr)
+        pg_sql.unlink(missing_ok=True)
     members = [m for m in ("data", "memory", "config/permissions.yaml", ".env")
                if (REPO / m).exists()]
     result = subprocess.run(

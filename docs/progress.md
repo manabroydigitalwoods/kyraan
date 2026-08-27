@@ -470,6 +470,23 @@ be mid-edit — a watchdog respawn once served MIXED half-edited code
 live; treat a surprise red test run as possible mid-edit interference
 and re-run before debugging; commits are the sync points.
 
+**Phase 3 started — P3.0a+b DONE, and a datastore consolidation
+(2026-08-27):** standing up the containers exposed a fork: a Homebrew
+Postgres on the host was already running a 40-table live Kyraan
+datastore (1,452 chat turns) built by the parallel session — undocumented
+in this repo. Owner's decision: consolidate on the audited container
+track; the host postgresql@17 + redis were backed up
+(~/Backups/kyraan/host-pg-final-*.sql, host-redis-final-*.rdb) and
+uninstalled. **Parallel session: your PG/Redis work must now target the
+containers (KYRAAN_PG_DSN in .env, port 5432) and conform to
+phase3_architecture.md v2 + the workplan — the host servers are gone.**
+Shipped: pgvector/pg16 + redis:7 containers (localhost-only,
+healthchecked, volumes gitignored), store/pg.py pool, migrations/001
+(person/fact/triple/action_log with the audit columns), idempotent
+scripts/migrate.py, pg-marked tests, pg_dump in the nightly backup and
+scripts/restore.py — restore DRILLED into a scratch database (5 tables
+verified). Next: P3.0c (CI services), then P3.1 undo.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
