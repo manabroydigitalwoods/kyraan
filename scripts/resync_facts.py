@@ -32,6 +32,20 @@ def main() -> int:
     print(f"synced {len(entries)} index entries — fact table now holds "
           f"{total} rows, {unreviewed} awaiting subject review "
           f"(scripts/review_subjects.py)")
+    # P3.3d: re-sweep for every FORGOTTEN fact — inactive with no
+    # supersessor (an update is not a forget) and long-term (a short-term
+    # expiry is not a forget either; the index can't distinguish an
+    # expired short from a forgotten one, so shorts only sweep at
+    # forget time). Catches forget-time sweeps deferred by a PG outage
+    # so a forgotten topic can't linger findable. Idempotent.
+    from kyraan.store import episodes
+    swept = 0
+    for entry in entries:
+        if (not entry.get("active") and not entry.get("superseded_by")
+                and entry.get("term") != "short"):
+            swept += episodes.suppress_for_fact(
+                facts.fact_uuid(entry["id"]), entry["content"])
+    print(f"forget-cascade re-sweep: {swept} episode suppressions added")
     return 0
 
 

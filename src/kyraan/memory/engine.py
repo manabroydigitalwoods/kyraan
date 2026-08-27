@@ -347,7 +347,25 @@ def forget(entry_ids: list) -> list:
         _save(entries)
         if changed:
             _mirror(changed)
+            _sweep_episodes(changed)
     return forgotten
+
+
+def _sweep_episodes(changed: list) -> None:
+    """P3.3d: forget cascades to episodes — a forgotten fact must never
+    resurface through recall (audit P1). Deferred failures are re-swept
+    by scripts/resync_facts.py, which sweeps for every inactive fact."""
+    try:
+        from kyraan.store import episodes, facts
+        if not facts.MIRROR_ENABLED:  # tests: no PG side-effects at all
+            return
+        total = 0
+        for entry in changed:
+            total += episodes.suppress_for_fact(
+                facts.fact_uuid(entry["id"]), entry["content"])
+        log_event("episodes_suppressed", facts=len(changed), episodes=total)
+    except Exception as exc:
+        log_event("episode_suppress_deferred", reason=str(exc)[:200])
 
 
 def memory_context(message: str = "") -> str:

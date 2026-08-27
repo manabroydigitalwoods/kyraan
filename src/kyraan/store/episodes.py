@@ -134,6 +134,50 @@ def ingest_day(day: str, records: list, tag=None) -> dict:
     return {"episodes": written, "chats": len(chunks_by_chat)}
 
 
+# --- forget cascade (P3.3d, arch §3 / audit P1) ---------------------------
+
+def suppress_for_fact(fact_id: str, fact_content: str) -> int:
+    """Sweep after a fact is forgotten: every episode that references the
+    fact (fact_refs) or word-overlaps its content (the arch's fixed
+    overlap≥2 rule — the same threshold that governs fact matching) gets
+    `suppressed_by += fact_id`. Over-sweeping errs safe: a forgotten
+    topic must never resurface through recall. Idempotent — an already-
+    marked episode is skipped. Returns the number swept."""
+    from kyraan.memory.engine import _words
+    words = _words(fact_content)
+    need = 2 if len(words) >= 2 else 1
+    swept = 0
+    with pg.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, text, fact_refs, suppressed_by FROM episode").fetchall()
+        for eid, text, fact_refs, suppressed in rows:
+            if fact_id in [str(u) for u in (suppressed or [])]:
+                continue
+            hit = fact_id in [str(u) for u in (fact_refs or [])]
+            if not hit:
+                hit = len(words & _words(text)) >= need
+            if hit:
+                conn.execute(
+                    """UPDATE episode
+                       SET suppressed_by = suppressed_by || %s::uuid
+                       WHERE id = %s""", (fact_id, eid))
+                swept += 1
+        conn.commit()
+    return swept
+
+
+def delete_person_episodes(person_id: str) -> int:
+    """A person's delete-me (§1): their episodes are hard-deleted by
+    participant, not suppressed — deletion means gone."""
+    with pg.connection() as conn:
+        deleted = conn.execute(
+            "DELETE FROM episode WHERE %s = ANY(participants)",
+            (person_id,)).rowcount
+        conn.commit()
+    log_event("person_episodes_deleted", person=person_id, episodes=deleted)
+    return deleted
+
+
 # --- recall (P3.3c) -------------------------------------------------------
 
 _DISCRETION_FLAGS = {"emotional", "sensitive"}

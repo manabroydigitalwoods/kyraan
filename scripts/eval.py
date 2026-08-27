@@ -102,6 +102,13 @@ CASES = [
     # an "any hospitals near Siliguri?" conversation from 2026-08-26.
     Case("recall.episode", "what did we discuss about hospitals near Siliguri before?",
          [["hospital", "Hospital"]], hard=False),
+    # P3.3d resurrection gate (HARD): main() seeded a dragonfruit fact +
+    # episode and FORGOT the fact through the real cascade before any
+    # case ran — nothing in this run's history names it, so any
+    # "dragonfruit" in the reply is a resurrection through a store.
+    Case("recall.resurrection",
+         "what did we discuss about my favourite eval fruit?",
+         [], must_not=["dragonfruit", "Dragonfruit"]),
     # P3.1c: the undo command, end to end — create, undo-ask naming the
     # concrete inverse, yes executes it, and the reminder is really gone.
     # HARD: deterministic path (needs the local Postgres container up).
@@ -112,6 +119,47 @@ CASES = [
     Case("undo.confirm", "yes", [["undone"]]),
     Case("undo.gone", "any reminders?", [], must_not=["water the plants"]),
 ]
+
+
+_SEED_FACT = "Favourite eval fruit is dragonfruit"
+_SEED_EPISODE = ("user: by the way my favourite eval fruit is dragonfruit\n"
+                 "assistant: Noted — dragonfruit it is.")
+
+
+def _rig_resurrection_gate() -> None:
+    """P3.3d: seed a fact + an old episode about it, verify recall finds
+    the episode, then FORGET the fact through the real engine path (file
+    → PG mirror → episode sweep). The recall.resurrection case then
+    proves neither store resurfaces it. Re-runnable: the fact toggles
+    back active and the episode unsuppresses here every run."""
+    from kyraan.memory import engine
+    from kyraan.store import embed as embed_store
+    from kyraan.store import episodes, facts, pg
+    entries = engine._load()
+    seed = next((e for e in entries
+                 if e["target"] == "preferences/eval_fruit.md"), None)
+    if seed:
+        seed["active"], seed["superseded_by"] = True, None
+        engine._save(entries)
+        facts.mirror_entries([seed])
+        fact_id = seed["id"]
+    else:
+        fact_id = engine.add_fact(_SEED_FACT, "preferences/eval_fruit.md",
+                                  "(eval resurrection rig)")
+    vector = json.dumps(embed_store.embed([_SEED_EPISODE])[0])
+    with pg.connection() as conn:
+        conn.execute(
+            """INSERT INTO episode (id, chat_id, day, text, embedding, created_at)
+               VALUES (%s, %s, '2026-08-20', %s, %s, '2026-08-20T10:00:00+00:00')
+               ON CONFLICT (id) DO UPDATE SET suppressed_by = '{}'""",
+            (episodes.episode_uuid(CHAT, "resurrection-rig"), CHAT,
+             _SEED_EPISODE, vector))
+        conn.commit()
+    found = episodes.recall(CHAT, "favourite eval fruit dragonfruit")
+    assert any("dragonfruit" in line for line in found), \
+        "rig broken: the seeded episode must be findable BEFORE the forget"
+    engine.forget([fact_id])  # the real cascade: mirror + sweep
+    print("resurrection rig: seeded, verified findable, forgotten+swept")
 
 
 def _check(case: Case, reply: str) -> bool:
@@ -135,6 +183,7 @@ async def main() -> int:
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None,
                    send_fn=None, only_chat=CHAT)
     kill_switch.disengage()
+    _rig_resurrection_gate()
     pre_proposals = {p.name for p in memory_store.PENDING_DIR.glob("*")}
 
     hard_pass = hard_total = soft_pass = soft_total = 0

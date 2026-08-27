@@ -190,6 +190,108 @@ def test_recall_excludes_suppressed(episode_db, monkeypatch):
     assert episodes.recall(5, "forgotten topic") == []
 
 
+# --- forget cascade (P3.3d) -----------------------------------------------
+
+_FID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+@pytest.mark.pg
+def test_forgotten_fact_makes_matching_episode_unfindable(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    _seed_episode(5, "2026-08-20", "user: my favourite fruit is dragonfruit")
+    assert episodes.recall(5, "favourite fruit dragonfruit") != []
+    swept = episodes.suppress_for_fact(_FID, "Favourite fruit is dragonfruit")
+    assert swept == 1
+    assert episodes.recall(5, "favourite fruit dragonfruit") == []
+
+
+@pytest.mark.pg
+def test_suppression_is_auditable_and_idempotent(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    _seed_episode(5, "2026-08-20", "user: my favourite fruit is dragonfruit")
+    episodes.suppress_for_fact(_FID, "Favourite fruit is dragonfruit")
+    assert episodes.suppress_for_fact(_FID, "Favourite fruit is dragonfruit") == 0
+    with pg.connection() as conn:
+        suppressed, = conn.execute(
+            "SELECT suppressed_by FROM episode").fetchone()
+    assert [str(u) for u in suppressed] == [_FID]  # who forgot what: on the row
+
+
+@pytest.mark.pg
+def test_single_word_overlap_does_not_sweep(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    _seed_episode(5, "2026-08-20", "user: what a lovely favourite spot")
+    # only 'favourite' overlaps — below the fixed overlap>=2 threshold
+    assert episodes.suppress_for_fact(_FID, "Favourite fruit is dragonfruit") == 0
+
+
+@pytest.mark.pg
+def test_fact_refs_hit_sweeps_regardless_of_words(episode_db, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    with pg.connection() as conn:
+        conn.execute(
+            """INSERT INTO episode (id, chat_id, day, fact_refs, text,
+                                    embedding, created_at)
+               VALUES (%s, 5, '2026-08-20', %s::uuid[], 'user: unrelated words',
+                       %s, '2026-08-20T10:00:00+00:00')""",
+            (episodes.episode_uuid(5, "refs-test"), [_FID],
+             _json.dumps([0.5] * embed.EMBED_DIM)))
+        conn.commit()
+    assert episodes.suppress_for_fact(_FID, "zzz qqq") == 1
+
+
+@pytest.mark.pg
+def test_delete_me_removes_rows_by_participant(episode_db, monkeypatch):
+    import json as _json
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    with pg.connection() as conn:
+        for name, who in (("a", ["owner"]), ("b", ["ruma", "owner"])):
+            conn.execute(
+                """INSERT INTO episode (id, chat_id, day, participants, text,
+                                        embedding, created_at)
+                   VALUES (%s, 5, '2026-08-20', %s, 'user: hi', %s,
+                           '2026-08-20T10:00:00+00:00')""",
+                (episodes.episode_uuid(5, f"del-{name}"), who,
+                 _json.dumps([0.5] * embed.EMBED_DIM)))
+        conn.commit()
+    assert episodes.delete_person_episodes("ruma") == 1
+    with pg.connection() as conn:
+        remaining, = conn.execute("SELECT count(*) FROM episode").fetchone()
+    assert remaining == 1  # the owner-only episode survives — gone means gone
+
+
+def test_engine_forget_triggers_the_sweep(monkeypatch):
+    from kyraan.memory import engine
+    from kyraan.store import facts
+    monkeypatch.setattr(facts, "MIRROR_ENABLED", True)
+    monkeypatch.setattr(facts, "mirror_entries", lambda entries: True)
+    swept = []
+    monkeypatch.setattr(episodes, "suppress_for_fact",
+                        lambda fid, content: swept.append((fid, content)) or 1)
+    fid = engine.add_fact("Sweep hook probe fact", "preferences/sweep.md", "test")
+    engine.forget([fid])
+    assert swept == [(facts.fact_uuid(fid), "Sweep hook probe fact")]
+
+
+def test_sweep_failure_never_breaks_forget(monkeypatch):
+    from kyraan.memory import engine
+    from kyraan.store import facts
+    monkeypatch.setattr(facts, "MIRROR_ENABLED", True)
+    monkeypatch.setattr(facts, "mirror_entries", lambda entries: True)
+
+    def boom(fid, content):
+        raise RuntimeError("pg down")
+
+    monkeypatch.setattr(episodes, "suppress_for_fact", boom)
+    events = []
+    monkeypatch.setattr(engine, "log_event",
+                        lambda name, **kw: events.append(name))
+    fid = engine.add_fact("Deferred sweep fact", "preferences/sweep2.md", "test")
+    assert engine.forget([fid]) == ["Deferred sweep fact"]
+    assert "episode_suppress_deferred" in events
+
+
 # --- the loop tool executor (faked store) ---------------------------------
 
 def test_recall_executor_passes_through_lines(monkeypatch):
