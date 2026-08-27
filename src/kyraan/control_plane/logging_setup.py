@@ -120,33 +120,73 @@ CHAT_LOG = LOG_DIR / "chat.jsonl"
 # volume — and because every write opens the file fresh, rotation by any
 # process is picked up by all of them on their next event.
 _ROTATE_BYTES = 5 * 1024 * 1024
+# Daily rotation (2026-08-27): traces alone run 5-10MB/day, so live files
+# hold only TODAY and everything older lands in logs/archive/YYYY-MM-DD/.
+# chat.jsonl is deliberately excluded — restart history-seeding reads it
+# ACROSS midnight; cutting it daily would make a morning restart forget
+# last night's conversation.
+_DAILY_ROTATED = ("events.jsonl", "traces.jsonl")
+
+
+def _local_date(ts: float | None = None):
+    import os as _os
+    import time as _time
+    from zoneinfo import ZoneInfo
+    try:
+        tz = ZoneInfo(_os.environ.get("KYRAAN_TIMEZONE", "UTC"))
+    except Exception:
+        tz = timezone.utc
+    when = datetime.fromtimestamp(ts if ts is not None else _time.time(), tz)
+    return when.date()
+
+
+def _rotate(path: Path, day) -> None:
+    """Archive the live file into its DAY's folder. The uuid suffix keeps
+    two processes rotating in the same second from colliding (review P2);
+    a lost rename race is harmless."""
+    import uuid
+    day_dir = ARCHIVE_DIR / day.isoformat()
+    day_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    try:
+        path.rename(day_dir / f"{path.stem}-{stamp}-{uuid.uuid4().hex[:6]}.jsonl")
+    except FileNotFoundError:
+        pass  # the other process rotated first
+
+
+def _prune_old_archives(stem: str) -> None:
+    # Retention: rotated archives older than 90 days are pruned — they
+    # were accumulating forever (completion pack). Day folders empty
+    # after pruning are removed too.
+    import time as _time
+    cutoff = _time.time() - 90 * 86400
+    for archive in ARCHIVE_DIR.rglob(f"{stem}-*.jsonl"):
+        try:
+            if archive.stat().st_mtime < cutoff:
+                archive.unlink()
+                if archive.parent != ARCHIVE_DIR and not any(archive.parent.iterdir()):
+                    archive.parent.rmdir()
+        except OSError:
+            pass
 
 
 def _rotate_if_large(path: Path) -> None:
     try:
-        if path.stat().st_size < _ROTATE_BYTES:
-            return
+        stat = path.stat()
     except FileNotFoundError:
         return
-    import time as _time
-    import uuid
-    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
-    # Retention: rotated archives older than 90 days are pruned — they
-    # were accumulating forever (completion pack).
-    cutoff = _time.time() - 90 * 86400
-    for archive in ARCHIVE_DIR.glob(f"{path.stem}-*.jsonl"):
-        try:
-            if archive.stat().st_mtime < cutoff:
-                archive.unlink()
-        except OSError:
-            pass
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    try:
-        # uuid suffix: two processes rotating in the same second produced
-        # colliding archive names (review P2); a lost race is harmless.
-        path.rename(ARCHIVE_DIR / f"{path.stem}-{stamp}-{uuid.uuid4().hex[:6]}.jsonl")
-    except FileNotFoundError:
-        pass  # the other process rotated first
+    file_day = _local_date(stat.st_mtime)
+    today = _local_date()
+    if path.name in _DAILY_ROTATED and file_day < today:
+        # First write of a new local day: yesterday's records archive
+        # under yesterday's folder, however small the file is.
+        _prune_old_archives(path.stem)
+        _rotate(path, file_day)
+        return
+    if stat.st_size < _ROTATE_BYTES:
+        return
+    _prune_old_archives(path.stem)
+    _rotate(path, today)
 
 
 def _append(path: Path, record: dict) -> None:

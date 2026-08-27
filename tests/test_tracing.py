@@ -117,7 +117,7 @@ def test_rotation_archives_into_the_subdir(monkeypatch, tmp_path):
     monkeypatch.setattr(logging_setup, "_ROTATE_BYTES", 200)
     for i in range(20):
         logging_setup.log_event("probe", n=i, pad="x" * 40)
-    archives = list((tmp_path / "archive").glob("events-*.jsonl"))
+    archives = list((tmp_path / "archive").rglob("events-*.jsonl"))
     assert archives, "rotation should have archived into the subdir"
     assert log.exists() or True  # live file recreated on next write
     assert not list(tmp_path.glob("events-*.jsonl"))  # nothing at top level

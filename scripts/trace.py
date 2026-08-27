@@ -5,8 +5,9 @@ call, every tool call with duration, the final reply, total wall time.
     .venv/bin/python scripts/trace.py <turn_id>  # a specific turn (prefix ok)
     .venv/bin/python scripts/trace.py --full     # include full prompt text
 
-Reads logs/traces.jsonl + logs/events.jsonl (current files only — rotated
-archives are for manual forensics).
+Reads logs/traces.jsonl + logs/events.jsonl — TODAY's turns (live files
+hold only the current day; older days live in logs/archive/YYYY-MM-DD/
+for manual forensics).
 """
 import json
 import sys
