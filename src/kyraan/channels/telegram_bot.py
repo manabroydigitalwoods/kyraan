@@ -3,6 +3,7 @@ a personal assistant, not an open bot, until Phase 3's multi-user work.
 """
 import asyncio
 import os
+import re
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
@@ -502,6 +503,19 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 _plain(reply), do_quote=True,
                 reply_markup=_confirm_keyboard(chat_id))
             return
+        if (faces.available()
+                and re.search(r"who(?:'s| is)|do you (?:know|recogni[sz]e)",
+                              caption, re.IGNORECASE)
+                and not recognized["names"] and not recognized.get("maybe")):
+            # A who-question with NO match answers with the truth about
+            # what IS saved — live 2026-08-28: a no-match got a plain
+            # visual description and the owner had to interrogate why
+            # ("you said suman's face record but you can't recognise").
+            enrolled = faces.enrolled_names()
+            reply += ("\n\n(Checked against my saved faces — no match. "
+                      + (f"I have face data for: {', '.join(enrolled)}."
+                         if enrolled else "No faces are enrolled yet.")
+                      + ")")
         hint_name = faces.enroll_hint(caption) if faces.available() else None
         if hint_name:
             reply += (f'\n\n(Want me to recognize this face later? Send a solo '

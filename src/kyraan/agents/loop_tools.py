@@ -663,6 +663,41 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
             for h in hits]
 
 
+async def _faces_list(chat_id: int, args: dict, raw_text: str):
+    """The COMPLETE truth about stored face data — the model claimed
+    "Yes, I have Suman's face data" twice, live, for a face that was
+    never enrolled (2026-08-28: only a pending MEMORY fact existed).
+    Face-data questions answer from this list, never from memory."""
+    from kyraan.agents import faces
+    names = faces.enrolled_names() if faces.available() else []
+    return {"enrolled_faces": names,
+            "note": ("this list is COMPLETE — a name not on it has NO "
+                     "face data, whatever the conversation says")}
+
+
+async def _faces_check_photo(chat_id: int, args: dict, raw_text: str):
+    """Re-run recognition on the photo the user JUST sent (10-min stash)
+    — live 2026-08-28 00:11: "you can take from above" was answered
+    with "please resend the photo" although the bytes were stashed."""
+    import asyncio as _aio
+
+    from kyraan.agents import faces
+    if not faces.available():
+        raise kernel.ToolFailed("face recognition isn't set up on this machine")
+    image = faces.recent_photo(chat_id)
+    if image is None:
+        raise kernel.ToolFailed(
+            "no recent photo in hand (they expire after 10 minutes) — "
+            "ask the user to send it again")
+    result = await _aio.to_thread(faces.recognize, image)
+    return {"recognized": result.get("names", []),
+            "borderline": result.get("maybe", []),
+            "unmatched_faces": result.get("unknown_faces", 0),
+            "enrolled_faces": faces.enrolled_names(),
+            "note": ("report matches plainly; borderline = hedge; a face "
+                     "matching nobody is 'not someone I have saved'")}
+
+
 async def _documents_read(chat_id: int, args: dict, raw_text: str):
     import asyncio as _aio
 
@@ -949,6 +984,23 @@ TOOLS = {
                   "current title or contents); new_name is what the user "
                   "called it."),
         "run": _documents_rename,
+    },
+    "faces.list": {
+        "params": "{}",
+        "about": ("Which faces are actually enrolled for recognition — the "
+                  "ONLY truth source for \"do you have X's face data?\". "
+                  "NEVER answer face-data questions from memory or "
+                  "conversation: this list decides, and a name missing "
+                  "from it has no face data."),
+        "run": _faces_list,
+    },
+    "faces.check_photo": {
+        "params": "{}",
+        "about": ("Re-run face recognition on the photo the user sent in "
+                  "the last 10 minutes — for \"who is this?\" follow-ups, "
+                  "\"check it against X\", \"you can take from above\". "
+                  "No resend needed while the photo is fresh."),
+        "run": _faces_check_photo,
     },
     "documents.read": {
         "params": '{"query": "<words that find the document>"}',
@@ -1311,7 +1363,8 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
                     "memory.relations", "documents.search", "documents.list",
-                    "documents.read", "rules.list",
+                    "documents.read", "rules.list", "faces.list",
+                    "faces.check_photo",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 

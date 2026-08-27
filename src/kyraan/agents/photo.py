@@ -72,6 +72,11 @@ Also set "document_subjects" to a list of household member names the
 document is ABOUT — the patient on a medical card, the people a
 policy names — using names from the caption/faces line only, [] when
 unsure. Businesses and strangers are never subjects.
+A caption ASKING who someone is ("who is this?", "do you know him?")
+is an identification question, NEVER an enrollment: remember_face_as
+stays null there no matter what names the conversation used earlier
+(live 2026-08-28: an identify ask was answered with an enrollment
+confirm for a guessed name).
 Set "remember_face_as" to a NAME string instead of null ONLY when the
 caption asks — in any wording or language — to remember/save/enroll this
 face for future recognition ("remember this face as Maan", "save him as
