@@ -18,7 +18,7 @@ from telegram.ext import (
 
 from kyraan.agents import orchestrator
 from kyraan.control_plane.dnd import local_now
-from kyraan.control_plane.logging_setup import get_logger
+from kyraan.control_plane.logging_setup import get_logger, log_event
 from kyraan.triggers import briefs, scheduler
 
 logger = get_logger("telegram_bot")
@@ -545,37 +545,61 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
         from kyraan.triggers import self_review
 
         async def _review_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-            await self_review.fire(_owner_id(), lambda c, t: _send(context, c, t))
+            # Every nightly stage runs INDEPENDENTLY. They were chained,
+            # so a failure in the critique or the episode ingest skipped
+            # everything after it — including the forget re-sweep, which
+            # is what keeps forgotten topics from lingering findable in
+            # new episodes. A privacy repair must not depend on an
+            # unrelated step succeeding (Bugbot P1).
+            import asyncio as _aio
+            from datetime import timedelta as _td
+
+            from kyraan.control_plane.dnd import local_now as _now
+
+            async def _stage(name: str, run):
+                try:
+                    await run()
+                except Exception as exc:
+                    logger.exception("nightly stage %s failed", name)
+                    log_event("nightly_stage_failed", stage=name,
+                              error=str(exc)[:200],
+                              error_type=type(exc).__name__)
+
+            await _stage("self_review", lambda: self_review.fire(
+                _owner_id(), lambda c, t: _send(context, c, t)))
+
             # P3.3b: the nightly episode write rides the same job —
             # yesterday+today because ingest is idempotent and last
             # night's run stopped at this hour. Blocking work (local
             # embed + tagging + pg) stays off the event loop.
-            try:
-                import asyncio as _aio
-                from datetime import timedelta as _td
-
-                from kyraan.control_plane.dnd import local_now as _now
+            async def _ingest():
                 from kyraan.store import episodes as _episodes
                 today = _now().date()
                 days = [(today - _td(days=1)).isoformat(), today.isoformat()]
                 await _aio.to_thread(_episodes.ingest_recent, days)
 
-                # The self-heals ride along nightly (gap audit
-                # 2026-08-27: they only ran on a manual resync): the
-                # forget re-sweep — new episodes about forgotten topics
-                # must not linger findable — then the graph catch-up.
-                def _self_heal():
-                    from kyraan.memory import engine as _engine
-                    from kyraan.store import triples as _triples
-                    _engine.resweep_forgotten()
-                    _triples.catch_up()
+            await _stage("episode_ingest", _ingest)
 
-                await _aio.to_thread(_self_heal)
+            # The self-heals ride along nightly (gap audit 2026-08-27:
+            # they only ran on a manual resync). Separate stages: the
+            # forget re-sweep is a privacy repair and the graph catch-up
+            # is bookkeeping — neither may block the other.
+            async def _resweep():
+                from kyraan.memory import engine as _engine
+                await _aio.to_thread(_engine.resweep_forgotten)
 
-                # Semantic dedup scan (owner: "make it automate",
-                # 2026-08-27): the model PROPOSES nightly; applying
-                # stays behind the owner's yes via the "consolidate
-                # memory" chat phrase. DND-gated like every proactive.
+            async def _graph_catch_up():
+                from kyraan.store import triples as _triples
+                await _aio.to_thread(_triples.catch_up)
+
+            await _stage("forget_resweep", _resweep)
+            await _stage("graph_catch_up", _graph_catch_up)
+
+            # Semantic dedup scan (owner: "make it automate",
+            # 2026-08-27): the model PROPOSES nightly; applying stays
+            # behind the owner's yes via the "consolidate memory" chat
+            # phrase. DND-gated like every proactive.
+            async def _dedup_scan():
                 from kyraan.control_plane import kernel as _kernel
                 from kyraan.memory import consolidate as _consolidate
                 proposals = await _aio.to_thread(_consolidate.scan)
@@ -588,8 +612,8 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                                 f"{len(proposals)} duplicate group(s) found:\n"
                                 + "\n".join(lines)
                                 + '\n\nSay "consolidate memory" to review and apply.')
-            except Exception as exc:  # never let episodes break self-review night
-                logger.warning("episode ingest failed: %s", exc)
+
+            await _stage("memory_dedup_scan", _dedup_scan)
 
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),

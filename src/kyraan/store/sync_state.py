@@ -24,7 +24,7 @@ import json
 
 from pathlib import Path
 
-from kyraan.control_plane.filelock import atomic_write_text
+from kyraan.control_plane.filelock import atomic_write_text, locked
 from kyraan.control_plane.logging_setup import log_event
 
 DATA_DIR = Path(__file__).resolve().parents[3] / "data"
@@ -39,16 +39,22 @@ def _load() -> dict:
 
 
 def mark_stale(store: str, reason: str = "") -> None:
-    """Record that `store`'s PG mirror is behind the files."""
-    state = _load()
-    if state.get(store, {}).get("stale"):
-        return  # already known-stale; keep the FIRST reason
-    state[store] = {"stale": True, "reason": reason[:200]}
-    try:
-        atomic_write_text(STATE_PATH, json.dumps(state, indent=2))
-    except OSError as exc:  # disk trouble must not break the file write
-        log_event("pg_sync_state_write_failed", store=store, error=str(exc)[:120])
-        return
+    """Record that `store`'s PG mirror is behind the files.
+
+    Read-modify-write under the file lock: four stores share this file,
+    and an unlocked cycle let one store's write erase another's marker —
+    silently re-enabling the stale PG reads this module exists to
+    prevent (Bugbot P1)."""
+    with locked(STATE_PATH):
+        state = _load()
+        if state.get(store, {}).get("stale"):
+            return  # already known-stale; keep the FIRST reason
+        state[store] = {"stale": True, "reason": reason[:200]}
+        try:
+            atomic_write_text(STATE_PATH, json.dumps(state, indent=2))
+        except OSError as exc:  # disk trouble must not break the file write
+            log_event("pg_sync_state_write_failed", store=store, error=str(exc)[:120])
+            return
     log_event("pg_mirror_stale", store=store, reason=reason[:200])
 
 
@@ -59,15 +65,16 @@ def is_stale(store: str) -> bool:
 def clear_stale(store: str) -> None:
     """Called ONLY after a full resync — an incremental mirror landing
     does not prove the entries missed while stale ever arrived."""
-    state = _load()
-    if not state.get(store, {}).get("stale"):
-        return
-    state.pop(store, None)
-    try:
-        atomic_write_text(STATE_PATH, json.dumps(state, indent=2))
-    except OSError as exc:
-        log_event("pg_sync_state_write_failed", store=store, error=str(exc)[:120])
-        return
+    with locked(STATE_PATH):
+        state = _load()
+        if not state.get(store, {}).get("stale"):
+            return
+        state.pop(store, None)
+        try:
+            atomic_write_text(STATE_PATH, json.dumps(state, indent=2))
+        except OSError as exc:
+            log_event("pg_sync_state_write_failed", store=store, error=str(exc)[:120])
+            return
     log_event("pg_mirror_resynced", store=store)
 
 

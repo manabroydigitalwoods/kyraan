@@ -923,3 +923,104 @@ def test_pg_dsn_follows_the_documented_password(monkeypatch):
     assert "s3cret@" in pg.dsn()
     monkeypatch.setenv("KYRAAN_PG_DSN", "postgresql://x:y@host:5432/db")
     assert pg.dsn() == "postgresql://x:y@host:5432/db"   # explicit still wins
+
+
+# --- round 7: shared-state locking, stage independence, env, backfill -----
+
+def test_stale_markers_survive_concurrent_stores(monkeypatch, tmp_path):
+    """Four stores share one state file. An unlocked read-modify-write
+    let one store's write erase another's marker — re-enabling exactly
+    the stale PG reads this module exists to prevent (Bugbot P1)."""
+    import threading
+    from kyraan.store import sync_state
+
+    monkeypatch.setattr(sync_state, "STATE_PATH", tmp_path / "sync.json")
+    stores = [f"store{i}" for i in range(8)]
+    barrier = threading.Barrier(len(stores))
+
+    def mark(name):
+        barrier.wait()          # maximize overlap on the RMW cycle
+        sync_state.mark_stale(name, "concurrent")
+
+    threads = [threading.Thread(target=mark, args=(s,)) for s in stores]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sync_state.stale_stores() == sorted(stores)   # none lost
+
+    # clearing one leaves the rest marked
+    sync_state.clear_stale("store0")
+    assert sync_state.stale_stores() == sorted(stores[1:])
+
+
+async def test_nightly_stages_are_independent(monkeypatch):
+    """The nightly job chained its stages, so a failing critique or
+    episode ingest skipped the forget re-sweep — a PRIVACY repair
+    depending on an unrelated step (Bugbot P1)."""
+    ran = []
+
+    async def _stage(name, run):
+        try:
+            await run()
+        except Exception:
+            ran.append(f"{name}:failed")
+        else:
+            ran.append(name)
+
+    async def boom():
+        raise RuntimeError("critique model down")
+
+    async def fine():
+        return None
+
+    # the structure under test: every stage awaited independently
+    await _stage("self_review", boom)
+    await _stage("episode_ingest", boom)
+    await _stage("forget_resweep", fine)
+    await _stage("graph_catch_up", fine)
+    assert ran == ["self_review:failed", "episode_ingest:failed",
+                   "forget_resweep", "graph_catch_up"]
+
+    # and the shipped job really is built that way
+    import inspect
+    from kyraan.channels import telegram_bot
+    src = inspect.getsource(telegram_bot._wire_brief)
+    for stage in ("self_review", "episode_ingest", "forget_resweep",
+                  "graph_catch_up", "memory_dedup_scan"):
+        assert f'_stage("{stage}"' in src, f"{stage} is not an independent stage"
+
+
+def test_pg_password_falls_back_to_the_compose_env(monkeypatch, tmp_path):
+    """Compose reads docker/.env; the bot read the repo .env — a
+    documented custom password left them disagreeing (Bugbot P2)."""
+    from kyraan.store import pg
+
+    monkeypatch.delenv("KYRAAN_PG_DSN", raising=False)
+    monkeypatch.delenv("KYRAAN_PG_PASSWORD", raising=False)
+    fake_repo = tmp_path / "repo"
+    (fake_repo / "docker").mkdir(parents=True)
+    (fake_repo / "docker" / ".env").write_text(
+        "# comment\nKYRAAN_PG_PASSWORD='compose-secret'\n")
+    monkeypatch.setattr(pg, "__file__",
+                        str(fake_repo / "src" / "kyraan" / "store" / "pg.py"))
+    assert "compose-secret@" in pg.dsn()
+
+    # an explicit environment password still wins over the file
+    monkeypatch.setenv("KYRAAN_PG_PASSWORD", "env-wins")
+    assert "env-wins@" in pg.dsn()
+
+
+def test_migration_backfills_already_extracted_facts():
+    """005 added triples_extracted_at but left it NULL for facts already
+    extracted, so the next catch-up reprocessed every one — re-extraction
+    is not idempotent past (head, relation, tail, fact_id) (Bugbot P2)."""
+    from pathlib import Path
+
+    sql = Path("migrations/006_backfill_triples_extracted.sql").read_text()
+    assert "UPDATE fact" in sql
+    assert "triples_extracted_at IS NULL" in sql
+    assert "EXISTS (SELECT 1 FROM triple" in sql       # only facts WITH triples
+    # a separate file, because the runner never re-applies 005
+    applied_once = Path("migrations/005_triple_bookkeeping.sql").read_text()
+    assert "UPDATE fact" not in applied_once

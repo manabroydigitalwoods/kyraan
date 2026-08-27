@@ -20,8 +20,27 @@ def dsn() -> str:
     explicit = os.environ.get("KYRAAN_PG_DSN", "").strip()
     if explicit:
         return explicit
-    password = os.environ.get("KYRAAN_PG_PASSWORD", "").strip() or "kyraan"
+    password = (os.environ.get("KYRAAN_PG_PASSWORD", "").strip()
+                or _compose_password() or "kyraan")
     return f"postgresql://kyraan:{password}@127.0.0.1:5432/kyraan"
+
+
+def _compose_password() -> str:
+    """The password Postgres itself was started with. Compose reads
+    docker/.env; the bot reads the repo .env — so a documented custom
+    password left the two disagreeing and the app failing auth (Bugbot
+    P2). Read the same file compose does, as a fallback only: an
+    explicit DSN or environment variable still wins."""
+    from pathlib import Path
+    env_file = Path(__file__).resolve().parents[3] / "docker" / ".env"
+    try:
+        for line in env_file.read_text().splitlines():
+            key, _, value = line.partition("=")
+            if key.strip() == "KYRAAN_PG_PASSWORD":
+                return value.strip().strip("'\"")
+    except OSError:
+        pass
+    return ""
 
 
 def _get_pool():
