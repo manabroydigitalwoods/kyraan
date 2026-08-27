@@ -375,6 +375,35 @@ def forget(entry_ids: list) -> list:
     return forgotten
 
 
+def consolidate(keep_id: str, dup_ids: list) -> list:
+    """Owner-approved semantic dedup: mark `dup_ids` superseded by
+    `keep_id` — the same mechanism a correction uses, so mirrors and the
+    graph's read-side cascade handle downstream. NOT a forget: no
+    episode sweep (the topic itself remains live). Returns the
+    superseded contents."""
+    superseded, changed = [], []
+    with locked(_index_path()):
+        entries = _load()
+        by_id = {e["id"]: e for e in entries}
+        keep = by_id.get(keep_id)
+        if keep is None or not keep["active"]:
+            raise ValueError(f"keep fact {keep_id!r} is not an active fact")
+        for dup_id in dup_ids:
+            entry = by_id.get(dup_id)
+            if entry is None or not entry["active"] or dup_id == keep_id:
+                continue
+            entry["active"] = False
+            entry["superseded_by"] = keep_id
+            superseded.append(entry["content"])
+            changed.append(entry)
+            log_event("memory_consolidated", kept=keep["content"][:80],
+                      superseded=entry["content"][:80])
+        if changed:
+            _save(entries)
+            _mirror(changed)
+    return superseded
+
+
 def resweep_forgotten() -> int:
     """P3.3d self-heal (nightly + resync): re-run the episode sweep for
     every FORGOTTEN fact — inactive, no supersessor (an update is not a
