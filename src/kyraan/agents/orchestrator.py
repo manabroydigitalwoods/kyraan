@@ -508,10 +508,19 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
     try:
         # Deterministic fragment patience — no model consulted: a bare
         # time-phrase can't be a complete request, and the classifier was
-        # seen inventing a reminder out of one.
+        # seen inventing a reminder out of one. But a fragment ANSWERING
+        # a question Kyraan just asked ("what time on 30 Aug?" → "at
+        # 5am") is a complete answer and must reach the loop — seen live
+        # 2026-08-27: the guard swallowed it with "Go on — I'm
+        # listening…" and the vaccination reminder was never created.
+        # Recent turns are scanned (not just the newest) because a
+        # proactive can land between the question and the answer.
         if is_time_fragment(raw_text) and chat_id not in _pending_confirmations:
-            _skip_extraction.set(True)
-            return "Go on — I'm listening…"
+            recent = [t for role, t in _history[chat_id]
+                      if role == "assistant"][-3:]
+            if not any(t.rstrip().endswith("?") for t in recent):
+                _skip_extraction.set(True)
+                return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)
         if pending is None:
             pending = _load_persisted_confirmation(chat_id)  # P3.4b: the

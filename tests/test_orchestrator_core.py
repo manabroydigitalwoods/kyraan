@@ -269,3 +269,28 @@ async def test_all_tiers_failing_is_an_honest_outage(monkeypatch):
     reply = await orchestrator._dispatch(950_044, "what's the weather?")
     assert "nothing was done" in reply.lower()
     assert "unreachable" in reply.lower()
+
+async def test_time_fragment_answering_a_question_reaches_the_loop(loop_reply):
+    # Seen live 2026-08-27: "what time on 30 Aug should I remind you?"
+    # -> "at 5am" -> "Go on — I'm listening…" and no reminder was ever
+    # created. A fragment answering Kyraan's own question is complete.
+    calls = loop_reply("Done — reminder set for 5:00 AM.")
+    chat_id = 950_017
+    orchestrator._history[chat_id].append(
+        ("assistant", "Sure — what time on 30 Aug should I remind you "
+                      "about Kiaan's vaccination (e.g., 10:00 AM)?"))
+    orchestrator._history[chat_id].append(
+        ("assistant", "Reminder: Drink water"))  # proactive in between
+    reply = await orchestrator._dispatch(chat_id, "at 5am")
+    assert calls and calls[0][0] == "at 5am"
+    assert "5:00 AM" in reply
+
+
+async def test_unprompted_time_fragment_still_waits(loop_reply):
+    calls = loop_reply()
+    chat_id = 950_018
+    orchestrator._history[chat_id].append(
+        ("assistant", "Done — the ac is off."))
+    reply = await orchestrator._dispatch(chat_id, "at 5am")
+    assert reply == "Go on — I'm listening…"
+    assert not calls
