@@ -17,7 +17,8 @@ load_dotenv(REPO / ".env")
 
 from kyraan.store.embed import cosine  # noqa: E402
 
-CANDIDATES = ["nomic-embed-text", "qwen3-embedding:0.6b"]
+CANDIDATES = ["all-minilm", "snowflake-arctic-embed:22m",
+              "nomic-embed-text", "qwen3-embedding:0.6b"]
 
 # The ticket's gate plus checks shaped like real Kyraan recall traffic.
 SANITY = [  # (a, b, c) — expect sim(a,b) > sim(a,c)

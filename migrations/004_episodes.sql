@@ -1,6 +1,6 @@
 -- P3.3a: episodic recall (arch §2.1 column model, complete). The vector
 -- dimension is PINNED by the embedder probe (scripts/probe_embedder.py,
--- 2026-08-27: qwen3-embedding:0.6b, 1024-d) and must match
+-- 2026-08-27: all-minilm, 384-d — lightest AND best margin) and must match
 -- store/embed.EMBED_DIM — test_embed pins them together (audit P2:
 -- installing a guessed dimension before the probe forces a real
 -- migration with rows at stake).
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS episode (
   fact_refs     uuid[] NOT NULL DEFAULT '{}',  -- facts this evidences
   suppressed_by uuid[] NOT NULL DEFAULT '{}',  -- forget-cascade marks
   text          text NOT NULL,                 -- cloud_text ONLY (twin rule)
-  embedding     vector(1024) NOT NULL,
+  embedding     vector(384) NOT NULL,
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS episode_ann

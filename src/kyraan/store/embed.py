@@ -7,18 +7,19 @@ resolved Ollama endpoint is local — the SAME resolution routing uses
 locality check could disagree with the client's).
 
 The model and dimension are PINNED here from the P3.3a probe
-(scripts/probe_embedder.py, 2026-08-27 on this Mac):
-qwen3-embedding:0.6b, 1024-d — 4/4 sanity gates with the best margin
-(0.333 vs nomic's 0.319), 309ms for a 12-text batch, ~0.9s cold reload
-(inside the reply-path budget; the scary 10.2s was first-ever load).
-migrations/004_episodes.sql carries the same dimension — change one and
-you must change both (test_embed pins them together).
+(scripts/probe_embedder.py, 2026-08-27 on this Mac, 4 candidates):
+all-minilm, 384-d — the LIGHTEST model probed (~46MB) and the best
+similarity margin of all four (0.507 vs qwen3-embedding's 0.333 and
+nomic's 0.319), 117ms for a 12-text batch, 1.3s cold reload. English
+only — fine for this owner's chat; re-probe before any multilingual
+rollout. migrations/004_episodes.sql carries the same dimension —
+change one and you must change both (test_embed pins them together).
 """
 import json
 import urllib.request
 
-EMBED_MODEL = "qwen3-embedding:0.6b"
-EMBED_DIM = 1024
+EMBED_MODEL = "all-minilm"
+EMBED_DIM = 384
 _TIMEOUT_S = 30
 
 
