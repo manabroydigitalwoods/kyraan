@@ -190,6 +190,9 @@ skills:
   undo.last:
     permission: confirm   # P3.1c: reversing an action is itself an action —
     model_tier: cheap     # the ask names the concrete inverse before it runs
+  documents.forget:
+    permission: confirm   # hard-deleting a capture is deliberate; the ask
+    model_tier: cheap     # names every document about to go
   memory.consolidate:
     permission: confirm   # semantic dedup: the model proposes, the ask names
     model_tier: cheap     # every group, only the owner's yes supersedes
@@ -393,6 +396,33 @@ tools:
     failure:
       retries: 0            # never blind-retry a write — an ambiguous failure
                             # retried is how duplicate events happen
+      timeout_s: 15
+      on_failure: surface
+  calendar.get_event:
+    description: Read one event's current title and times by id (undo's prior-state capture).
+    server: calendar
+    permission: auto
+    side_effects: read
+    params:
+      event_id: {type: string, required: true}
+    returns: "{id, title, start, end}"
+    failure:
+      retries: 1
+      timeout_s: 15
+      on_failure: surface
+  calendar.update_event:
+    description: Move one event to new start/end times by id (OAuth; confirm-gated write; the id survives, unlike delete+recreate).
+    server: calendar
+    permission: confirm
+    side_effects: write
+    params:
+      event_id: {type: string, required: true}
+      start: {type: datetime}
+      end: {type: datetime}
+      title: {type: string}   # for the audit log and the confirm ask
+    returns: "{id, title, start, end}"
+    failure:
+      retries: 0
       timeout_s: 15
       on_failure: surface
   calendar.delete_event:

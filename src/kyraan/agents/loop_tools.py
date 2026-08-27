@@ -106,6 +106,26 @@ async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
         {"event_id": args["event_id"], "title": known_title}))
 
 
+async def _calendar_reschedule(chat_id: int, args: dict, raw_text: str):
+    """Move an event in place (id survives). The same listing proof as
+    delete: the id must come from a CURRENT listing and the claimed
+    title must match — a reschedule confirms a specific named event."""
+    listing = _listing_lookup(chat_id)
+    known_title = (listing.get("items") or {}).get(str(args["event_id"]))
+    if known_title is None:
+        raise kernel.ToolFailed(
+            "that event id is not from a CURRENT listing — call "
+            "calendar.list_events first, then reschedule by the listed id")
+    start_iso, end_iso = _normalized_event_times(args, raw_text)
+    if scheduler._parse_when(start_iso) < local_now():
+        raise kernel.ToolFailed("that new start is in the past — ask the user "
+                                "for the intended date")
+    return await kernel.run_tool(kernel.ToolCall(
+        "calendar.update_event",
+        {"event_id": args["event_id"], "title": known_title,
+         "start": start_iso, "end": end_iso}))
+
+
 async def _email_unread(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents.guards import wants_email_body
     from kyraan.tools import gmail as _gmail
@@ -289,6 +309,39 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
     elif repeat:
         result["repeats"] = repeat
     return result
+
+
+async def _reminders_snooze(chat_id: int, args: dict, raw_text: str):
+    try:
+        minutes = int(float(args.get("minutes", 10)))
+    except (TypeError, ValueError):
+        minutes = 10
+    try:
+        reminder, mode, prior = scheduler.snooze_reminder(
+            chat_id, minutes, str(args.get("reminder_id", "") or ""))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    receipt = (f'Snoozed — "{reminder.text}" will ring again at '
+               f"{humanize(reminder.when_iso)}.")
+    return {"__direct_reply__": receipt, "__history__": receipt,
+            "id": reminder.id[:8], "mode": mode, "prior_when": prior}
+
+
+async def _reminders_reschedule(chat_id: int, args: dict, raw_text: str):
+    wanted = str(args.get("reminder_id", "")).strip()
+    if not wanted:
+        raise kernel.ToolFailed("say which reminder — list reminders first")
+    when_iso = str(args.get("when_iso", ""))
+    from kyraan.agents import orchestrator
+    when_iso = orchestrator._anchor_clock_time(raw_text, when_iso)
+    try:
+        reminder, prior = scheduler.reschedule_reminder(chat_id, wanted, when_iso)
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    receipt = (f'Moved — "{reminder.text}" now rings at '
+               f"{humanize(reminder.when_iso)} (was {humanize(prior)}).")
+    return {"__direct_reply__": receipt, "__history__": receipt,
+            "id": reminder.id[:8], "prior_when": prior}
 
 
 async def _reminders_list(chat_id: int, args: dict, raw_text: str):
@@ -525,6 +578,21 @@ async def _memory_relations(chat_id: int, args: dict, raw_text: str):
             f'(from: "{r["sources"][0][:90]}")' for r in rows[:12]]
 
 
+async def _documents_list(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.store import documents
+    try:
+        docs = await _aio.to_thread(documents.list_documents, chat_id)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"document memory is unavailable right now ({str(exc)[:100]})")
+    if not docs:
+        return {"found": 0, "note": "no documents saved yet"}
+    return [f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars)'
+            for d in docs]
+
+
 async def _documents_search(chat_id: int, args: dict, raw_text: str):
     """Document memory: text captured from photos and PDFs (cards,
     brochures) — hybrid search so exact strings and NUMBERS hit via FTS
@@ -585,6 +653,14 @@ TOOLS = {
         "about": "Delete ONE event by id (list first to get ids). Confirm is automatic. Deleting a recurring event removes its whole series — warn in your ask context.",
         "run": _calendar_delete,
     },
+    "calendar.reschedule": {
+        "params": '{"event_id": "<id from calendar.list_events>", "start": "<new ISO>", "end": "<new ISO>"}',
+        "about": ("MOVE an existing event to a new time (\"move lunch to "
+                  "2pm\") — list first for the id, then reschedule; never "
+                  "delete+recreate for a time change. Confirm is automatic. "
+                  "Missing end: default to the same duration or one hour."),
+        "run": _calendar_reschedule,
+    },
     "email.unread": {
         "params": '{"limit": 5}',
         "about": "Unread email senders and subjects. PLACEHOLDER_EMAIL_BODIES",
@@ -613,6 +689,22 @@ TOOLS = {
         "params": "{}",
         "about": "The user's pending reminders (id, text, when).",
         "run": _reminders_list,
+    },
+    "reminders.snooze": {
+        "params": '{"minutes": 10, "reminder_id": "<optional id prefix>"}',
+        "about": ("Push a reminder back N minutes — \"snooze 10\", \"remind "
+                  "me again in half an hour\". With no id it snoozes the one "
+                  "delivered most recently (within 45 min); a recurring "
+                  "series gets a one-shot echo, the series itself is "
+                  "untouched. Never ask which reminder after one just rang."),
+        "run": _reminders_snooze,
+    },
+    "reminders.reschedule": {
+        "params": '{"reminder_id": "<id prefix from reminders.list>", "when_iso": "<new time, ISO +05:30>"}',
+        "about": ("Move a PENDING reminder to a new time in place — "
+                  "\"change my 9pm reminder to 8:30\". List first if the id "
+                  "is unknown. For a different TEXT, cancel and create."),
+        "run": _reminders_reschedule,
     },
     "reminders.cancel": {
         "params": '{"reminder_id": "<id prefix from reminders.list>"}',
@@ -659,6 +751,14 @@ TOOLS = {
                   "'owner' is the user). Empty result = say no saved "
                   "relation mentions them, never guess one."),
         "run": _memory_relations,
+    },
+    "documents.list": {
+        "params": "{}",
+        "about": ("The user's saved documents (caption, kind, date) — for "
+                  "\"what documents do I have\", \"list my saved cards/PDFs\". "
+                  'To delete one, tell the user to say "forget the document '
+                  '<name>" — you cannot delete documents.'),
+        "run": _documents_list,
     },
     "documents.search": {
         "params": '{"query": "<words or a number>"}',
@@ -809,9 +909,35 @@ def _undo_home_switch(args, result, prior):
     return None  # prior unobserved (HA read failed) — honest: not undoable
 
 
+def _undo_reminders_snooze(args, result, prior):
+    if not isinstance(result, dict):
+        return None
+    if result.get("mode") == "cloned" and result.get("id"):
+        return ("reminders.cancel", {"reminder_id": result["id"]})
+    if result.get("prior_when") and result.get("id"):
+        return ("reminders.reschedule",
+                {"reminder_id": result["id"], "when_iso": result["prior_when"]})
+    return None
+
+
+def _undo_reminders_reschedule(args, result, prior):
+    if (isinstance(result, dict) and result.get("id")
+            and result.get("prior_when")):
+        return ("reminders.reschedule",
+                {"reminder_id": result["id"], "when_iso": result["prior_when"]})
+    return None
+
+
 UNDO_MAP = {
     "calendar.create_event": _undo_calendar_create,
     "reminders.create": _undo_reminders_create,
+    "reminders.snooze": _undo_reminders_snooze,
+    "reminders.reschedule": _undo_reminders_reschedule,
+    "calendar.reschedule": lambda a, r, p: (
+        ("calendar.update_event",
+         {"event_id": str(a.get("event_id")), "title": (p or {}).get("title", ""),
+          "start": p["start"], "end": p["end"]})
+        if p and p.get("start") and p.get("end") else None),
     "tasks.schedule": _undo_task_schedule,
     "faces.remember": _undo_faces_remember,
     "home.turn_on": _undo_home_switch,
@@ -826,6 +952,12 @@ UNDO_MAP = {
 
 async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
     """State the inverse will need, observed BEFORE the write executes."""
+    if tool == "calendar.reschedule":
+        try:
+            return await kernel.run_tool(kernel.ToolCall(
+                "calendar.get_event", {"event_id": str(args.get("event_id"))}))
+        except Exception:
+            return None  # unobserved prior ⇒ the move logs as not undoable
     if tool in ("home.turn_on", "home.turn_off"):
         try:
             state = await kernel.run_tool(kernel.ToolCall(
@@ -950,9 +1082,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
-                    "memory.relations", "documents.search", "web.search",
-                    "weather.get", "places.nearby", "routes.eta",
-                    "email.read"}
+                    "memory.relations", "documents.search", "documents.list",
+                    "web.search", "weather.get", "places.nearby",
+                    "routes.eta", "email.read"}
 
 
 

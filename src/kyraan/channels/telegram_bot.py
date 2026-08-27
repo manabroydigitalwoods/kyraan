@@ -152,11 +152,33 @@ def _lock_for(chat_id: int) -> asyncio.Lock:
     return _chat_locks[chat_id]
 
 
+_courtesy_sent: dict = {}  # chat_id -> local date of the one daily line
+
+
 async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     person = _authorized(update)
     if person is None:
         logger.warning("Ignored unauthorized update (user=%s chat=%s)",
                        update.effective_user, update.effective_chat)
+        # KNOWN-but-unenrolled (stage 'none' with this chat_id recorded):
+        # a family member gets one courtesy line a day instead of pure
+        # silence (live 2026-08-27: Ruma messaged from her own phone and
+        # concluded the bot was broken). Strangers still get nothing.
+        try:
+            chat_id = update.effective_chat.id
+            from kyraan.store import pg as _pg
+            with _pg.connection() as conn:
+                row = conn.execute(
+                    "SELECT id FROM person WHERE chat_id = %s AND stage = 'none'",
+                    (chat_id,)).fetchone()
+            today = local_now().date().isoformat()
+            if row and _courtesy_sent.get(chat_id) != today:
+                _courtesy_sent[chat_id] = today
+                await update.message.reply_text(
+                    "Hi — I'm Manab's personal assistant and can only talk "
+                    "to people he has enrolled. Ask him to switch you on!")
+        except Exception:
+            pass  # a courtesy must never error
         return
     if person != "owner":
         # An enrolled person gets the TEXT pipeline; face enrollment is
@@ -524,10 +546,30 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "I couldn't read that PDF — it may be corrupted or protected.")
         return
     if len(text) < 20:
-        await update.message.reply_text(
-            "That PDF has no text layer (looks scanned) — I can't read "
-            "scans yet; a photo of the page works better.")
-        return
+        # A scan: no text layer. OCR the embedded page images through
+        # the vision tier (owner gap list 2026-08-27), first 4 pages.
+        import base64
+
+        from kyraan.agents import photo as _photo
+        pieces = []
+        for page in reader.pages[:4]:
+            try:
+                images = page.images
+            except Exception:
+                images = []
+            for img in images[:1]:
+                data_url = ("data:image/jpeg;base64,"
+                            + base64.b64encode(img.data).decode())
+                piece = await _photo.transcribe(data_url)
+                if piece:
+                    pieces.append(piece)
+                break
+        text = "\n\n".join(pieces).strip()
+        if len(text) < 20:
+            await update.message.reply_text(
+                "That PDF looks scanned and I couldn't read its pages — "
+                "a clear photo of the page works better.")
+            return
     from kyraan.store import documents
     import asyncio as _aio
     doc_id = await _aio.to_thread(

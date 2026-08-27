@@ -159,6 +159,58 @@ def _delete_event(args: dict) -> dict:
     return {"id": event_id, "deleted": True, "already_gone": False}
 
 
+def _get_event(args: dict) -> dict:
+    """One event's current times — undo captures the PRIOR state here."""
+    request = urllib.request.Request(
+        f"{_EVENTS_URL}/{urllib.parse.quote(args['event_id'])}",
+        headers={"Authorization": f"Bearer {_access_token()}"})
+    try:
+        with urllib.request.urlopen(request, timeout=12) as resp:
+            event = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise TransientToolError(f"Google Calendar returned {exc.code}") from exc
+        raise ToolError(f"Google Calendar returned {exc.code} for that event") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Google Calendar: {exc}") from exc
+    return {"id": event.get("id"), "title": event.get("summary", ""),
+            "start": (event.get("start") or {}).get("dateTime")
+                     or (event.get("start") or {}).get("date"),
+            "end": (event.get("end") or {}).get("dateTime")
+                   or (event.get("end") or {}).get("date")}
+
+
+def _update_event(args: dict) -> dict:
+    """PATCH an event's times (owner gap list 2026-08-27: 'move lunch to
+    2pm' needed delete+recreate, losing the event id)."""
+    payload: dict = {}
+    if args.get("start"):
+        payload["start"] = {"dateTime": args["start"]}
+    if args.get("end"):
+        payload["end"] = {"dateTime": args["end"]}
+    if not payload:
+        raise ToolError("nothing to update — give a new start and/or end")
+    request = urllib.request.Request(
+        f"{_EVENTS_URL}/{urllib.parse.quote(args['event_id'])}",
+        data=json.dumps(payload).encode(),
+        headers={"Authorization": f"Bearer {_access_token()}",
+                 "Content-Type": "application/json"},
+        method="PATCH")
+    try:
+        with urllib.request.urlopen(request, timeout=12) as resp:
+            updated = json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        if exc.code >= 500:
+            raise TransientToolError(f"Google Calendar returned {exc.code}") from exc
+        raise ToolError(f"Google Calendar refused the update ({exc.code}): "
+                        f"{exc.read().decode()[:200]}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Google Calendar: {exc}") from exc
+    return {"id": updated.get("id"), "title": updated.get("summary", ""),
+            "start": (updated.get("start") or {}).get("dateTime"),
+            "end": (updated.get("end") or {}).get("dateTime")}
+
+
 async def call(tool_name: str, args: dict) -> object:
     # urllib + ICS parsing are blocking — keep the event loop free.
     if tool_name == "calendar.list_events":
@@ -167,4 +219,8 @@ async def call(tool_name: str, args: dict) -> object:
         return await asyncio.to_thread(_create_event, args)
     if tool_name == "calendar.delete_event":
         return await asyncio.to_thread(_delete_event, args)
+    if tool_name == "calendar.get_event":
+        return await asyncio.to_thread(_get_event, args)
+    if tool_name == "calendar.update_event":
+        return await asyncio.to_thread(_update_event, args)
     raise ToolError(f"google_calendar adapter does not provide {tool_name!r}")

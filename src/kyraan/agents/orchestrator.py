@@ -636,6 +636,16 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         "waiting for your yes/no — please repeat the request "
                         "and I'll ask again.")
 
+        forget_doc = _re.match(
+            r"^\s*forget\s+(?:the\s+|that\s+)?(?:document|doc|card|pdf|brochure)"
+            r"\s+(?:about\s+|of\s+)?(.{2,60}?)\s*[.!]?\s*$",
+            raw_text, _re.IGNORECASE)
+        if forget_doc:
+            # Deterministic, like forget-face: destroying a capture must
+            # never depend on a model's routing choice.
+            _skip_extraction.set(True)
+            return await _forget_document(chat_id, forget_doc.group(1).strip())
+
         forget_face = _FORGET_FACE_RE.match(raw_text)
         if forget_face:
             # Deterministic, like the review phrases: deleting a biometric
@@ -798,6 +808,35 @@ async def _consolidate_memory(chat_id: int) -> str:
                         _apply, describe=describe)
 
 
+async def _forget_document(chat_id: int, wanted: str) -> str:
+    """'forget the document <words>' — hybrid-match the capture, confirm
+    naming exactly what dies, hard-delete on yes (chunks cascade)."""
+    import asyncio as _aio
+
+    from kyraan.store import documents
+    try:
+        hits = await _aio.to_thread(documents.search, chat_id, wanted, 3)
+    except Exception as exc:
+        return ("Document memory isn't reachable right now "
+                f"({str(exc)[:80]}) — nothing was deleted.")
+    if not hits:
+        return f'No saved document matches "{wanted}" — nothing to forget.'
+    named = "; ".join(f'"{h["caption"]}" ({h["date"]})' for h in hits)
+
+    async def _delete(_a: dict) -> str:
+        gone = await _aio.to_thread(
+            documents.delete_documents, chat_id,
+            [h["doc_id"] for h in hits])
+        if not gone:
+            return "Those documents were already gone."
+        return ("Deleted from document memory: "
+                + "; ".join(f'"{c}"' for c in gone) + ".")
+
+    return await _gated(
+        chat_id, SkillCall("documents.forget", {"query": wanted}), _delete,
+        describe=f"About to DELETE {len(hits)} saved document(s): {named}")
+
+
 # --- P3.1c: the undo command ----------------------------------------------
 
 def _describe_undo(action) -> str:
@@ -808,6 +847,13 @@ def _describe_undo(action) -> str:
         return f'Undo: delete the event "{ua.get("title") or a.get("title", "")}" I just created'
     if action.tool == "reminders.create":
         return f'Undo: cancel the reminder "{a.get("text", "")}" I just set'
+    if action.tool in ("reminders.snooze", "reminders.reschedule"):
+        return (f'Undo: move that reminder back to its earlier time'
+                if action.undo_tool == "reminders.reschedule"
+                else "Undo: cancel the snoozed reminder I just added")
+    if action.tool == "calendar.reschedule":
+        return (f'Undo: move "{ua.get("title") or a.get("event_id")}" back '
+                "to its previous time")
     if action.tool == "tasks.schedule":
         return f'Undo: cancel the scheduled task "{str(a.get("instruction", ""))[:60]}"'
     if action.tool == "faces.remember":
@@ -859,12 +905,16 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
     async def _run_undo(_a: dict) -> str:
         ut, ua = action.undo_tool, dict(action.undo_args or {})
         try:
-            if ut in ("calendar.delete_event", "home.turn_on", "home.turn_off"):
+            if ut in ("calendar.delete_event", "calendar.update_event",
+                      "home.turn_on", "home.turn_off"):
                 await kernel.run_tool(kernel.ToolCall(ut, ua))
             elif ut == "reminders.cancel":
                 from kyraan.agents import loop_tools
                 await loop_tools._reminders_cancel_gated(
                     chat_id, {"reminder_id": ua["reminder_id"]})
+            elif ut == "reminders.reschedule":
+                scheduler.reschedule_reminder(
+                    chat_id, ua["reminder_id"], ua["when_iso"])
             elif ut == "tasks.cancel":
                 from kyraan.agents import loop_tools
                 await loop_tools._task_cancel(chat_id, ua, "")

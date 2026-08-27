@@ -67,6 +67,22 @@ will ask the owner to confirm before anything is stored; you never store
 faces yourself and never claim one was saved."""
 
 
+async def transcribe(image_data_url: str) -> str:
+    """Plain OCR via the vision tier — scanned-PDF pages (owner gap
+    list 2026-08-27). Returns the transcription, '' when unreadable."""
+    from kyraan.model_router import router
+    try:
+        response = await router.acall(
+            prompt="Transcribe ALL text in this image exactly as printed — "
+                   "names, numbers, addresses, dates. Plain text only; "
+                   "reply with an empty string if there is no readable text.",
+            tier="frontier", max_tokens=2200, images=[image_data_url])
+        return response.text.strip()
+    except Exception as exc:
+        log_event("pdf_ocr_failed", error=str(exc)[:120])
+        return ""
+
+
 class VisionUnavailable(Exception):
     """The frontier tier can't take images — the caller sends an honest
     'can't see photos right now' instead."""

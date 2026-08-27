@@ -451,6 +451,71 @@ def _apply_interval_fields(reminder_id: str, interval_minutes: int,
         store._save_all(records)
 
 
+def reschedule_reminder(chat_id: int, reminder_id_prefix: str,
+                        when_iso: str) -> tuple:
+    """Move a PENDING reminder in place (owner gap list 2026-08-27:
+    'change my 9pm reminder to 8:30' used to need cancel+recreate).
+    Returns (reminder, prior_when_iso) — the prior feeds undo."""
+    when_iso = _sanitize_iso(when_iso)
+    when = _parse_when(when_iso)
+    wanted = str(reminder_id_prefix).lower()
+    match = next((r for r in store.list_pending(chat_id)
+                  if r.id.startswith(wanted)), None)
+    if match is None:
+        raise ValueError(f"no pending reminder with id {wanted!r} — list first")
+    prior = match.when_iso
+    store.roll_forward(match.id, when.isoformat())
+    if _cancel_fn:
+        _cancel_fn(match.id)
+    assert _schedule_fn is not None
+    _schedule_fn(match.id, when, {"chat_id": chat_id, "text": match.text,
+                                  "reminder_id": match.id})
+    log_event("reminder_rescheduled", reminder_id=match.id,
+              from_when=prior, to_when=when.isoformat())
+    return store.get(match.id), prior
+
+
+_SNOOZE_LOOKBACK_S = 45 * 60
+
+
+def snooze_reminder(chat_id: int, minutes: int,
+                    reminder_id_prefix: str = "") -> tuple:
+    """'Remind me again in N minutes.' A PENDING target moves in place;
+    a JUST-DELIVERED one (or a recurring series' latest occurrence)
+    gets a fresh one-shot clone at now+N — the series is untouched.
+    Returns (reminder, mode, prior_when) with mode 'moved'|'cloned'."""
+    from datetime import datetime, timezone
+    minutes = int(minutes)
+    if not 1 <= minutes <= 24 * 60:
+        raise ValueError("snooze between 1 minute and 24 hours")
+    when = local_now() + timedelta(minutes=minutes)
+    if reminder_id_prefix:
+        reminder, prior = reschedule_reminder(chat_id, reminder_id_prefix,
+                                              when.isoformat())
+        return reminder, "moved", prior
+    # no id: the most recently DELIVERED reminder for this chat
+    recent, recent_at = None, None
+    for record in store._load_all():
+        if record.get("chat_id") != chat_id or not record.get("claimed_at"):
+            continue
+        if not (record.get("sent") or record.get("repeat")):
+            continue  # never delivered
+        try:
+            claimed = datetime.fromisoformat(record["claimed_at"])
+        except ValueError:
+            continue
+        age = (datetime.now(timezone.utc) - claimed).total_seconds()
+        if age <= _SNOOZE_LOOKBACK_S and (recent_at is None or claimed > recent_at):
+            recent, recent_at = record, claimed
+    if recent is None:
+        raise ValueError("nothing was delivered in the last 45 minutes — "
+                         "say which reminder (list first) or set a new one")
+    clone = create_reminder(chat_id, recent["text"], when.isoformat())
+    log_event("reminder_snoozed", source=recent["id"], clone=clone.id,
+              minutes=minutes)
+    return clone, "cloned", None
+
+
 def cancel_reminder(reminder_id: str) -> bool:
     if _cancel_fn:
         _cancel_fn(reminder_id)

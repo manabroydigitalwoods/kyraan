@@ -125,7 +125,7 @@ def search(chat_id: int, query: str, k: int = 3) -> list:
         qvec = None
     with pg.connection() as conn:
         rows = conn.execute(
-            """SELECT d.caption, d.filename, d.created_at::date, c.text,
+            """SELECT d.id, d.caption, d.filename, d.created_at::date, c.text,
                       CASE WHEN %s::vector IS NOT NULL AND c.embedding IS NOT NULL
                            THEN 1 - (c.embedding <=> %s::vector) END AS sim,
                       (%s <> '' AND to_tsvector('english', c.text)
@@ -138,10 +138,11 @@ def search(chat_id: int, query: str, k: int = 3) -> list:
             (qvec, qvec, tsquery, tsquery or "x", chat_id,
              list(_allowed_exposures()))).fetchall()
     results = []
-    for caption, filename, day, text, sim, fts in rows:
+    for doc_id, caption, filename, day, text, sim, fts in rows:
         if not fts and (sim is None or sim < SEARCH_MIN_SIM):
             continue  # neither arm actually matched
-        results.append({"caption": caption or filename or "(untitled)",
+        results.append({"doc_id": str(doc_id),
+                        "caption": caption or filename or "(untitled)",
                         "date": day.isoformat(), "text": text,
                         "sim": float(sim) if sim is not None else None,
                         "fts": bool(fts)})
@@ -165,6 +166,37 @@ def relevant_snippet(chat_id: int, message: str) -> str | None:
     clipped = hit["text"][:400] + ("…" if len(hit["text"]) > 400 else "")
     return (f'[from a saved document "{hit["caption"]}", {hit["date"]}] '
             + clipped.replace("\n", " ⏎ "))
+
+
+def list_documents(chat_id: int, limit: int = 15) -> list:
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """SELECT id, kind, caption, filename, created_at::date,
+                      length(text)
+               FROM document WHERE chat_id = %s AND suppressed_by = '{}'
+               ORDER BY created_at DESC LIMIT %s""",
+            (chat_id, limit)).fetchall()
+    return [{"id": str(i), "kind": k, "caption": c or f or "(untitled)",
+             "date": d.isoformat(), "chars": n}
+            for i, k, c, f, d, n in rows]
+
+
+def delete_documents(chat_id: int, doc_ids: list) -> list:
+    """Hard-delete documents by id (captures are the owner's to destroy;
+    chunks cascade). Returns the deleted captions."""
+    captions = []
+    with pg.connection() as conn:
+        for doc_id in doc_ids:
+            row = conn.execute(
+                "DELETE FROM document WHERE chat_id = %s AND id = %s "
+                "RETURNING coalesce(nullif(caption, ''), filename, '(untitled)')",
+                (chat_id, doc_id)).fetchone()
+            if row is not None:
+                captions.append(row[0])
+        conn.commit()
+    for caption in captions:
+        log_event("document_deleted", chat_id=chat_id, caption=caption[:80])
+    return captions
 
 
 def suppress_for_fact(fact_id: str, fact_content: str) -> int:
