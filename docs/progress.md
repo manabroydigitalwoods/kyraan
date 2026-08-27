@@ -634,6 +634,27 @@ ROLLOUT-APPROVED stays independent: the 30-day clock runs to
 ~2026-09-26 + Ruma's §1 consent. Remaining engineering: Part 7
 (P3.7a degraded parity — baseline 17/21; P3.7b classifier deletion).
 
+**P3.7a DONE (2026-08-27): TWO consecutive all-green degraded runs
+(21/21 HARD + 11/11 soft on qwen3:8b alone), frontier re-verified
+green after.** Four rounds, 17→19→20→21: the honesty-rail family now
+covers false claims (active AND passive voice), false promises
+("I'll set... Is that correct?"), narration ("Let me check..."),
+memory claims ("I've noted..." — saving is automatic, acknowledge
+plainly), and fabricated listings — which must now be GROUNDED in the
+reminders.list result itself, because qwen once called the tool and
+recited memory-block routine facts anyway; a stubborn fabricator
+exhausts the step cap into the deterministic classifier. En route,
+two real product fixes: extraction gets a 30s window on degraded
+turns (the same local model holds loop + extraction; the 6s cutoff
+ate every "Noted for review"), a statement matching a saved fact now
+answers "already have that saved", and a REAL resurrection channel
+closed — forgetting a fact now purges pending proposals that restate
+it (an eval fact had resurrected into local prompts through the
+review queue). Eval hygiene rebuilt for the post-Redis world (fresh
+per-run session state, mirror-aware reminder purge). Only P3.7b
+(classifier deletion — the one-way door, owner's explicit call)
+remains in Phase 3 engineering.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
