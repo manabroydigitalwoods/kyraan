@@ -78,3 +78,41 @@ async def test_location_pin_flows_into_the_pipeline(monkeypatch):
     await telegram_bot._on_location(update, ctx)
     assert ingested == ["[I'm sharing my current location: "
                         "Testville (26.75731, 88.59243)]"]
+
+
+async def test_venue_share_uses_its_own_name(monkeypatch):
+    """Telegram's "choose a nearby place" sends a VENUE — it previously
+    matched no handler and vanished (seen live 2026-08-27)."""
+    from types import SimpleNamespace
+
+    from kyraan.channels import telegram_bot
+    captured = {}
+
+    async def fake_ingest(update, context, text):
+        captured["text"] = text
+
+    monkeypatch.setattr(telegram_bot, "_ingest", fake_ingest)
+    monkeypatch.setattr(telegram_bot, "_owner_private", lambda u: True)
+    loc = SimpleNamespace(latitude=26.71, longitude=88.42)
+    update = SimpleNamespace(
+        message=SimpleNamespace(location=None,
+                                venue=SimpleNamespace(location=loc,
+                                                      title="Bidhan Market",
+                                                      address="Siliguri")),
+        effective_chat=SimpleNamespace(id=7))
+    await telegram_bot._on_location(update, SimpleNamespace(bot=None))
+    assert "Bidhan Market, Siliguri" in captured["text"]
+    assert "26.71" in captured["text"]
+
+
+async def test_live_location_edit_is_ignored(monkeypatch):
+    from types import SimpleNamespace
+
+    from kyraan.channels import telegram_bot
+    monkeypatch.setattr(telegram_bot, "_owner_private", lambda u: True)
+    called = []
+    monkeypatch.setattr(telegram_bot, "_ingest",
+                        lambda *a: called.append(1))
+    update = SimpleNamespace(message=None, effective_chat=SimpleNamespace(id=7))
+    await telegram_bot._on_location(update, SimpleNamespace(bot=None))
+    assert called == []

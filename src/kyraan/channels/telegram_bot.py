@@ -354,16 +354,30 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     and the model kept asking which area the owner was in.)"""
     if not _owner_private(update):
         return
+    if update.message is None:  # a live-location EDIT arrives as
+        return                  # edited_message — initial pin only
     from kyraan.channels import location as geo
 
-    pin = update.message.location
-    typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
-    try:
-        from kyraan.control_plane.logging_setup import stage as _gstage
-        with _gstage("geocode_pin"):
-            described = await asyncio.to_thread(geo.describe, pin.latitude, pin.longitude)
-    finally:
-        typing.cancel()
+    venue = getattr(update.message, "venue", None)
+    pin = update.message.location or (venue.location if venue else None)
+    if pin is None:
+        return
+    if venue and venue.title:
+        # Telegram's "choose a nearby place" sends a VENUE, not a bare
+        # location — it went to NO handler and vanished silently (seen
+        # live 2026-08-27: a shared place produced nothing at all). The
+        # venue even names itself; use that over reverse geocoding.
+        described = (f"{venue.title}"
+                     + (f", {venue.address}" if venue.address else "")
+                     + f" ({pin.latitude:.5f}, {pin.longitude:.5f})")
+    else:
+        typing = asyncio.create_task(_typing_loop(context.bot, update.effective_chat.id))
+        try:
+            from kyraan.control_plane.logging_setup import stage as _gstage
+            with _gstage("geocode_pin"):
+                described = await asyncio.to_thread(geo.describe, pin.latitude, pin.longitude)
+        finally:
+            typing.cancel()
     logger.info("Location pin resolved: %s", described)
     await _ingest(update, context,
                   f"[I'm sharing my current location: {described}]")
@@ -850,7 +864,7 @@ def run() -> None:
     app.add_handler(CommandHandler(["start", "help"], _on_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
-    app.add_handler(MessageHandler(filters.LOCATION, _on_location))
+    app.add_handler(MessageHandler(filters.LOCATION | filters.VENUE, _on_location))
     app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
     app.add_handler(MessageHandler(filters.Document.PDF, _on_pdf))
     app.add_handler(MessageHandler(
