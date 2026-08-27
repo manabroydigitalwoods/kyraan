@@ -74,6 +74,28 @@ Empty: {{"facts": []}}"""
 # always the model over-extracting, not the user info-dumping.
 _MAX_FACTS_PER_MESSAGE = 3
 
+# The model names categories the tree doesn't have ("personal/",
+# "family/") no matter what the prompt lists — a real fact about
+# Kiaan's vaccination card was silently DROPPED for its path alone
+# (found live 2026-08-27). Same lesson as normalize_flags: map the
+# paraphrase to its parent deterministically; store._validate_path
+# stays the final authority.
+_CATEGORY_ALIASES = {
+    "personal": "people", "family": "people", "relationships": "people",
+    "health": "people", "kids": "people", "children": "people",
+    "habits": "routines", "routine": "routines", "schedule": "routines",
+    "job": "work", "career": "work", "business": "work",
+    "notes": "preferences", "misc": "preferences", "general": "preferences",
+    "likes": "preferences", "interests": "preferences",
+}
+
+
+def _normalize_path(path) -> str:
+    parts = str(path or "").strip().lower().split("/")
+    if len(parts) == 2:
+        parts[0] = _CATEGORY_ALIASES.get(parts[0], parts[0])
+    return "/".join(parts)
+
 
 async def propose_from_message(raw_text: str, context: str = "", insist: bool = False) -> list[str]:
     """Extract stated facts from one message and queue them for human
@@ -182,7 +204,9 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
                 "supersedes": fact.get("supersedes") or None,
             }
             try:
-                store.propose_fact(fact["path"], fact["content"], source=args["text"], meta=meta)
+                store.propose_fact(_normalize_path(fact["path"]),
+                                   fact["content"], source=args["text"],
+                                   meta=meta)
             except (KeyError, TypeError, ValueError) as exc:
                 # Bad shape or a path outside the allowed memory layout —
                 # drop that fact, keep the rest.

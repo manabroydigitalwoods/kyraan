@@ -230,3 +230,30 @@ async def test_explicit_save_passes_insist_and_context_to_the_model(monkeypatch,
     )
     assert "EXPLICITLY asked to save" in captured["system"]
     assert queued == ["- Son Aarav was born around October 2025"]
+
+
+async def test_paraphrased_category_normalizes_instead_of_dropping(
+        monkeypatch, isolated_memory):
+    """Found live 2026-08-27: a real fact about Kiaan's vaccination card
+    was silently DROPPED because the model invented the "personal/"
+    category — same normalize-the-paraphrase lesson as flag tagging.
+    Traversal and truly unknown categories still reject."""
+    _mock_model(
+        monkeypatch,
+        '{"facts": ['
+        '{"path": "personal/kiaan_vaccination_monitor.md", '
+        '"content": "- Has a vaccination monitor card for son Kiaan"}]}',
+    )
+    queued = await extraction.propose_from_message(
+        "this is kiaan's vaccination monitor")
+    assert queued == ["- Has a vaccination monitor card for son Kiaan"]
+    saved = list(isolated_memory.glob("*.md"))
+    assert len(saved) == 1
+
+
+def test_normalize_path_maps_aliases_only():
+    assert extraction._normalize_path("personal/kiaan_card.md") \
+        == "people/kiaan_card.md"
+    assert extraction._normalize_path("habits/tea.md") == "routines/tea.md"
+    assert extraction._normalize_path("people/wife.md") == "people/wife.md"
+    assert extraction._normalize_path("../../.env") == "../../.env"  # still dies in validation
