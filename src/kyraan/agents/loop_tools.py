@@ -626,6 +626,103 @@ TOOLS = {
 }
 
 
+# --- P3.1b: writes declare their inverses --------------------------------
+# UNDO_MAP: tool -> (args, result, prior) -> (undo_tool, undo_args) | None
+# | SKIP. None = a real write with no inverse (logged, not undoable);
+# SKIP = no write actually happened (duplicate-create, no-op switch) so
+# nothing lands in the log — a no-op at the head must not block undo.
+# `prior` is state observed BEFORE the write (home switches), captured by
+# `capture_prior` at execution time — undo restores what was OBSERVED,
+# never an assumed opposite (audit P1).
+
+SKIP = object()
+
+
+def _undo_calendar_create(args, result, prior):
+    if isinstance(result, dict) and result.get("id"):
+        return ("calendar.delete_event",
+                {"event_id": result["id"], "title": str(args.get("title", ""))})
+    return None
+
+
+def _undo_reminders_create(args, result, prior):
+    if isinstance(result, dict) and "__direct_reply__" in result:
+        return SKIP  # duplicate — nothing was created
+    if isinstance(result, dict) and result.get("id"):
+        return ("reminders.cancel", {"reminder_id": result["id"]})
+    return None
+
+
+def _undo_task_schedule(args, result, prior):
+    if isinstance(result, dict) and result.get("id"):
+        return ("tasks.cancel", {"task_id": result["id"]})
+    return None
+
+
+def _undo_faces_remember(args, result, prior):
+    return ("faces.forget", {"name": str(args.get("name", ""))})
+
+
+def _undo_home_switch(args, result, prior):
+    wanted = "on" if prior and prior.get("_tool") == "home.turn_on" else "off"
+    observed = str((prior or {}).get("state", "")).lower()
+    if observed == wanted:
+        return SKIP  # already in that state — no change was made
+    if observed in ("on", "off"):
+        inverse = "home.turn_on" if observed == "on" else "home.turn_off"
+        return (inverse, {"entity": str(args.get("entity", ""))})
+    return None  # prior unobserved (HA read failed) — honest: not undoable
+
+
+UNDO_MAP = {
+    "calendar.create_event": _undo_calendar_create,
+    "reminders.create": _undo_reminders_create,
+    "tasks.schedule": _undo_task_schedule,
+    "faces.remember": _undo_faces_remember,
+    "home.turn_on": _undo_home_switch,
+    "home.turn_off": _undo_home_switch,
+    # Real writes whose inverses need payload capture (deferred P3.1d):
+    "calendar.delete_event": lambda a, r, p: None,
+    "reminders.cancel": lambda a, r, p: None,
+    "tasks.cancel": lambda a, r, p: None,
+    "memory.forget": lambda a, r, p: None,
+}
+
+
+async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
+    """State the inverse will need, observed BEFORE the write executes."""
+    if tool in ("home.turn_on", "home.turn_off"):
+        try:
+            state = await kernel.run_tool(kernel.ToolCall(
+                "home.get_state", {"entity": str(args.get("entity", ""))}))
+            return {**state, "_tool": tool} if isinstance(state, dict) else None
+        except Exception:
+            return None  # unobserved prior ⇒ the write logs as not undoable
+    return None
+
+
+async def record_action(chat_id: int, tool: str, args: dict, result,
+                        prior: dict | None) -> None:
+    """Log a successful write with its inverse. Never breaks the reply:
+    PG down means undo says "can't right now", not a failed turn."""
+    builder = UNDO_MAP.get(tool)
+    if builder is None:
+        return
+    try:
+        undo = builder(args, result, prior)
+        if undo is SKIP:
+            return
+        undo_tool, undo_args = undo if undo is not None else (None, None)
+        import asyncio as _aio
+
+        from kyraan.store import actions as _actions
+        await _aio.to_thread(_actions.record, chat_id, tool, dict(args),
+                             undo_tool, undo_args)
+    except Exception as exc:
+        log_event("action_log_failed", chat_id=chat_id, tool=tool,
+                  error=str(exc)[:200])
+
+
 def _register_home_switches() -> None:
     async def on(chat_id, args, raw_text):
         return await kernel.run_tool(kernel.ToolCall("home.turn_on", {"entity": args["entity"]}))
@@ -707,9 +804,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
 
 
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
-                    "reminders.list", "usage.report", "memory.pending_list",
-                    "web.search", "weather.get", "places.nearby", "routes.eta",
-                    "email.read"}
+                    "reminders.list", "tasks.list", "usage.report",
+                    "memory.pending_list", "web.search", "weather.get",
+                    "places.nearby", "routes.eta", "email.read"}
 
 
 

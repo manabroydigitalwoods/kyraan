@@ -77,6 +77,7 @@ class AgentUnavailable(Exception):
 # The tool surface lives in loop_tools.py; these names are re-exported so
 # callers and tests keep addressing them through agent_loop (the split is
 # an internal file boundary, not an API change).
+from kyraan.agents import loop_tools  # noqa: E402
 from kyraan.agents.loop_tools import (  # noqa: F401,E402
     TOOLS, _READ_ONLY_TOOLS, _describe_call, _confirmed_reply,
     _home_entity_roster, _listing_cache, _normalized_event_times,
@@ -412,14 +413,21 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
                   consider=consider)
         executed_tool = True
         try:
+            # P3.1b: state the inverse needs, observed BEFORE the write.
+            prior = (await loop_tools.capture_prior(chat_id, tool, args)
+                     if tool in loop_tools.UNDO_MAP else None)
             result = await TOOLS[tool]["run"](chat_id, args, raw_text)
+            await loop_tools.record_action(chat_id, tool, args, result, prior)
         except kernel.ConfirmationRequired:
             # The standard confirm flow, verbatim: stash the EXACT call;
             # the owner's yes replays it byte-identical through the kernel.
             captured_tool, captured_args = tool, dict(args)
 
             async def confirmed_handler(_a, _t=captured_tool, _ar=captured_args):
+                _prior = (await loop_tools.capture_prior(chat_id, _t, _ar)
+                          if _t in loop_tools.UNDO_MAP else None)
                 outcome = await TOOLS[_t]["run"](chat_id, _ar, raw_text)
+                await loop_tools.record_action(chat_id, _t, _ar, outcome, _prior)
                 return _confirmed_reply(_t, _ar, outcome)
 
             call = kernel.SkillCall("agent.action", {"tool": tool}, )
