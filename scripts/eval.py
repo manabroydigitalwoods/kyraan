@@ -258,10 +258,23 @@ async def main() -> int:
         if not ok:
             failures.append((case.id, reply[:200]))
 
-    # cleanup: this chat's reminders + proposals created by this run
+    # cleanup: this chat's reminders + proposals created by this run.
+    # ONLY proposals traceable to this run's case texts — "everything
+    # new since eval start" raced the LIVE bot and deleted a real
+    # owner proposal made mid-run (found 2026-08-27 23:05: the owner's
+    # turn landed a pending fact while the gate ran; the sweep ate it).
+    # Over-keeping is safe: the marker purge in _fresh_eval_state
+    # catches any stragglers on the next run.
     _purge_eval_reminders()
+    case_texts = {case.msg for case in CASES}
     for p in memory_store.PENDING_DIR.glob("*"):
-        if p.name not in pre_proposals:
+        if p.name in pre_proposals:
+            continue
+        try:
+            text = p.read_text()
+        except OSError:
+            continue
+        if any(msg in text for msg in case_texts):
             p.unlink()
     try:  # this run's action_log rows (best-effort; PG may be down)
         from kyraan.store import pg
