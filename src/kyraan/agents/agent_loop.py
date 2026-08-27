@@ -352,8 +352,11 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     # homework); the third answer stands either way
     executed_tool = False
     executed_names: set = set()  # which tools actually ran this turn
+    last_listing: list | None = None  # reminders.list's ACTUAL texts
     wrote_this_turn = False  # a WRITE tool ran and did not error
-    false_success_corrections = 0  # up to two forced re-decides
+    false_success_corrections = 0  # up to three forced re-decides — a
+    # stubborn fabricator then exhausts the step cap and falls to the
+    # deterministic classifier path, which lists correctly
     web_tainted = False  # web text entered this turn — no more write tools
 
     for step in range(_MAX_STEPS):
@@ -432,7 +435,18 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
                     if needed and needed not in executed_names:
                         violation = (f"PRESENTS a {kind} listing without "
                                      f"calling {needed}")
-            if violation and false_success_corrections < 2:
+                    elif kind == "reminder" and last_listing is not None:
+                        # GROUNDING (degraded run 4: qwen called the tool
+                        # and STILL recited memory-block routine facts):
+                        # a reminder listing must contain the tool's own
+                        # texts — or say none exist when it returned none.
+                        low = reply.lower()
+                        if last_listing and not any(
+                                t.lower()[:24] in low for t in last_listing if t):
+                            violation = ("PRESENTS a reminder listing that "
+                                         "CONTRADICTS the reminders.list "
+                                         "result shown above")
+            if violation and false_success_corrections < 3:
                 # P3.7a false-success rail: no write ran, yet the draft
                 # claims/promises/narrates one. The honest exits are
                 # CALLING the tool or admitting nothing happened.
@@ -546,6 +560,9 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             result = {"error": f"{tool}: {str(exc)[:200]}"}
 
         executed_names.add(tool)
+        if tool == "reminders.list" and isinstance(result, list):
+            last_listing = [str(r.get("text", "")) for r in result
+                            if isinstance(r, dict)]
         if (tool not in _READ_ONLY_TOOLS
                 and not (isinstance(result, dict) and result.get("error"))):
             wrote_this_turn = True

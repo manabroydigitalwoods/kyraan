@@ -197,3 +197,20 @@ async def test_real_listing_after_the_read_is_untouched(monkeypatch):
     reply = await agent_loop.run(5, "any reminders?", tier="cheap")
     assert "call mom" in reply
     assert "agent_false_success_corrected" not in events
+
+
+async def test_listing_contradicting_the_read_is_corrected(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "call", "tool": "reminders.list", "consider": "…", "args": {}},
+        {"action": "reply", "consider": "fabricating",
+         "text": "Here are your pending reminders:\n- Drink water every 5 minutes"},
+        {"action": "reply", "consider": "grounded",
+         "text": "Here are your pending reminders:\n- call mom at 9:00 PM"},
+    ])
+
+    async def fake_list(chat_id, args, raw_text):
+        return [{"id": "r1", "text": "call mom", "when": "9:00 PM"}]
+
+    monkeypatch.setitem(agent_loop.TOOLS["reminders.list"], "run", fake_list)
+    reply = await agent_loop.run(5, "any reminders?", tier="cheap")
+    assert "call mom" in reply and "Drink water" not in reply
