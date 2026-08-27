@@ -57,10 +57,18 @@ def cloud_line(entry: dict) -> str | None:
     return f"{role}: {text}" if text else None
 
 
+SESSION_GAP_MINUTES = 30  # a silence this long ends the sitting
+
+
 def chunk_day(records: list) -> dict:
-    """{chat_id: [chunk, ...]} where each chunk is a list of (ts, line)
-    covering ~EXCHANGES_PER_EPISODE user turns. Records must be one
-    day's, in log order."""
+    """{chat_id: [chunk, ...]} where each chunk is a list of (ts, line).
+    RAG precision (2026-08-27): a chunk is ONE SITTING — it splits on a
+    >30min silence as well as on the ~EXCHANGES_PER_EPISODE cap, so an
+    episode's embedding points at one topic instead of averaging three
+    (a morning weather check and an evening health worry used to share
+    one vector). Records must be one day's, in log order. Splits stay
+    FORWARD-deterministic: boundaries depend only on earlier records, so
+    a chunk's first ts — its identity — never changes as the day grows."""
     per_chat: dict = {}
     for entry in records:
         line = cloud_line(entry)
@@ -69,9 +77,21 @@ def chunk_day(records: list) -> dict:
         if line is None or not ts or chat_id is None:
             continue
         chunks = per_chat.setdefault(chat_id, [[]])
-        exchanges = sum(1 for _, l in chunks[-1] if l.startswith("user:"))
-        if exchanges >= EXCHANGES_PER_EPISODE and line.startswith("user:"):
-            chunks.append([])  # a new episode starts on a user turn
+        current = chunks[-1]
+        split = False
+        if current and line.startswith("user:"):
+            exchanges = sum(1 for _, l in current if l.startswith("user:"))
+            if exchanges >= EXCHANGES_PER_EPISODE:
+                split = True
+            else:
+                try:
+                    gap = (datetime.fromisoformat(ts)
+                           - datetime.fromisoformat(current[-1][0]))
+                    split = gap.total_seconds() > SESSION_GAP_MINUTES * 60
+                except ValueError:
+                    pass
+        if split:
+            chunks.append([])
         chunks[-1].append((ts, line))
     return {chat: [c for c in chunks if c] for chat, chunks in per_chat.items()}
 
@@ -305,7 +325,9 @@ def recall(chat_id: int, query: str, k: int = 5) -> list:
     return lines
 
 
-RAG_MIN_SIM = 0.45   # below this the "relevant" episode is noise
+RAG_MIN_SIM = 0.35   # calibrated 2026-08-27 (probe_rag battery): real
+                     # matches measured 0.38-0.50, unrelated noise 0.11
+                     # — 0.45 was losing true hits at 0.38/0.43
 RAG_MAX_SNIPPETS = 2
 RAG_CLIP = 280
 
@@ -318,8 +340,9 @@ def relevant_snippets(chat_id: int, message: str) -> list:
     pollutes the prompt. Empty on any failure — context degrades to
     exactly the pre-RAG prompt."""
     try:
+        ranked = _search(chat_id, message)
         picked, seen = [], set()
-        for _score, sim, day, text in _search(chat_id, message):
+        for _score, sim, day, text in ranked:
             if sim < RAG_MIN_SIM:
                 break  # best-first: everything after is weaker
             head = text[:120]
@@ -331,6 +354,12 @@ def relevant_snippets(chat_id: int, message: str) -> list:
                           + clipped.replace("\n", " ⏎ "))
             if len(picked) >= RAG_MAX_SNIPPETS:
                 break
+        # Observability for tuning: every retrieval logs its best
+        # similarity — with these, the 0.45 floor becomes a calibrated
+        # number instead of a guess (near-misses show up as
+        # injected=0 with best_sim just under the floor).
+        log_event("episode_rag", chat_id=chat_id, injected=len(picked),
+                  best_sim=round(ranked[0][1], 3) if ranked else None)
         return picked
     except Exception as exc:
         log_event("episode_rag_skipped", reason=str(exc)[:120])

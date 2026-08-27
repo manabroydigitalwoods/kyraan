@@ -360,7 +360,10 @@ def _pg_candidates(message: str) -> list | None:
         with _pg.connection() as conn:
             rows = conn.execute(
                 f"""SELECT legacy_id, content, target, kind, term, importance,
-                          flags, era, sphere, created_at
+                          flags, era, sphere, created_at,
+                          CASE WHEN %s::vector IS NOT NULL
+                                    AND embedding IS NOT NULL
+                               THEN 1 - (embedding <=> %s::vector) END AS sim
                    FROM fact
                    WHERE active AND owner = 'owner'
                          {vis_sql}
@@ -377,7 +380,7 @@ def _pg_candidates(message: str) -> list | None:
                               OR id IN (SELECT id FROM fact WHERE active
                                         ORDER BY created_at DESC LIMIT 100))
                    ORDER BY created_at, legacy_id""",
-                (*vis_params, cutoff, tsquery, tsquery or "x",
+                (qvec, qvec, *vis_params, cutoff, tsquery, tsquery or "x",
                  qvec, qvec)).fetchall()
     except Exception as exc:
         log_event("memory_backend_fallback", backend="pg",
@@ -386,7 +389,9 @@ def _pg_candidates(message: str) -> list | None:
     return [{"id": r[0], "content": r[1], "target": r[2], "kind": r[3],
              "term": r[4], "importance": r[5], "flags": list(r[6] or []),
              "era": r[7], "sphere": r[8], "created": r[9].isoformat(),
-             "active": True, "superseded_by": None} for r in rows]
+             "active": True, "superseded_by": None,
+             "_sim": float(r[10]) if r[10] is not None else None}
+            for r in rows]
 
 
 def build_context(message: str = "", budget_chars: int = 3500) -> str:
@@ -417,6 +422,14 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
     message_words = _words(message)
 
     reaching_for_past = bool({w.lower() for w in message.split()} & _PAST_CUES)
+    # RAG precision (2026-08-27): the single TOP semantic match, when it
+    # clears a floor, counts as "strong, direct relevance" for the
+    # discretion rule — "where do I stay?" ranked the (sensitive-flagged)
+    # home fact #1 with a wide margin and word overlap still hid it. Only
+    # rank #1 qualifies: a vague query's flat similarities can never
+    # volunteer a sensitive memory.
+    sims = [e.get("_sim") for e in entries if e.get("_sim") is not None]
+    top_sim = max(sims) if sims else None
     always, ranked = [], []
     for entry in entries:
         safety = set(entry.get("flags") or []) & _SAFETY_FLAGS
@@ -424,12 +437,24 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
             always.append(entry)
             continue
         overlap = len(message_words & _words(entry["content"]))
-        if (set(entry.get("flags") or []) & _DISCRETION_FLAGS) and overlap < 2:
+        sim = entry.get("_sim")
+        semantically_direct = (sim is not None and top_sim is not None
+                               and sim >= 0.12 and sim >= top_sim)
+        if (set(entry.get("flags") or []) & _DISCRETION_FLAGS
+                and overlap < 2 and not semantically_direct):
             # A sensitive or emotional memory with no strong tie to the
             # current message stays private — discretion means absence,
             # not a lower rank.
             continue
         score = overlap * 10 + (5 if entry["importance"] == "high" else 0)
+        # Similarity is a RANKING signal, not just a nomination — without
+        # this a zero-overlap semantic hit scored 0 and survived only
+        # while every fact fit the budget. Fact sims run LOW on short
+        # texts (real matches ~0.15, junk ~0.03 — measured), so the
+        # floor is 0.12 and the weight keeps a strong match under a
+        # two-word direct overlap.
+        if sim is not None and sim > 0.12:
+            score += sim * 25
         # Old memories: normally quieter, but when the user reaches for
         # the past ("what did I use to..."), they lead. A past fact with
         # health/safety weight is in `always` above regardless — an

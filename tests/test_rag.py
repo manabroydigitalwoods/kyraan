@@ -173,3 +173,22 @@ def test_snippets_respect_threshold_and_suppression(test_db, monkeypatch):
                      "WHERE text LIKE '%garden%'")
         conn.commit()
     assert episodes.relevant_snippets(5, "garden project plans") == []
+
+@pytest.mark.pg
+def test_sensitive_fact_surfaces_when_it_is_the_top_semantic_match(test_db, monkeypatch):
+    from kyraan.memory import engine
+    monkeypatch.setenv("KYRAAN_MEMORY_BACKEND", "pg")
+    close = [1.0] + [0.0] * 383
+    far = [0.0] * 383 + [1.0]
+    monkeypatch.setattr(embed, "embed", _fake_embedder(
+        {"Home is Lakeview Colony": close,
+         "Prefers filter coffee": far,
+         "where do I stay?": close,
+         "tell me something": [0.05] * 384}, far))
+    engine.add_fact("Home is Lakeview Colony", "preferences/home.md", "t",
+                    flags=["sensitive"])
+    engine.add_fact("Prefers filter coffee", "preferences/coffee.md", "t")
+    # a DIRECT question (top semantic match) surfaces the sensitive fact
+    assert "Lakeview" in engine.build_context("where do I stay?")
+    # a vague query with flat similarity must NOT volunteer it
+    assert "Lakeview" not in engine.build_context("tell me something")
