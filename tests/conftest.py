@@ -40,6 +40,15 @@ def _classifier_path_by_default(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_fact_mirroring(monkeypatch):
+    """The memory tree is isolated below, but the P3.2a mirror would still
+    write into the LIVE Postgres container — off by default; the pg-marked
+    sync tests re-enable it and clean up their own rows."""
+    from kyraan.store import facts
+    monkeypatch.setattr(facts, "MIRROR_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
 def _isolated_memory_tree(monkeypatch, tmp_path):
     """No test may ever touch the REAL memory tree — a promote test once
     leaked "likes tea" into the owner's live index.json. Tests that need

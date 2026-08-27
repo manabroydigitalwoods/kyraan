@@ -56,6 +56,18 @@ def _index_path():
     return store.MEMORY_ROOT / INDEX_NAME
 
 
+def _mirror(changed: list) -> None:
+    """P3.2a: mirror changed entries into Postgres AFTER the file write.
+    Files are the authority — a PG failure logs fact_sync_deferred inside
+    mirror_entries and never raises into the caller."""
+    try:
+        from kyraan.store import facts
+        facts.mirror_entries(changed)
+    except Exception as exc:  # import/config trouble must not break memory
+        log_event("fact_sync_deferred", entries=len(changed),
+                  reason=str(exc)[:200])
+
+
 def _load() -> list:
     try:
         return json.loads(_index_path().read_text())
@@ -147,6 +159,7 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
             # Idempotency for promote retries (review P2): the index is
             # the authority — re-registering the same fact is a no-op.
             return entry["id"]
+    changed = []
     if supersedes:
         old_words = _words(supersedes)
         for entry in entries:
@@ -156,6 +169,7 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
             if entry_words and (entry_words <= old_words or old_words <= entry_words):
                 entry["active"] = False
                 entry["superseded_by"] = new_id
+                changed.append(entry)
                 log_event("memory_superseded", old=entry["content"][:80],
                           new=content[:80])
 
@@ -168,6 +182,9 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
         "active": True, "superseded_by": None,
     })
     _save(entries)
+    # The new fact FIRST: superseded links point at it, and sync_entries'
+    # two-pass order needs its row in the same batch.
+    _mirror([entries[-1]] + changed)
     return new_id
 
 
@@ -178,7 +195,7 @@ def active_entries() -> list:
     with locked(_index_path()):
         entries = _load()
         now = datetime.now(timezone.utc)
-        changed = False
+        expired = []
         for entry in entries:
             if (entry["active"] and entry.get("term") == "short"):
                 try:
@@ -187,10 +204,11 @@ def active_entries() -> list:
                     continue
                 if now - created > timedelta(days=_SHORT_TERM_DAYS):
                     entry["active"] = False
-                    changed = True
+                    expired.append(entry)
                     log_event("memory_short_term_expired", content=entry["content"][:80])
-        if changed:
+        if expired:
             _save(entries)
+            _mirror(expired)
     return [e for e in entries if e["active"]]
 
 
@@ -273,15 +291,18 @@ def find_matches(text: str) -> list:
 def forget(entry_ids: list) -> list:
     """Deactivate entries by id (kept in the index as history, out of all
     retrieval). Returns the forgotten contents."""
-    forgotten = []
+    forgotten, changed = [], []
     with locked(_index_path()):
         entries = _load()
         for entry in entries:
             if entry["id"] in entry_ids and entry["active"]:
                 entry["active"] = False
                 forgotten.append(entry["content"])
+                changed.append(entry)
                 log_event("memory_forgotten", content=entry["content"][:80])
         _save(entries)
+        if changed:
+            _mirror(changed)
     return forgotten
 
 
