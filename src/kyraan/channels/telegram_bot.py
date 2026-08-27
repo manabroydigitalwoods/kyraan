@@ -596,8 +596,9 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from kyraan.store import documents
     import asyncio as _aio
     doc_id = await _aio.to_thread(
-        documents.ingest, chat_id, "pdf", text,
-        (update.message.caption or "")[:120], document.file_name or "")
+        lambda: documents.ingest(
+            chat_id, "pdf", text, (update.message.caption or "")[:120],
+            document.file_name or "", original=(data, "pdf")))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
              f"({len(reader.pages)} page{'s' if len(reader.pages) != 1 else ''}, "
              f"{len(text):,} chars) — ask me about it anytime."
@@ -957,6 +958,18 @@ def run() -> None:
     _wire_scheduler(app.job_queue, app.bot)
     _wire_agent_tasks(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
+
+    # Files OUT (2026-08-28): the loop's files.send delivers through here.
+    from kyraan.channels import file_send as _file_send
+
+    async def _send_document(chat_id: int, filename: str, data: bytes,
+                             caption: str) -> None:
+        import io
+        await app.bot.send_document(
+            chat_id=chat_id, document=io.BytesIO(data), filename=filename,
+            caption=caption or None)
+
+    _file_send.init(_send_document)
     # A restart must be invisible to the owner: reload the conversation
     # from chat.jsonl so follow-ups ("are those the latest emails?") still
     # have their context.

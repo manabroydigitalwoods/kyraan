@@ -688,6 +688,60 @@ async def _persons_add(chat_id: int, args: dict, raw_text: str):
     return {"added": True, "person_id": person_id, "name": name}
 
 
+async def _files_send(chat_id: int, args: dict, raw_text: str):
+    """Deliver a text file the model composed to THIS chat — the export
+    arm of document memory and any tabular answer ("vaccination schedule
+    as a file", "AC usage as CSV"). The chat_id is the requester's own;
+    a model-chosen destination does not exist."""
+    from kyraan.channels import file_send
+    if not file_send.available():
+        raise kernel.ToolFailed("file sending isn't available on this channel")
+    try:
+        sent = await file_send.send(
+            chat_id, str(args.get("filename", "")),
+            str(args.get("content", "")),
+            caption=str(args.get("caption", "") or ""))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    receipt = (f'📎 Sent {sent["filename"]} '
+               f'({sent["bytes"]:,} bytes).')
+    return {"__direct_reply__": receipt, "__history__": receipt}
+
+
+async def _documents_show(chat_id: int, args: dict, raw_text: str):
+    """Send back the ORIGINAL uploaded file of a saved document — "show
+    me the actual card", "send me that PDF". Chat-scoped; older docs
+    saved before originals were kept say so honestly."""
+    import asyncio as _aio
+
+    from kyraan.channels import file_send
+    from kyraan.store import documents
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("give words that find the saved document")
+    if not file_send.available():
+        raise kernel.ToolFailed("file sending isn't available on this channel")
+    try:
+        hits = await _aio.to_thread(documents.search, chat_id, query)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"document memory is unavailable right now ({str(exc)[:100]})")
+    if not hits:
+        raise kernel.ToolFailed(f"no saved document matches {query!r}")
+    stored = await _aio.to_thread(documents.original_file,
+                                  chat_id, hits[0]["doc_id"])
+    if stored is None:
+        return {"found": True, "original": False,
+                "note": (f'"{hits[0]["caption"]}" was saved before originals '
+                         "were kept — only its extracted text exists; offer "
+                         "documents.read, or a re-send to store the file")}
+    path, filename = stored
+    await file_send.send_stored(chat_id, path, filename,
+                                caption=hits[0]["caption"])
+    receipt = f'📎 Sent the original: {hits[0]["caption"]}.'
+    return {"__direct_reply__": receipt, "__history__": receipt}
+
+
 async def _persons_profile(chat_id: int, args: dict, raw_text: str):
     """ONE deterministic aggregation of everything known about a person
     (undo-matrix batch, 2026-08-28): registry row, aliases, facts naming
@@ -1063,6 +1117,25 @@ TOOLS = {
                   "called it."),
         "run": _documents_rename,
     },
+    "documents.show": {
+        "params": '{"query": "<words that find the document>"}',
+        "about": ("Send the user the ORIGINAL uploaded file (photo/PDF) "
+                  "of a saved document — \"show me the actual card\", "
+                  "\"send me kamal.pdf\", \"display the gas memo\". For "
+                  "the text/answers use documents.read instead."),
+        "run": _documents_show,
+    },
+    "files.send": {
+        "params": '{"filename": "<name.csv|.txt|.md|.json|.html>", '
+                  '"content": "<the complete file text>", '
+                  '"caption": "<optional one-line caption>"}',
+        "about": ("Send the user a real FILE composed by you — for \"as a "
+                  "file/CSV/table I can save\", exports of saved documents "
+                  "(documents.read first, then send), schedules, usage "
+                  "data. Compose complete well-formed content (real CSV "
+                  "rows, real markdown). Text formats only; ~200KB cap."),
+        "run": _files_send,
+    },
     "persons.profile": {
         "params": '{"name": "<person name or alias>"}',
         "about": ("Everything known about ONE person in one call — "
@@ -1285,6 +1358,8 @@ UNDO_MAP = {
         ("rules.reactivate", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
     "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
+    "files.send": lambda a, r, p: None,   # a delivered file can't be unsent
+    "documents.show": lambda a, r, p: None,  # ditto — it re-sends the owner's own upload
     "email.draft": lambda a, r, p: (
         ("email.draft_delete", {"draft_id": r["draft_id"]})
         if isinstance(r, dict) and r.get("draft_id") else None),

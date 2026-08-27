@@ -182,10 +182,19 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             # a wall of photo "(untitled)" entries (owner: "human
             # readability", 2026-08-27).
             # Subjects are PROPOSED here; the person registry decides
-            # inside ingest (only enrolled ids ever stick).
+            # inside ingest (only enrolled ids ever stick). The original
+            # photo bytes persist too (owner 2026-08-28: "store the
+            # uploaded files... therefore we can display the file").
+            import base64 as _b64
+            try:
+                original = (_b64.b64decode(
+                    image_data_url.split(",", 1)[1]), "jpg")
+            except Exception:
+                original = None
             doc_id = documents.ingest(chat_id, "photo", document_text,
                                       caption=(caption or document_title)[:120],
-                                      subjects=document_subjects)
+                                      subjects=document_subjects,
+                                      original=original)
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "
                           "it anytime.")

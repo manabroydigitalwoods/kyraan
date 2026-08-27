@@ -14,6 +14,7 @@ forget cascade cover documents; retrieval is chat-scoped.
 import hashlib
 import json
 import uuid
+from pathlib import Path
 
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.store import embed, pg
@@ -102,8 +103,55 @@ def subjects_from_name(title: str) -> list:
     return sorted(out)
 
 
+FILES_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
+
+
+def _store_original(doc_id: str, original: tuple) -> str:
+    """Persist the uploaded bytes under data/documents/<doc_id>.<ext>
+    (owner-only perms); returns the RELATIVE path stored on the row.
+    Idempotent like the doc id itself — re-sending overwrites in place."""
+    import os
+    data, ext = original
+    ext = "." + str(ext).strip(". ").lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".pdf"):
+        return ""
+    FILES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        FILES_DIR.chmod(0o700)
+    except OSError:
+        pass
+    path = FILES_DIR / f"{doc_id}{ext}"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as handle:
+        handle.write(data)
+    return f"data/documents/{doc_id}{ext}"
+
+
+def original_file(chat_id: int, doc_id: str):
+    """(absolute_path, suggested_filename) for a doc's stored original,
+    or None — chat-scoped, and the path is rebuilt from OUR root plus
+    the stored basename (never trusted as-is)."""
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT file_path,
+                      coalesce(nullif(caption, ''), filename, 'document')
+               FROM document
+               WHERE chat_id = %s AND id = %s AND suppressed_by = '{}'""",
+            (chat_id, doc_id)).fetchone()
+    if not row or not row[0]:
+        return None
+    basename = row[0].replace("\\", "/").split("/")[-1]
+    path = FILES_DIR / basename
+    if not path.exists():
+        return None
+    ext = path.suffix
+    safe_name = "".join(c for c in row[1] if c.isalnum() or c in " .-_")[:60]
+    return str(path), (safe_name or "document") + ext
+
+
 def ingest(chat_id: int, kind: str, text: str, caption: str = "",
-           filename: str = "", subjects=None) -> str | None:
+           filename: str = "", subjects=None,
+           original: tuple | None = None) -> str | None:
     """Store one captured document. Returns the doc id, or None when the
     text is too thin to be a document. Idempotent: the same text in the
     same chat is one document (re-sending a card doesn't duplicate).
@@ -132,15 +180,19 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
     except Exception:
         vectors = [None] * len(_chunks(text))  # FTS still finds them
     with pg.connection() as conn:
+        file_path = _store_original(doc_id, original) if original else ""
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
-                                     text, flags, subject_persons)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                                     text, flags, subject_persons, file_path)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
                    caption = EXCLUDED.caption, flags = EXCLUDED.flags,
-                   subject_persons = EXCLUDED.subject_persons""",
+                   subject_persons = EXCLUDED.subject_persons,
+                   file_path = CASE WHEN EXCLUDED.file_path <> ''
+                                    THEN EXCLUDED.file_path
+                                    ELSE document.file_path END""",
             (doc_id, chat_id, kind, caption[:300], filename[:200], text,
-             flags, subjects))
+             flags, subjects, file_path))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):
@@ -310,8 +362,15 @@ def delete_documents(chat_id: int, doc_ids: list) -> list:
         for doc_id in doc_ids:
             row = conn.execute(
                 "DELETE FROM document WHERE chat_id = %s AND id = %s "
-                "RETURNING coalesce(nullif(caption, ''), filename, '(untitled)')",
+                "RETURNING coalesce(nullif(caption, ''), filename, '(untitled)'), "
+                "file_path",
                 (chat_id, doc_id)).fetchone()
+            if row and row[1]:
+                # the original goes with the record — captures are the
+                # owner's to destroy, files included
+                basename = row[1].replace("\\", "/").split("/")[-1]
+                (FILES_DIR / basename).unlink(missing_ok=True)
+            row = row[:1] if row else row
             if row is not None:
                 captions.append(row[0])
         conn.commit()
