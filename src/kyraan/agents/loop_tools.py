@@ -449,6 +449,48 @@ async def _task_cancel(chat_id: int, args: dict, raw_text: str):
     return {"cancelled": True}
 
 
+async def _rules_create(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import event_rules
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("rules.create", dict(args))
+    try:
+        rule = event_rules.create(
+            chat_id,
+            description=str(args.get("description", "")),
+            entity=str(args.get("entity", "")),
+            op=str(args.get("op", "")),
+            value=str(args.get("value", "")),
+            for_minutes=int(args.get("for_minutes", 0) or 0),
+            message=str(args.get("message", "") or ""),
+            cooldown_minutes=int(args.get("cooldown_minutes", 0)
+                                 or event_rules.DEFAULT_COOLDOWN_MIN))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"created": True, "id": rule.id,
+            "watching": f"{rule.entity} {rule.op} {rule.value}"
+                        + (f" for {rule.for_minutes}min" if rule.for_minutes else "")}
+
+
+async def _rules_list(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import event_rules
+    rules = event_rules.list_active(chat_id)
+    if not rules:
+        return {"rules": [], "note": "no watch rules set"}
+    return [f'[{r.id}] {r.description} ({r.entity} {r.op} {r.value}'
+            + (f" for {r.for_minutes}min" if r.for_minutes else "") + ")"
+            for r in rules]
+
+
+async def _rules_cancel(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import event_rules
+    try:
+        rule = event_rules.cancel(chat_id, str(args.get("rule_id", "")))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    receipt = f'Watch rule removed: "{rule.description}".'
+    return {"__direct_reply__": receipt, "__history__": receipt}
+
+
 async def _memory_forget(chat_id: int, args: dict, raw_text: str):
     from kyraan.memory import engine
     wanted = str(args.get("fact", "")).strip()
@@ -731,6 +773,26 @@ TOOLS = {
         "about": "Cancel a scheduled agent task by id.",
         "run": _task_cancel,
     },
+    "rules.create": {
+        "params": '{"description": "<the rule in plain words>", "entity": "<a listed home entity>", "op": "is|above|below", "value": "on|off|<number>", "for_minutes": 0, "message": "<optional custom alert text>"}',
+        "about": ("Create a WATCH RULE: a standing condition checked every "
+                  "15 minutes that NOTIFIES when true — \"tell me if the AC "
+                  "is on more than 3 hours\" -> entity switch.ac, op is, "
+                  "value on, for_minutes 180. above/below for numeric "
+                  "sensors (temperature, watts). Rules only notify — they "
+                  "never switch anything. Owner confirms creation."),
+        "run": _rules_create,
+    },
+    "rules.list": {
+        "params": "{}",
+        "about": "The user's active watch rules (id, condition).",
+        "run": _rules_list,
+    },
+    "rules.cancel": {
+        "params": '{"rule_id": "<id from rules.list>"}',
+        "about": "Remove a watch rule by id (list first if unsure).",
+        "run": _rules_cancel,
+    },
     "memory.forget": {
         "params": '{"fact": "<roughly the fact to forget, e.g. \'father Deven Rao\'>"}',
         "about": "Forget a saved fact (deactivates it; kept as history). Matching is deterministic; the owner confirms the exact facts before anything is forgotten. For corrections prefer stating the new fact — supersession handles it.",
@@ -931,6 +993,10 @@ def _undo_reminders_reschedule(args, result, prior):
 UNDO_MAP = {
     "calendar.create_event": _undo_calendar_create,
     "reminders.create": _undo_reminders_create,
+    "rules.create": lambda a, r, p: (
+        ("rules.cancel", {"rule_id": r["id"]})
+        if isinstance(r, dict) and r.get("id") else None),
+    "rules.cancel": lambda a, r, p: None,  # re-creation needs the full spec
     "reminders.snooze": _undo_reminders_snooze,
     "reminders.reschedule": _undo_reminders_reschedule,
     "calendar.reschedule": lambda a, r, p: (
@@ -1052,6 +1118,13 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
         return (f"Schedule this task: at {humanize(str(args.get('when_iso')))}"
                 f"{rep}, I will run: \"{args.get('instruction')}\" (read-only "
                 "tools; results arrive as messages)")
+    if tool == "rules.create":
+        held = (f" for {args.get('for_minutes')} minutes"
+                if int(args.get("for_minutes", 0) or 0) else "")
+        return (f"Set a standing WATCH RULE: whenever {args.get('entity')} "
+                f"is {args.get('op')} {args.get('value')}{held}, I will "
+                f"message you (\"{args.get('description')}\"). Checked every "
+                "15 minutes; it never switches anything itself")
     if tool == "reminders.create":
         n = int(args.get("interval_minutes", 0) or 0)
         ws = str(args.get("window_start", "") or "")
@@ -1083,6 +1156,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
                     "memory.relations", "documents.search", "documents.list",
+                    "rules.list",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 

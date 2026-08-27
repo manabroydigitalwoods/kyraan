@@ -821,6 +821,23 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                                 name="home_alerts")
         logger.info("Home alerts armed (every 30 min, DND-gated)")
 
+    # Event-triggered watch rules (owner, 2026-08-27): user-defined
+    # conditions evaluated every 15 min — notify-only by doctrine.
+    from kyraan.triggers import event_rules
+
+    async def _rules_send(chat_id: int, text: str) -> None:
+        orchestrator.record_proactive(chat_id, text)
+        await app.bot.send_message(chat_id=chat_id, text=_plain(text))
+
+    event_rules.init(_rules_send)
+
+    async def _rules_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+        await event_rules.tick()
+
+    job_queue.run_repeating(_rules_job, interval=900, first=180,
+                            name="event_rules")
+    logger.info("Watch rules armed (every 15 min, DND-gated)")
+
 
 def _harden_data_permissions() -> None:
     """Personal data is owner-only on disk (security round P2: 0644/0755

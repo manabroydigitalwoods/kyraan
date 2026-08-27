@@ -915,6 +915,9 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
             elif ut == "reminders.reschedule":
                 scheduler.reschedule_reminder(
                     chat_id, ua["reminder_id"], ua["when_iso"])
+            elif ut == "rules.cancel":
+                from kyraan.triggers import event_rules
+                event_rules.cancel(chat_id, ua["rule_id"])
             elif ut == "tasks.cancel":
                 from kyraan.agents import loop_tools
                 await loop_tools._task_cancel(chat_id, ua, "")
