@@ -223,3 +223,19 @@ async def test_rename_to_the_same_words_is_a_noop_not_an_ask(doc_db, _household)
     with pytest.raises(kernel.ConfirmationRequired):
         await loop_tools._documents_rename(
             7, {"query": "kamal", "new_name": "Kamal CV 2026"}, "")
+
+
+@pytest.mark.pg
+async def test_documents_read_returns_full_text(doc_db):
+    from kyraan.agents import loop_tools
+    documents.ingest(7, "pdf", _CARD + " The story of resilience.",
+                     caption="Kamal — profile PDF")
+    out = await loop_tools._documents_read(7, {"query": "kamal"}, "")
+    assert isinstance(out, str)
+    assert 'full saved document "Kamal — profile PDF"' in out
+    assert "story of resilience" in out
+    # constant mock embeddings make every query similar — force no-match
+    import unittest.mock as _mock
+    with _mock.patch.object(documents, "search", lambda c, q, k=1: []):
+        empty = await loop_tools._documents_read(7, {"query": "nothing"}, "")
+    assert empty["found"] == 0

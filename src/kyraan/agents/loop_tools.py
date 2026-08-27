@@ -663,6 +663,25 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
             for h in hits]
 
 
+async def _documents_read(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.store import documents
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("give words that find the saved document")
+    try:
+        doc = await _aio.to_thread(documents.full_text, chat_id, query)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"document memory is unavailable right now ({str(exc)[:100]})")
+    if not doc:
+        return {"found": 0, "note": ("no saved document matches — say so "
+                                     "honestly, never invent contents")}
+    return (f'[full saved document "{doc["caption"]}", {doc["date"]}]\n'
+            + doc["text"])
+
+
 async def _email_draft(chat_id: int, args: dict, raw_text: str):
     """Create a Gmail DRAFT — never send (owner: "we can hold email
     reply... we can just draft the email", 2026-08-27). The owner
@@ -930,6 +949,15 @@ TOOLS = {
                   "current title or contents); new_name is what the user "
                   "called it."),
         "run": _documents_rename,
+    },
+    "documents.read": {
+        "params": '{"query": "<words that find the document>"}',
+        "about": ("Read a saved document IN FULL (clipped ~6000 chars) — "
+                  "for summaries and any question one search snippet "
+                  "can't answer (\"summarize manab.pdf\", \"what is the "
+                  "Kamal story about\"). An unscoped summary ask means "
+                  "the WHOLE document — never ask which parts."),
+        "run": _documents_read,
     },
     "documents.search": {
         "params": '{"query": "<words or a number>"}',
@@ -1283,7 +1311,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
                     "memory.relations", "documents.search", "documents.list",
-                    "rules.list",
+                    "documents.read", "rules.list",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 

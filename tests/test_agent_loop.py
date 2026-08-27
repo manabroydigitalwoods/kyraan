@@ -1074,3 +1074,28 @@ def test_sole_recent_person_ignores_capitalized_noise():
                       "You can ask anytime."))
     assert agent_loop._sole_recent_person(chat_id, "connect it with him") \
         == "Kamal"
+
+
+def test_new_dodge_shapes_are_caught():
+    """Live 2026-08-28 00:57-00:59: scope interrogations and a
+    which-NAME dodge slipped the rails."""
+    assert agent_loop._DEFLECTION_RE.search(
+        "Sure—what exactly do you want from your PDF?")
+    assert agent_loop._DEFLECTION_RE.search(
+        "Got it—do you want a summary of the entire PDF, or only parts?")
+    assert agent_loop._REFERENT_DODGE_RE.search(
+        "Which Kamal do you mean, and what happened?")
+    # an answer that merely CONTAINS a question deep in it still passes
+    assert not agent_loop._DEFLECTION_RE.search(
+        "Here is the summary. Anything else?")
+
+
+async def test_which_name_dodge_binds_to_the_named_person(
+        scripted_model, monkeypatch):
+    prompts = scripted_model([
+        '{"action": "reply", "text": "Which Kamal do you mean, and what happened?"}',
+        '{"action": "reply", "text": "From the saved PDF: Kamal recovered slowly."}',
+    ])
+    reply = await agent_loop.run(91_004, "What happened to Kamal's health?")
+    assert reply == "From the saved PDF: Kamal recovered slowly."
+    assert "exactly ONE person: Kamal" in prompts[1]

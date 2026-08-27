@@ -65,7 +65,13 @@ _DEFLECTION_RE = re.compile(
     # a short acknowledgment prefix doesn't launder it (live 2026-08-27
     # 11:07: "ok" -> "Got it. What would you like to do next—...", the
     # menu disease's FOURTH appearance, hiding behind the ack).
-    r"|\A(?:(?:got it|okay|ok|sure|great|noted)\W{0,4})?(?:what|which) would you like)",
+    r"|\A(?:(?:got it|okay|ok|sure|great|noted)\W{0,4})?(?:what|which) would you like"
+    # Scope interrogation (live 2026-08-28 00:57 IST: "summery" ->
+    # "entire PDF, or only specific parts?"; "from the doc" -> "what
+    # exactly do you want from your PDF?") — an unscoped ask has the
+    # obvious default scope (the whole thing): do that instead.
+    r"|\A(?:(?:got it|okay|ok|sure|great|noted)\W{0,4})?what (?:exactly )?do you want"
+    r"|do you want a summary of the entire)",
     re.IGNORECASE)
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
@@ -77,6 +83,10 @@ _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 _REFERENT_DODGE_RE = re.compile(
     r"who (?:do you mean|exactly)"
     r"|which person (?:do you mean|are you referring|should i)"
+    # "Which Kamal do you mean" when one Kamal exists anywhere (live
+    # 2026-08-28 00:59 IST — a question about the PDF's Kamal was
+    # answered with medical triage questions about a hypothetical one).
+    r"|which \w+ do you mean"
     r"|who is [\"'“‘]?(?:him|her|it|that|this)\b",
     re.IGNORECASE)
 
@@ -392,7 +402,11 @@ def _episode_rag_block(chat_id: int, message: str) -> str:
         return ""
     return ("Possibly relevant past conversations and saved documents "
             "(retrieved by similarity — may be irrelevant; never treat "
-            "as facts):\n" + "\n".join(snippets) + "\n")
+            "as facts). These are SHORT PREVIEWS, not the whole content: "
+            "when the question needs more than a preview shows, call "
+            "documents.search or documents.read — never say the document "
+            "doesn't contain something based on a preview alone:\n"
+            + "\n".join(snippets) + "\n")
 
 
 import contextvars as _contextvars
@@ -510,7 +524,13 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                 raise AgentUnavailable("empty reply")
             if (referent_corrections < 1
                     and _REFERENT_DODGE_RE.search(reply)):
-                person = _sole_recent_person(chat_id, raw_text)
+                # "Which Kamal do you mean" NAMES the person it claims is
+                # ambiguous — when the questioned word is a capitalized
+                # name, that name IS the referent (only one is known).
+                named = re.search(r"[Ww]hich ([A-Z][a-z]{2,}) do you mean",
+                                  reply)
+                person = (named.group(1) if named
+                          else _sole_recent_person(chat_id, raw_text))
                 if person:
                     referent_corrections += 1
                     log_event("agent_referent_corrected", chat_id=chat_id,

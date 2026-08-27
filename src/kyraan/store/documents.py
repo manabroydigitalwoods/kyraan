@@ -225,6 +225,30 @@ def relevant_snippet(chat_id: int, message: str) -> str | None:
             + clipped.replace("\n", " ⏎ "))
 
 
+def full_text(chat_id: int, query: str, max_chars: int = 6000) -> dict | None:
+    """The whole document (clipped), found by the same hybrid search —
+    "summarize the PDF" needs more than one 400-char chunk (live
+    2026-08-28: a summary ask dead-ended in scope interrogations because
+    no tool could read the doc). Exposure-gated like every read."""
+    hits = search(chat_id, query, k=1)
+    if not hits:
+        return None
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT coalesce(nullif(caption, ''), filename, '(untitled)'),
+                      created_at::date, text
+               FROM document
+               WHERE chat_id = %s AND id = %s AND suppressed_by = '{}'
+                     AND exposure = ANY(%s)""",
+            (chat_id, hits[0]["doc_id"],
+             list(_allowed_exposures()))).fetchone()
+    if not row:
+        return None
+    caption, day, text = row
+    clipped = text[:max_chars] + ("…(clipped)" if len(text) > max_chars else "")
+    return {"caption": caption, "date": day.isoformat(), "text": clipped}
+
+
 def list_documents(chat_id: int, limit: int = 15, person: str = "") -> list:
     person = (valid_subjects(person) or [""])[0]
     with pg.connection() as conn:
