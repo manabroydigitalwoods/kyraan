@@ -281,14 +281,24 @@ def load_pending_facts_filtered(max_chars: int = 1500) -> str:
     return "\n".join(lines)[:max_chars]
 
 
-def load_pending_facts(max_chars: int = 1500) -> str:
+def load_pending_facts(max_chars: int = 1500, reviewer: str = "owner") -> str:
     """Fact lines awaiting review — conversationally usable (the user
     stated them) while the live tree still requires the owner's promote.
-    Found live: "who is deven?" failed although the fact sat in the queue."""
+    Found live: "who is deven?" failed although the fact sat in the queue.
+
+    Keyed by REVIEWER (multi-user audit 2026-08-27): a viewer's prompt
+    carries only THEIR queue — the owner's pending facts must never ride
+    into another person's local-tier prompt."""
     lines = []
     for proposal in sorted(PENDING_DIR.glob("*.md")):
-        _, _, rest = proposal.read_text().partition("---\n")
-        _, _, body = rest.partition("---\n")
+        text = proposal.read_text()
+        _, _, rest = text.partition("---\n")
+        frontmatter, _, body = rest.partition("---\n")
+        owned_by = next((ln.split("reviewer:", 1)[1].strip()
+                         for ln in frontmatter.splitlines()
+                         if ln.startswith("reviewer:")), "owner")
+        if owned_by != reviewer:
+            continue
         lines.extend(l for l in body.splitlines() if l.strip().startswith("-"))
     text = "\n".join(lines)
     return text[:max_chars]

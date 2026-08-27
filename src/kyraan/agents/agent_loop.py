@@ -280,7 +280,10 @@ def _pending_block(tier: str) -> str:
     from kyraan.model_router import router as _router
     provider = kernel.config.load()["model_tiers"].get(tier, {}).get("provider", "")
     if _router.provider_is_local(provider):
-        return memory_store.load_pending_facts() or "(none)"
+        # reviewer-keyed (multi-user audit 2026-08-27): each viewer's
+        # prompt carries only THEIR pending queue
+        return (memory_store.load_pending_facts(
+            reviewer=kernel.viewer_person() or "owner") or "(none)")
     return "(pending items are held locally until the owner reviews them)"
 
 

@@ -162,3 +162,41 @@ def _instant_fn(value):
     async def fn(*a, **k):
         return value
     return fn
+
+def test_pending_block_is_reviewer_keyed():
+    from kyraan.memory import store as memory_store
+    memory_store.propose_fact("preferences/o.md", "- Owner private pending", "said")
+    token = kernel.set_viewer("ruma", "full")
+    try:
+        memory_store.propose_fact("people/ruma.md", "- Ruma's own pending", "she said")
+    finally:
+        kernel.reset_viewer_stage(token)
+    owner_view = memory_store.load_pending_facts(reviewer="owner")
+    ruma_view = memory_store.load_pending_facts(reviewer="ruma")
+    assert "Owner private pending" in owner_view
+    assert "Owner private pending" not in ruma_view      # the leak, closed
+    assert "Ruma's own pending" in ruma_view
+    assert "Ruma's own pending" not in owner_view
+
+
+@pytest.mark.pg
+def test_graph_reads_respect_visibility(matrix_db):
+    from kyraan.store import triples
+    with pg.connection() as conn:
+        conn.execute(
+            """INSERT INTO triple (id, head, relation, tail, fact_id)
+               SELECT '22222222-2222-2222-2222-222222222222', 'ruma',
+                      'private_rel', 'secret', id FROM fact
+               WHERE legacy_id = 'm5'""")  # m5 = Ruma's subject_only fact
+        conn.commit()
+    token = kernel.set_viewer("owner", "owner")
+    try:
+        assert triples.relations_for("ruma") == []  # subject_only-of-other: hidden
+    finally:
+        kernel.reset_viewer_stage(token)
+    token = kernel.set_viewer("ruma", "read_mostly")
+    try:
+        rows = triples.relations_for("ruma")
+        assert any(r["relation"] == "private_rel" for r in rows)  # hers: visible
+    finally:
+        kernel.reset_viewer_stage(token)

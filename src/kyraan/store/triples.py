@@ -143,14 +143,27 @@ def relations_for(name: str) -> list:
     DISTINCT on (head, relation, tail), served only while an ACTIVE fact
     supports it — with the supporting facts as provenance."""
     like = f"%{name.strip().lower()}%"
+    # Defense-in-depth (multi-user audit 2026-08-27): the graph tool is
+    # already outside non-owner stage allowlists, but the DATA layer
+    # enforces the §4 visibility clause too — a future allowlist edit
+    # cannot leak a private fact's relation.
+    from kyraan.control_plane import kernel
+    viewer = kernel.viewer_person()
+    if viewer == "owner":
+        vis_sql = "AND NOT (f.visibility = 'subject_only' AND f.subject <> 'owner')"
+        vis_params: tuple = ()
+    else:
+        vis_sql = "AND (f.visibility = 'shared' OR f.subject = %s)"
+        vis_params = (viewer,)
     with pg.connection() as conn:
         rows = conn.execute(
-            """SELECT t.head, t.relation, t.tail,
+            f"""SELECT t.head, t.relation, t.tail,
                       array_agg(DISTINCT f.content) AS sources
                FROM triple t JOIN fact f ON f.id = t.fact_id
-               WHERE f.active AND (t.head LIKE %s OR t.tail LIKE %s)
+               WHERE f.active {vis_sql}
+                     AND (t.head LIKE %s OR t.tail LIKE %s)
                GROUP BY t.head, t.relation, t.tail
                ORDER BY t.head, t.relation, t.tail""",
-            (like, like)).fetchall()
+            (*vis_params, like, like)).fetchall()
     return [{"head": h, "relation": r, "tail": t, "sources": list(s)}
             for h, r, t, s in rows]
