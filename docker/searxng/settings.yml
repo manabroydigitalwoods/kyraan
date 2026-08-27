@@ -20,6 +20,13 @@ engines:
     disabled: true
   - name: brave
     disabled: true
+  # Enabled (off in SearXNG defaults): with google suspended ("unusual
+  # traffic", recurring on this IP) and qwant behind a CAPTCHA, queries
+  # returned 0 results — the eval's web.current_fact failed twice on
+  # 2026-08-27. Bing answers reliably from this IP (probed: 10 results)
+  # and becomes the working floor when google is sulking.
+  - name: bing
+    disabled: false
 server:
   limiter: false  # local-only instance; Kyraan is the sole client
 search:
