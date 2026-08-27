@@ -542,6 +542,21 @@ routing's own resolution; migration 004 ships the full episode column
 model at vector(1024), pinned to the module constant by test. Next:
 P3.3b (nightly episode writer + backfill).
 
+**P3.3a re-pinned + P3.3b DONE (2026-08-27):** owner asked for a
+lighter embedder — the wider probe crowned all-minilm (~46MB, 384-d):
+lightest of four candidates AND the best similarity margin (0.507);
+losing models deleted (~1.5GB freed). The episode writer chunks each
+day per chat into ~10-exchange episodes built ONLY from cloud_text
+twins, tags sensitivity on the local cheap tier (failure ⇒
+'sensitive'), embeds locally, and upserts with deterministic ids
+(uuid5 of chat_id + first ts — re-ingest is an upsert, the trailing
+chunk grows in place). Nightly it rides the self-review job
+(yesterday+today). Backfill over the real chat.jsonl: 2330 records →
+132 episodes, 84 flagged, twin rule verified by spot-check. Live 404
+fixed en route: OLLAMA_BASE_URL's /v1 suffix broke the native
+/api/embed path (regression-pinned). Next: P3.3c
+(memory.recall_episodes loop tool).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
