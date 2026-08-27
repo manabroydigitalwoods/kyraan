@@ -210,3 +210,33 @@ async def test_command_caption_yields_title_not_the_command(monkeypatch):
                                   "save this supliment for kian")
     assert ingested["caption"] == "Fourts B Drops box"
     assert "kiaan" in ingested["subjects"]
+
+
+async def test_naming_caption_sheds_its_prefix(monkeypatch):
+    """Live 2026-08-28 02:12: "this is Ruma's pain killer gel" became
+    the document's title verbatim — a naming statement names the thing
+    AFTER the "this is"."""
+    ingested = {}
+
+    def fake_ingest(chat_id, kind, text, caption="", subjects=None,
+                    original=None, **kw):
+        ingested.update(caption=caption)
+        return "doc-1"
+
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "ingest", fake_ingest)
+    monkeypatch.setattr(documents, "subjects_from_name", lambda t: [])
+
+    class _R:
+        text = ('{"reply": "A pain gel box.", "remember_face_as": null, '
+                '"document_text": "OMNIGEL pain relief gel", '
+                '"document_title": "Omnigel box", "document_subjects": []}')
+        latency_ms = 5.0
+
+    async def fake_acall(**kw):
+        return _R()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall)
+    await photo.answer(9, "data:image/jpeg;base64,AAAA",
+                       "this is Ruma's pain killer gel")
+    assert ingested["caption"] == "Ruma's pain killer gel"

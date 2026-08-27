@@ -383,11 +383,12 @@ def _call_openai_compatible(
         messages.append({"role": "system", "content": system})
     if images:
         # Vision: image data-URLs ride as content parts beside the text.
-        # detail=high (2026-08-28): low pinned each image to ~19 tokens
-        # but downscaled to ~512px — package/label lettering garbled
-        # repeatedly ("OMNIGEL" read as "OMMLNIL", a blank first read on
-        # a card). At Kyraan's photo volume the difference is fractions
-        # of a cent per photo, and document capture IS the workload.
+        # detail=high requested — but MEASURED as a no-op for
+        # gpt-5.4-nano (2026-08-28 live: identical input_tokens at low
+        # and high on the same photo; label garbling unchanged). Kept
+        # because providers that honor it should get the full image;
+        # costs nothing where it's ignored. Residual label misreads are
+        # model capability, not a resolution knob.
         content = [{"type": "text", "text": prompt}]
         content += [{"type": "image_url", "image_url": {"url": u, "detail": "high"}}
                     for u in images]

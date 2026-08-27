@@ -195,6 +195,11 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
                 caption, _re.IGNORECASE))
             title = (document_title if (command_caption and document_title)
                      else (caption or document_title))
+            # A NAMING statement sheds its prefix: "this is Ruma's pain
+            # killer gel" names the doc "Ruma's pain killer gel" (live
+            # 2026-08-28 02:12 — the sentence itself became the title).
+            title = _re.sub(r"^\s*(?:this|that|here|it)\s+is\s+", "",
+                            title, flags=_re.IGNORECASE) or title
             import base64 as _b64
             try:
                 original = (_b64.b64decode(
