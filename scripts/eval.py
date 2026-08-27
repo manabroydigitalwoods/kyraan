@@ -98,6 +98,10 @@ CASES = [
          [["hospital", "Hospital"]], hard=False),
     Case("web.current_fact", "who is the current prime minister of india?",
          [["Modi"]], hard=False),
+    # P3.3c: episodic recall — this chat's own backfilled history holds
+    # an "any hospitals near Siliguri?" conversation from 2026-08-26.
+    Case("recall.episode", "what did we discuss about hospitals near Siliguri before?",
+         [["hospital", "Hospital"]], hard=False),
     # P3.1c: the undo command, end to end — create, undo-ask naming the
     # concrete inverse, yes executes it, and the reminder is really gone.
     # HARD: deterministic path (needs the local Postgres container up).

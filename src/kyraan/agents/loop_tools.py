@@ -469,6 +469,28 @@ async def _memory_pending(chat_id: int, args: dict, raw_text: str):
             for i, (_, target, fact) in enumerate(orchestrator._load_review_proposals())]
 
 
+async def _memory_recall(chat_id: int, args: dict, raw_text: str):
+    """P3.3c: episodic recall — past conversations beyond the history
+    window, retrieved local-only (embedding + Postgres on this machine)."""
+    query = str(args.get("query", "")).strip()
+    if len(query) < 3:
+        raise kernel.ToolFailed("give a topic to search past conversations for")
+    import asyncio as _aio
+
+    from kyraan.store import episodes
+    try:
+        lines = await _aio.to_thread(episodes.recall, chat_id, query,
+                                     args.get("k", 5))
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"episodic memory is unavailable right now ({str(exc)[:100]}) — "
+            "answer from what you have and say the archive wasn't reachable")
+    if not lines:
+        return {"found": 0, "note": ("no past conversation matches that topic "
+                                     "— say so honestly, never invent one")}
+    return lines
+
+
 TOOLS = {
     "calendar.list_events": {
         "params": '{"start": "<ISO datetime>", "end": "<ISO datetime>"}',
@@ -548,6 +570,19 @@ TOOLS = {
         "params": "{}",
         "about": "Facts queued for the owner's review, numbered. To approve/reject, tell the user to say \"review memory\" — you cannot approve.",
         "run": _memory_pending,
+    },
+    "memory.recall_episodes": {
+        "params": '{"query": "<topic words>", "k": 5}',
+        "about": ("Search PAST conversations beyond the recent history — use "
+                  "when the user asks what was said or discussed EARLIER "
+                  "(\"what did we discuss about X last month\", \"did I tell "
+                  "you about Y\", \"when did we talk about Z\"). Results are "
+                  "labeled [recalled from <date>] — keep the date in your "
+                  "answer so the user knows WHEN it's from. Saved FACTS are "
+                  "already in your memory block — this is for conversation "
+                  "history, not facts. Empty result = say you have no record, "
+                  "never invent a past conversation."),
+        "run": _memory_recall,
     },
     "routes.eta": {
         "params": '{"origin": "City Center Mall, Siliguri", "destination": "Jalpaiguri"} — ANY place name works for either end, the tool geocodes it itself (coordinates are NEVER required). Only for "from here" with a shared pin use {"origin_latitude": 26.65, "origin_longitude": 88.47, "destination": "..."}. Optional "mode": drive|two_wheeler|walk (default drive)',
@@ -805,8 +840,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
 
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
-                    "memory.pending_list", "web.search", "weather.get",
-                    "places.nearby", "routes.eta", "email.read"}
+                    "memory.pending_list", "memory.recall_episodes",
+                    "web.search", "weather.get", "places.nearby",
+                    "routes.eta", "email.read"}
 
 
 

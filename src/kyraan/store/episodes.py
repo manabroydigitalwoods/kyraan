@@ -134,6 +134,60 @@ def ingest_day(day: str, records: list, tag=None) -> dict:
     return {"episodes": written, "chats": len(chunks_by_chat)}
 
 
+# --- recall (P3.3c) -------------------------------------------------------
+
+_DISCRETION_FLAGS = {"emotional", "sensitive"}
+RECALL_K_MAX = 8
+
+
+def recall(chat_id: int, query: str, k: int = 5) -> list:
+    """Hybrid ANN+FTS recall over this chat's episodes, recency-biased,
+    top-k. Discretion is applied POST-retrieval (arch §3): an episode
+    flagged emotional/sensitive surfaces only on a direct FTS hit —
+    semantic adjacency alone never volunteers it. Suppressed episodes
+    (forget cascade, P3.3d) are excluded at the source."""
+    try:
+        k = int(k)
+    except (TypeError, ValueError):
+        k = 5
+    k = max(1, min(k, RECALL_K_MAX))
+    qvec = json.dumps(embed.embed([query])[0])
+    import re as _re
+    from kyraan.memory.engine import _words
+    terms = [w for w in _words(query) if _re.fullmatch(r"[a-z0-9]+", w)]
+    tsquery = " | ".join(terms)
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """SELECT day, flags, text,
+                      1 - (embedding <=> %s::vector) AS sim,
+                      (%s <> '' AND to_tsvector('english', text)
+                                    @@ to_tsquery('english', %s)) AS fts
+               FROM episode
+               WHERE chat_id = %s AND suppressed_by = '{}'
+               ORDER BY embedding <=> %s::vector
+               LIMIT 40""",
+            (qvec, tsquery, tsquery or "x", chat_id, qvec)).fetchall()
+    today = local_now().date()
+    scored = []
+    for day, flags, text, sim, fts in rows:
+        if _DISCRETION_FLAGS & set(flags or []) and not fts:
+            continue  # absence discipline, not a lower rank
+        age_days = max((today - day).days, 0)
+        score = float(sim) + (0.15 if fts else 0.0) + 0.1 / (1 + age_days / 30)
+        scored.append((score, day, text))
+    scored.sort(key=lambda item: -item[0])
+    lines, seen = [], set()
+    for _score, day, text in scored:
+        head = text[:120]  # repeated sequences (eval reruns, retries)
+        if head in seen:   # produce near-identical episodes — one is enough
+            continue
+        seen.add(head)
+        lines.append(f"[recalled from {day.isoformat()}] {text[:500]}")
+        if len(lines) >= k:
+            break
+    return lines
+
+
 def records_for_day(day: str, lines: list) -> list:
     """Filter parsed chat.jsonl records to one local-calendar day."""
     tz = local_now().tzinfo

@@ -127,6 +127,104 @@ def test_flags_and_metadata_land(episode_db, monkeypatch):
     assert row == (["health"], ["owner"], "owner", "cloud_ok", "2026-08-27")
 
 
+# --- recall (P3.3c) -------------------------------------------------------
+
+def _seed_episode(chat_id, day, text, flags=(), vector=None):
+    import json as _json
+    with pg.connection() as conn:
+        conn.execute(
+            """INSERT INTO episode (id, chat_id, day, flags, text, embedding,
+                                    created_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (episodes.episode_uuid(chat_id, f"{day}:{text}"), chat_id, day,
+             list(flags), text,
+             _json.dumps(vector or [0.5] * embed.EMBED_DIM),
+             f"{day}T10:00:00+00:00"))
+        conn.commit()
+
+
+@pytest.mark.pg
+def test_recall_labels_scopes_and_caps(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    for i in range(12):
+        _seed_episode(5, "2026-08-20", f"user: traffic to Jalpaiguri run {i}")
+    _seed_episode(6, "2026-08-20", "user: another chat's episode")
+    lines = episodes.recall(5, "traffic to Jalpaiguri", k=20)
+    assert len(lines) == episodes.RECALL_K_MAX  # cap, even when asked for 20
+    assert all(line.startswith("[recalled from 2026-08-20] ") for line in lines)
+    assert not any("another chat" in line for line in lines)  # chat-scoped
+
+
+@pytest.mark.pg
+def test_recall_discretion_needs_a_direct_hit(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    # identical vectors: ANN alone would surface both; discretion must not
+    _seed_episode(5, "2026-08-20", "user: my chest pain scare details",
+                  flags=["sensitive"])
+    _seed_episode(5, "2026-08-20", "user: weather in Kolkata")
+    unrelated = episodes.recall(5, "weather in Kolkata")
+    assert not any("chest pain" in line for line in unrelated)  # absence
+    direct = episodes.recall(5, "chest pain scare")
+    assert any("chest pain" in line for line in direct)  # direct hit surfaces
+
+
+@pytest.mark.pg
+def test_recall_dedups_near_identical_episodes(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    same = "user: remind me to call mom at 9pm " + "x" * 120
+    for day in ("2026-08-20", "2026-08-21", "2026-08-22"):
+        _seed_episode(5, day, same + day)  # same first 120 chars
+    _seed_episode(5, "2026-08-23", "user: a different conversation entirely")
+    lines = episodes.recall(5, "call mom reminder", k=5)
+    assert len(lines) == 2  # one representative + the distinct one
+
+
+@pytest.mark.pg
+def test_recall_excludes_suppressed(episode_db, monkeypatch):
+    monkeypatch.setattr(embed, "embed", _fake_embed)
+    _seed_episode(5, "2026-08-20", "user: the forgotten topic")
+    with pg.connection() as conn:
+        conn.execute("UPDATE episode SET suppressed_by = %s",
+                     (["11111111-1111-1111-1111-111111111111"],))
+        conn.commit()
+    assert episodes.recall(5, "forgotten topic") == []
+
+
+# --- the loop tool executor (faked store) ---------------------------------
+
+def test_recall_executor_passes_through_lines(monkeypatch):
+    import asyncio
+
+    from kyraan.agents import loop_tools
+    monkeypatch.setattr(episodes, "recall",
+                        lambda chat_id, query, k: ["[recalled from 2026-08-20] user: hi"])
+    result = asyncio.run(loop_tools._memory_recall(5, {"query": "old topic"}, ""))
+    assert result == ["[recalled from 2026-08-20] user: hi"]
+
+
+def test_recall_executor_empty_is_honest(monkeypatch):
+    import asyncio
+
+    from kyraan.agents import loop_tools
+    monkeypatch.setattr(episodes, "recall", lambda chat_id, query, k: [])
+    result = asyncio.run(loop_tools._memory_recall(5, {"query": "never discussed"}, ""))
+    assert result["found"] == 0 and "never invent" in result["note"]
+
+
+def test_recall_executor_store_down_is_honest(monkeypatch):
+    import asyncio
+
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+
+    def boom(chat_id, query, k):
+        raise RuntimeError("pg down")
+
+    monkeypatch.setattr(episodes, "recall", boom)
+    with pytest.raises(kernel.ToolFailed, match="unavailable"):
+        asyncio.run(loop_tools._memory_recall(5, {"query": "topic"}, ""))
+
+
 def test_tagging_failure_defaults_to_sensitive(monkeypatch):
     from kyraan.model_router import router
 
