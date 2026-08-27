@@ -580,6 +580,20 @@ soft 10/10. Parts 0-3 of the Phase 3 workplan are now built; next is
 Part 4 (Redis takeover, gated on the Part-2 soak) or P3.5/P3.6 (the
 subject-review queue still gates P3.5a).
 
+**P3.6a+b DONE (2026-08-27):** the relationship graph is live —
+triples extracted from approved facts only (nano for cloud_ok facts
+after qwen3:8b invented relations through two prompt tightenings;
+local tier for any other exposure; deterministic hygiene drops
+self-loops and relation-echoes; direction taught by few-shot examples
+in both directions). Promote fires extraction off-thread; resync
+self-heals missing rows; a relation is served only while an ACTIVE
+fact supports it (read-side forget cascade, audit trail intact).
+memory.relations answers "how is X related to Y" with the source fact
+cited. Live: 13 correctly-directed triples from the real tree; eval
+21/21 HARD, soft 11/11. Remaining: Part 4 (Redis) opens after the
+Part-2 soaks (~2026-08-30); P3.5 waits on the subject-review queue;
+then the ENGINEERING-DONE gate (arch §7).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
