@@ -18,7 +18,7 @@ before any flag flip.
 import time
 
 from kyraan.control_plane.logging_setup import log_event
-from kyraan.store import pg
+from kyraan.store import pg, sync_state
 
 MIRROR_ENABLED = True  # conftest flips this off suite-wide (like facts)
 
@@ -46,16 +46,24 @@ def _guarded_mirror(kind: str, sync) -> bool:
         return False
     if time.monotonic() < _breaker_until:
         log_event("promise_sync_deferred", store=kind, reason="breaker open")
+        sync_state.mark_stale(kind, "breaker open")
         return False
     try:
         with pg.connection() as conn:
             sync(conn)
             conn.commit()
-        return True
     except Exception as exc:
         _breaker_until = time.monotonic() + _BREAKER_S
         log_event("promise_sync_deferred", store=kind, reason=str(exc)[:200])
+        # PG is now BEHIND the file — refuse to read from it until a full
+        # sync lands, or a reminder created during this outage would look
+        # cancelled and be skipped forever (Bugbot P1).
+        sync_state.mark_stale(kind, str(exc)[:200])
         return False
+    # Every mirror here is a FULL-state sync, so success proves PG matches
+    # the file — that is exactly what clears the mark.
+    sync_state.clear_stale(kind)
+    return True
 
 
 def _sync_table(conn, table: str, fields: tuple, records: list) -> None:
@@ -113,6 +121,11 @@ def _rows_to_dicts(rows, fields) -> list:
 def load_reminders() -> list | None:
     """All reminder records as file-shaped dicts, or None on failure (the
     caller falls back to the file and logs)."""
+    if sync_state.is_stale("reminders"):
+        # known-behind mirror: the file is the only truth
+        log_event("promises_backend_fallback", store="reminders",
+                  reason="mirror stale")
+        return None
     try:
         with pg.connection() as conn:
             rows = conn.execute(
@@ -124,7 +137,12 @@ def load_reminders() -> list | None:
         return None
 
 
-def load_tasks() -> list | None:
+def load_tasks():
+    if sync_state.is_stale("tasks"):
+        # known-behind mirror: the file is the only truth
+        log_event("promises_backend_fallback", store="tasks",
+                  reason="mirror stale")
+        return None
     try:
         with pg.connection() as conn:
             rows = conn.execute(
@@ -136,7 +154,12 @@ def load_tasks() -> list | None:
         return None
 
 
-def load_ledger() -> dict | None:
+def load_ledger():
+    if sync_state.is_stale("ledger"):
+        # known-behind mirror: the file is the only truth
+        log_event("promises_backend_fallback", store="ledger",
+                  reason="mirror stale")
+        return None
     try:
         with pg.connection() as conn:
             rows = conn.execute("SELECT key, value FROM cost_ledger").fetchall()

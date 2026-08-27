@@ -35,6 +35,10 @@ async def _calendar_list(chat_id: int, args: dict, raw_text: str):
     _listing_cache[chat_id] = {
         "at": _time.monotonic(),
         "items": {e["id"]: str(e.get("title", "")) for e in events if e.get("id")},
+        # Deleting one occurrence of a recurring event removes the WHOLE
+        # series in Google Calendar — the confirm ask has to say so, and
+        # the flag only survives here (Bugbot P1).
+        "recurring": {e["id"] for e in events if e.get("id") and e.get("recurring")},
     }
     return events[:20]
 
@@ -359,7 +363,12 @@ async def _task_cancel(chat_id: int, args: dict, raw_text: str):
     mine = {t.id for t in agent_tasks.list_active(chat_id)}
     if not any(t.startswith(wanted) for t in mine) or not wanted:
         raise kernel.ToolFailed("no scheduled task with that id — list tasks first")
-    agent_tasks.cancel(wanted)
+    try:
+        agent_tasks.cancel(wanted)
+    except ValueError as exc:
+        # ambiguous prefix — the store refuses rather than cancelling
+        # several tasks at once; the model relays and asks for the full id
+        raise kernel.ToolFailed(str(exc))
     return {"cancelled": True}
 
 
@@ -827,7 +836,8 @@ def _home_entity_roster() -> str:
 
 
 
-def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
+def _describe_call(tool: str, args: dict, raw_text: str = "",
+                   chat_id: int | None = None) -> str:
     """The confirm ask the owner sees — concrete, named values, and for
     events the SAME normalized times the execution will use."""
     if tool == "calendar.create_event":
@@ -838,7 +848,15 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
         return (f"About to create a calendar event: \"{args.get('title')}\" "
                 f"{humanize(start_iso)} → {humanize(end_iso)}")
     if tool == "calendar.delete_event":
-        return f"About to DELETE \"{args.get('title') or args.get('event_id')}\" from your Google Calendar"
+        what = args.get("title") or args.get("event_id")
+        listing = _listing_cache.get(chat_id) or {}
+        if str(args.get("event_id")) in (listing.get("recurring") or set()):
+            # An owner confirming "delete the 3pm standup" must know the
+            # whole SERIES goes, not one occurrence (Bugbot P1).
+            return (f'About to DELETE "{what}" from your Google Calendar — '
+                    "this is a RECURRING event, so every occurrence goes, "
+                    "not just this one")
+        return f'About to DELETE "{what}" from your Google Calendar'
     if tool == "tasks.schedule":
         rep = f", repeating {args.get('repeat')}" if args.get("repeat") else ""
         return (f"Schedule this task: at {humanize(str(args.get('when_iso')))}"

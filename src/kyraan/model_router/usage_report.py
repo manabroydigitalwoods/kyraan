@@ -19,9 +19,16 @@ from kyraan.model_router import router
 
 
 def _event_files():
+    """Live log plus rotated archives. Rotation moves files into
+    logs/archive/<day>/ — globbing the log's own directory found nothing,
+    so any window longer than today was silently incomplete (Bugbot P2)."""
     log = logging_setup.EVENT_LOG
-    rotated = sorted(log.parent.glob(f"{log.stem}-*.jsonl")) if log.parent.exists() else []
-    return [p for p in (*rotated, log) if p.exists()]
+    archive = logging_setup.ARCHIVE_DIR
+    rotated = list(archive.rglob(f"{log.stem}-*.jsonl")) if archive.exists() else []
+    # Pre-archive installs rotated BESIDE the live log; read both layouts
+    # so no window is silently short.
+    rotated += list(log.parent.glob(f"{log.stem}-*.jsonl"))
+    return [p for p in (*sorted(set(rotated)), log) if p.exists()]
 
 
 def usage_summary(days: int = 7) -> dict:

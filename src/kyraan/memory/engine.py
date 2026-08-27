@@ -56,13 +56,18 @@ def _index_path():
     return store.MEMORY_ROOT / INDEX_NAME
 
 
-def _mirror(changed: list) -> None:
+def _mirror(changed: list, all_entries: list | None = None) -> None:
     """P3.2a: mirror changed entries into Postgres AFTER the file write.
     Files are the authority — a PG failure logs fact_sync_deferred inside
-    mirror_entries and never raises into the caller."""
+    mirror_entries and never raises into the caller.
+
+    `all_entries` is the caller's already-loaded full index, used to
+    REPAIR a stale mirror. It is passed in rather than re-read because
+    every caller holds the index lock — re-reading here deadlocked the
+    whole suite."""
     try:
         from kyraan.store import facts
-        facts.mirror_entries(changed)
+        facts.mirror_entries(changed, all_entries=all_entries)
     except Exception as exc:  # import/config trouble must not break memory
         log_event("fact_sync_deferred", entries=len(changed),
                   reason=str(exc)[:200])
@@ -184,7 +189,7 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
     _save(entries)
     # The new fact FIRST: superseded links point at it, and sync_entries'
     # two-pass order needs its row in the same batch.
-    _mirror([entries[-1]] + changed)
+    _mirror([entries[-1]] + changed, all_entries=entries)
     _extract_triples_async(new_id, entries[-1]["content"])
     return new_id
 
@@ -212,6 +217,14 @@ def _extract_triples_async(fact_id: str, content: str) -> None:
         log_event("triple_extract_deferred", fact=fact_id, reason=str(exc)[:150])
 
 
+def all_entries() -> list:
+    """EVERY index entry, active or not — what a full PG resync needs:
+    deactivations (forget/supersede) only propagate if the inactive rows
+    travel too."""
+    with locked(_index_path()):
+        return _load()
+
+
 def active_entries() -> list:
     """Live entries, with short-term expiry applied lazily — the whole
     read-modify-write runs under the index lock (review P1: an unlocked
@@ -232,7 +245,7 @@ def active_entries() -> list:
                     log_event("memory_short_term_expired", content=entry["content"][:80])
         if expired:
             _save(entries)
-            _mirror(expired)
+            _mirror(expired, all_entries=entries)
     return [e for e in entries if e["active"]]
 
 
@@ -247,6 +260,12 @@ def _pg_candidates(message: str) -> list | None:
     terms = [w for w in _words(message) if _re.fullmatch(r"[a-z0-9]+", w)]
     tsquery = " | ".join(terms)
     cutoff = datetime.now(timezone.utc) - timedelta(days=_SHORT_TERM_DAYS)
+    from kyraan.store import sync_state as _sync_state
+    if _sync_state.is_stale("facts"):
+        # A known-behind mirror must not answer: a forgotten fact whose
+        # deactivation never landed would resurface (Bugbot P1).
+        log_event("memory_backend_fallback", backend="pg", reason="mirror stale")
+        return None
     try:
         with _pg.connection() as conn:
             rows = conn.execute(
@@ -321,19 +340,32 @@ def build_context(message: str = "", budget_chars: int = 3500) -> str:
 
     lines, used = [], 0
 
-    def fits(entry) -> bool:
-        nonlocal used
+    def _render(entry) -> str:
         line = f"- {entry['content']}"
         if entry["flags"]:
             line += f"  [{'/'.join(entry['flags']).upper()}]"
-        if used + len(line) > budget_chars:
+        return line
+
+    def fits(entry, force: bool = False) -> bool:
+        nonlocal used
+        line = _render(entry)
+        if not force and used + len(line) > budget_chars:
             return False
         lines.append(line)
         used += len(line) + 1
         return True
 
+    # "ALWAYS included" has to mean it. These are the health/safety/
+    # emergency/danger, critical and identity facts — the ones whose
+    # silent omission is the most dangerous thing this function can do —
+    # and the budget was allowed to drop them (Bugbot P2). They are
+    # written first and unconditionally; the budget then governs only the
+    # ranked remainder, which is what a budget is FOR.
     for entry in always:
-        fits(entry)
+        fits(entry, force=True)
+    if used > budget_chars:
+        log_event("memory_budget_exceeded_by_always", chars=used,
+                  budget=budget_chars, always=len(always))
     for _score, entry in ranked:
         if not fits(entry):
             break
@@ -370,7 +402,7 @@ def forget(entry_ids: list) -> list:
                 log_event("memory_forgotten", content=entry["content"][:80])
         _save(entries)
         if changed:
-            _mirror(changed)
+            _mirror(changed, all_entries=entries)
             _sweep_episodes(changed)
     return forgotten
 
@@ -400,7 +432,7 @@ def consolidate(keep_id: str, dup_ids: list) -> list:
                       superseded=entry["content"][:80])
         if changed:
             _save(entries)
-            _mirror(changed)
+            _mirror(changed, all_entries=entries)
     return superseded
 
 

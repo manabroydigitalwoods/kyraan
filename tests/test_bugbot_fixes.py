@@ -761,3 +761,165 @@ async def test_email_direct_reply_still_redacts_history(monkeypatch):
         assert "[showed the email.unread result]" == orchestrator._history_redaction.get()
     finally:
         orchestrator._history_redaction.reset(token)
+
+
+# --- full-repo audit (2026-08-27, round 6) --------------------------------
+
+def test_pg_reads_refuse_a_known_stale_mirror(monkeypatch, tmp_path):
+    """A deferred mirror leaves PG BEHIND the files. While that is known,
+    PG reads must be refused (callers fall back to files): otherwise a
+    forgotten fact reappears and a reminder created during the outage
+    looks cancelled and is skipped forever (Bugbot P1 x2)."""
+    from kyraan.store import promises, sync_state
+
+    monkeypatch.setattr(sync_state, "STATE_PATH", tmp_path / "sync.json")
+    assert not sync_state.is_stale("reminders")
+
+    monkeypatch.setattr(promises, "MIRROR_ENABLED", True)
+    monkeypatch.setattr(promises, "_breaker_until", 0.0)
+
+    class _Boom:
+        def __enter__(self): raise RuntimeError("pg down")
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(promises.pg, "connection", lambda: _Boom())
+    assert promises.mirror_reminders([{"id": "r1"}]) is False
+    assert sync_state.is_stale("reminders")
+    assert promises.load_reminders() is None      # read refused -> file path
+
+    # the mark SURVIVES a restart (it is on disk, not in memory)
+    assert sync_state.is_stale("reminders")
+    # and only a successful FULL sync clears it
+    class _Conn:
+        def execute(self, *a, **k): return self
+        def fetchall(self): return []
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(promises.pg, "connection", lambda: _Conn())
+    monkeypatch.setattr(promises, "_breaker_until", 0.0)
+    assert promises.mirror_reminders([]) is True
+    assert not sync_state.is_stale("reminders")
+
+
+def test_recurring_delete_ask_says_the_series_goes(monkeypatch):
+    """Deleting one occurrence removes the WHOLE Google series — the
+    confirm ask must say so, which needs the flag the cache dropped
+    (Bugbot P1)."""
+    import time as _time
+    from kyraan.agents import loop_tools
+
+    loop_tools._listing_cache[77] = {
+        "at": _time.monotonic(),
+        "items": {"ev1": "Standup", "ev2": "Dentist"},
+        "recurring": {"ev1"},
+    }
+    series = loop_tools._describe_call(
+        "calendar.delete_event", {"event_id": "ev1", "title": "Standup"}, "", 77)
+    once = loop_tools._describe_call(
+        "calendar.delete_event", {"event_id": "ev2", "title": "Dentist"}, "", 77)
+    assert "RECURRING" in series and "every occurrence" in series
+    assert "RECURRING" not in once
+    loop_tools._listing_cache.pop(77, None)
+
+
+def test_face_templates_are_owner_only(monkeypatch, tmp_path):
+    """Biometric templates are the most sensitive bytes here: 0600 from
+    birth, in a 0700 directory (Bugbot P1: new enrollments were 0644)."""
+    from kyraan.agents import faces
+
+    faces_dir = tmp_path / "faces"
+    monkeypatch.setattr(faces, "FACES_DIR", faces_dir)
+    monkeypatch.setattr(faces, "_detect_and_embed", lambda img: [[0.1] * 128])
+    faces.enroll("Aarav", b"fake-image-bytes")
+    written = list(faces_dir.glob("*.json"))
+    assert written, "enrollment wrote no file"
+    assert oct(written[0].stat().st_mode)[-3:] == "600"
+    assert oct(faces_dir.stat().st_mode)[-3:] == "700"
+
+
+def test_overnight_window_keeps_its_slots():
+    """A 22:00-07:00 hourly series fired ONCE a night: the plain
+    inside-the-window comparisons don't wrap midnight (Bugbot P2)."""
+    from datetime import datetime
+    from kyraan.triggers.store import Reminder
+    from kyraan.control_plane.dnd import local_now as real_now
+
+    tz = real_now().tzinfo
+    rec = Reminder(id="n1", chat_id=1, text="check the baby",
+                   when_iso="2026-09-01T22:00:00+00:00",
+                   repeat="interval", interval_minutes=60,
+                   window_start="22:00", window_end="07:00")
+    # 23:00, 00:00, 01:00 ... all stay on the hour inside the window
+    at_23 = scheduler.advance_for(rec, from_when=datetime(2026, 9, 1, 22, 0, tzinfo=tz))
+    assert (at_23.hour, at_23.minute) == (23, 0)
+    past_midnight = scheduler.advance_for(rec, from_when=datetime(2026, 9, 1, 23, 30, tzinfo=tz))
+    assert (past_midnight.day, past_midnight.hour) == (2, 0)
+    early = scheduler.advance_for(rec, from_when=datetime(2026, 9, 2, 6, 0, tzinfo=tz))
+    assert (early.hour, early.minute) == (7, 0)          # last slot in window
+    # a slot past the end lands on TONIGHT's start, not tomorrow's
+    after_end = scheduler.advance_for(rec, from_when=datetime(2026, 9, 2, 7, 0, tzinfo=tz))
+    assert (after_end.day, after_end.hour) == (2, 22)
+    assert scheduler.pings_per_day(60, "22:00", "07:00") == 10
+
+
+def test_ambiguous_task_prefix_cancels_nothing():
+    """A short prefix used to deactivate EVERY match (Bugbot P2)."""
+    from kyraan.triggers import agent_tasks
+
+    a = agent_tasks.create(1, "check tomorrow's calendar please",
+                           (local_now() + timedelta(hours=2)).isoformat())
+    b = agent_tasks.create(1, "check the energy usage please",
+                           (local_now() + timedelta(hours=3)).isoformat())
+    try:
+        shared = ""
+        for i in range(1, min(len(a.id), len(b.id))):
+            if a.id[:i] == b.id[:i]:
+                shared = a.id[:i]
+            else:
+                break
+        if shared:
+            with pytest.raises(ValueError, match="use the full id"):
+                agent_tasks.cancel(shared)
+            assert len(agent_tasks.list_active(1)) >= 2   # nothing cancelled
+        assert agent_tasks.cancel(a.id) is True           # full id still works
+    finally:
+        agent_tasks.cancel(a.id)
+        agent_tasks.cancel(b.id)
+
+
+def test_always_included_facts_survive_a_tiny_budget(monkeypatch):
+    """'ALWAYS included' has to mean it — the budget was allowed to drop
+    safety/identity facts, the most dangerous silent omission here."""
+    from kyraan.memory import engine
+
+    monkeypatch.setattr(engine, "active_entries", lambda: [
+        {"id": "s1", "content": "severe peanut allergy — carries an EpiPen",
+         "created": "2026-01-01T00:00:00", "flags": ["health", "safety"],
+         "era": "", "importance": "critical", "kind": "fact", "term": "long"},
+        {"id": "i1", "content": "son is Aarav, born 2025",
+         "created": "2026-01-02T00:00:00", "flags": [], "era": "",
+         "importance": "normal", "kind": "identity", "term": "long"},
+        {"id": "n1", "content": "likes filter coffee in the afternoon",
+         "created": "2026-01-03T00:00:00", "flags": [], "era": "",
+         "importance": "normal", "kind": "fact", "term": "long"},
+    ], raising=False)
+
+    context = engine.build_context("coffee", budget_chars=20)
+    assert "peanut allergy" in context
+    assert "Aarav" in context
+    assert "filter coffee" not in context   # the RANKED remainder is what a
+                                            # budget governs
+
+
+def test_pg_dsn_follows_the_documented_password(monkeypatch):
+    """The app hardcoded 'kyraan:kyraan' while compose read
+    KYRAAN_PG_PASSWORD — a by-the-book setup failed auth (Bugbot P2)."""
+    from kyraan.store import pg
+
+    monkeypatch.delenv("KYRAAN_PG_DSN", raising=False)
+    monkeypatch.setenv("KYRAAN_PG_PASSWORD", "s3cret")
+    assert "s3cret@" in pg.dsn()
+    monkeypatch.setenv("KYRAAN_PG_DSN", "postgresql://x:y@host:5432/db")
+    assert pg.dsn() == "postgresql://x:y@host:5432/db"   # explicit still wins

@@ -20,7 +20,7 @@ import uuid
 from datetime import datetime, timezone
 
 from kyraan.control_plane.logging_setup import log_event
-from kyraan.store import pg
+from kyraan.store import pg, sync_state
 
 KYRAAN_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "facts.kyraan.local")
 OWNER = "owner"
@@ -108,7 +108,7 @@ def sync_entries(conn, entries: list) -> None:
                WHERE legacy_id = %s""", (new_legacy, entry["id"]))
 
 
-def mirror_entries(entries: list) -> bool:
+def mirror_entries(entries: list, all_entries: list | None = None) -> bool:
     """Best-effort mirror of changed index entries. Returns True when the
     rows landed; on any failure logs fact_sync_deferred and returns False
     — the caller's file write has already succeeded and stands."""
@@ -117,9 +117,19 @@ def mirror_entries(entries: list) -> bool:
         return False
     if time.monotonic() < _breaker_until:
         log_event("fact_sync_deferred", entries=len(entries), reason="breaker open")
+        sync_state.mark_stale("facts", "breaker open")
         return False
     try:
         with pg.connection() as conn:
+            if all_entries is not None and sync_state.is_stale("facts"):
+                # Repair before mirroring: this batch is INCREMENTAL, so
+                # landing it proves nothing about entries missed while PG
+                # was down. A full resync is the only thing that can clear
+                # the mark — without it, a forget() whose deactivation
+                # never reached PG reappears in answers (Bugbot P1).
+                sync_entries(conn, all_entries)
+                conn.commit()
+                sync_state.clear_stale("facts")
             sync_entries(conn, entries)
             conn.commit()
         return True
@@ -127,4 +137,5 @@ def mirror_entries(entries: list) -> bool:
         _breaker_until = time.monotonic() + _BREAKER_S
         log_event("fact_sync_deferred", entries=len(entries),
                   reason=str(exc)[:200])
+        sync_state.mark_stale("facts", str(exc)[:200])
         return False

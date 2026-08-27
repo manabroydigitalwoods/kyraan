@@ -212,6 +212,8 @@ def pings_per_day(interval_minutes: int, window_start: str = "",
         sh, sm = (int(x) for x in window_start.split(":"))
         eh, em = (int(x) for x in window_end.split(":"))
         minutes = (eh * 60 + em) - (sh * 60 + sm)
+        if minutes < 0:
+            minutes += 24 * 60   # overnight window (22:00-07:00)
     else:
         minutes = 24 * 60
     return max(minutes // max(interval_minutes, 1) + 1, 1)
@@ -265,11 +267,17 @@ def advance_past_now(record) -> "datetime":
         # loop below, which IS advance_for iterated: exact semantics, and
         # each iteration advances at least a day, so it is cheap.
         window_len = None
+        overnight = False
         if record.window_start and record.window_end:
             _sh, _sm = (int(x) for x in record.window_start.split(":"))
             _eh, _em = (int(x) for x in record.window_end.split(":"))
-            window_len = timedelta(minutes=(_eh * 60 + _em) - (_sh * 60 + _sm))
-        if window_len is not None and step <= window_len:
+            _span = (_eh * 60 + _em) - (_sh * 60 + _sm)
+            overnight = _span < 0            # 22:00-07:00 wraps midnight
+            window_len = timedelta(minutes=_span + (24 * 60 if overnight else 0))
+        # The grid below reasons in "today's date", which an overnight
+        # window straddles — those fall through to the bounded loop
+        # (advance_for iterated), which handles the wrap correctly.
+        if window_len is not None and not overnight and step <= window_len:
             # Windowed series re-anchor their phase at window_start on
             # EVERY rollover (advance_for's day-to-day behavior), so
             # continuous step arithmetic across skipped days drifts the
@@ -342,10 +350,18 @@ def advance_for(record, from_when=None) -> "datetime":
         start_h, start_m = (int(x) for x in record.window_start.split(":"))
         end_h, end_m = (int(x) for x in record.window_end.split(":"))
         start_t, end_t = _time(start_h, start_m), _time(end_h, end_m)
-        if nxt.time() > end_t:
-            nxt = (nxt + timedelta(days=1)).replace(hour=start_h, minute=start_m,
-                                                    second=0, microsecond=0)
-        elif nxt.time() < start_t:
+        if start_t <= end_t:
+            if nxt.time() > end_t:
+                nxt = (nxt + timedelta(days=1)).replace(hour=start_h, minute=start_m,
+                                                        second=0, microsecond=0)
+            elif nxt.time() < start_t:
+                nxt = nxt.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
+        elif end_t < nxt.time() < start_t:
+            # OVERNIGHT window (22:00-07:00): "inside" wraps midnight, so
+            # the plain comparisons rejected almost every slot and snapped
+            # it to window_start — an hourly 22:00-07:00 series fired once
+            # a night instead of nine times (Bugbot P2). Only a time in
+            # the DAYTIME gap is outside; it moves to tonight's start.
             nxt = nxt.replace(hour=start_h, minute=start_m, second=0, microsecond=0)
     return nxt
 

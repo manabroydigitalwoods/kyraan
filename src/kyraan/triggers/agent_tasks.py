@@ -93,13 +93,25 @@ def create(chat_id: int, instruction: str, when_iso: str, repeat: str = "") -> A
 
 
 def cancel(task_id: str) -> bool:
+    """Cancel by id or unique id-prefix. An AMBIGUOUS prefix cancels
+    NOTHING: the old loop deactivated every match, so a short prefix
+    could silently retire several tasks at once (Bugbot P2)."""
     with locked(TASKS_PATH):
         records = _load()
-        found = False
-        for record in records:
-            if record["id"].startswith(task_id) and record.get("active"):
-                record["active"] = False
-                found = True
+        matches = [r for r in records
+                   if r.get("active") and r["id"].startswith(task_id)]
+        if len(matches) > 1:
+            exact = [r for r in matches if r["id"] == task_id]
+            if not exact:
+                log_event("agent_task_cancel_ambiguous", task_id=task_id,
+                          matches=len(matches))
+                raise ValueError(
+                    f"{len(matches)} active tasks start with {task_id!r} — "
+                    "use the full id")
+            matches = exact
+        found = bool(matches)
+        for record in matches:
+            record["active"] = False
         _save(records)
     if found:
         log_event("agent_task_cancelled", task_id=task_id)

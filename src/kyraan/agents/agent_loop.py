@@ -433,7 +433,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             call = kernel.SkillCall("agent.action", {"tool": tool}, )
             return await orchestrator._gated(
                 chat_id, call, confirmed_handler,
-                describe=_describe_call(tool, args, raw_text))
+                describe=_describe_call(tool, args, raw_text, chat_id))
         except kernel.KillSwitchEngaged:
             raise
         except kernel.ToolFailed as exc:

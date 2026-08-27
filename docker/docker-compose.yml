@@ -31,8 +31,11 @@ services:
     environment:
       - POSTGRES_DB=kyraan
       - POSTGRES_USER=kyraan
-      # from docker/.env (gitignored) — never in this file
-      - POSTGRES_PASSWORD=${KYRAAN_PG_PASSWORD}
+      # from docker/.env (gitignored) — never in this file. The default
+      # matches the app's own fallback in store/pg.py: an unset variable
+      # used to start Postgres with an EMPTY password while the app sent
+      # 'kyraan', so a by-the-book setup failed auth (Bugbot P2).
+      - POSTGRES_PASSWORD=${KYRAAN_PG_PASSWORD:-kyraan}
     ports:
       - "127.0.0.1:5432:5432"   # localhost-only: single writer, the bot
     volumes:

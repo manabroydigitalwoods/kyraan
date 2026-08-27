@@ -13,9 +13,15 @@ _pool = None
 
 
 def dsn() -> str:
-    return os.environ.get(
-        "KYRAAN_PG_DSN",
-        "postgresql://kyraan:kyraan@127.0.0.1:5432/kyraan")
+    """KYRAAN_PG_DSN wins; otherwise the DSN is BUILT from the same
+    KYRAAN_PG_PASSWORD the compose file feeds Postgres. The old hardcoded
+    'kyraan:kyraan' default disagreed with the documented setup, so a
+    by-the-book install failed authentication (Bugbot P2)."""
+    explicit = os.environ.get("KYRAAN_PG_DSN", "").strip()
+    if explicit:
+        return explicit
+    password = os.environ.get("KYRAAN_PG_PASSWORD", "").strip() or "kyraan"
+    return f"postgresql://kyraan:{password}@127.0.0.1:5432/kyraan"
 
 
 def _get_pool():

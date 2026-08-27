@@ -21,6 +21,7 @@ import json
 import re
 from pathlib import Path
 
+from kyraan.control_plane.filelock import atomic_write_text
 from kyraan.control_plane.logging_setup import log_event
 
 _ROOT = Path(__file__).resolve().parents[3]
@@ -201,6 +202,10 @@ def enroll(name: str, image_bytes: bytes) -> str:
         raise ValueError(f"{len(found)} faces in that photo — enrollment needs "
                          "exactly one, so I know which face is meant")
     FACES_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        FACES_DIR.chmod(0o700)   # the directory, like data/ and memory/
+    except OSError:
+        pass
     path = FACES_DIR / f"{_slug(name)}.json"
     record = {"name": name, "embeddings": []}
     if path.exists():
@@ -209,7 +214,11 @@ def enroll(name: str, image_bytes: bytes) -> str:
         except (json.JSONDecodeError, OSError):
             pass
     record["embeddings"].append(found[0])
-    path.write_text(json.dumps(record))
+    # Biometric templates are the most sensitive bytes in the system:
+    # write them 0600 like every other data file. A bare write_text left
+    # NEW enrollments 0644 — readable by any local user (Bugbot P1); the
+    # atomic writer chmods before the rename, so no window exists.
+    atomic_write_text(path, json.dumps(record))
     log_event("face_enrolled", name=name, samples=len(record["embeddings"]))
     return (f'Face saved as "{name}" ({len(record["embeddings"])} sample'
             f'{"s" if len(record["embeddings"]) != 1 else ""} now) — stored '

@@ -32,7 +32,12 @@ def _event_files() -> list:
     files = [REPO / "logs" / "events.jsonl"]
     archive = REPO / "logs" / "archive"
     if archive.exists():
-        files += sorted(archive.glob("*/events.jsonl"))
+        # rotated files are archive/<day>/events-<stamp>-<uuid>.jsonl —
+        # the bare "events.jsonl" glob matched NOTHING, so every
+        # historical sync failure was invisible (Bugbot P1).
+        files += sorted(archive.glob("*/events-*.jsonl"))
+    # pre-archive layout: rotated files beside the live log
+    files += sorted((REPO / "logs").glob("events-*.jsonl"))
     return [f for f in files if f.exists()]
 
 
