@@ -742,6 +742,36 @@ async def _documents_show(chat_id: int, args: dict, raw_text: str):
     return {"__direct_reply__": receipt, "__history__": receipt}
 
 
+async def _persons_alias(chat_id: int, args: dict, raw_text: str):
+    """Renaming/nicknaming a person is an ALIAS, never a second registry
+    row (live 2026-08-28 02:45: "rename Kamal to Habu" produced a junk
+    standalone contact and a dead end). Both names resolve to the same
+    person afterward — documents, graph, and faces follow for free."""
+    import asyncio as _aio
+
+    from kyraan.store import persons
+    name = str(args.get("name", "")).strip()
+    alias = str(args.get("alias", "")).strip()
+    if len(name) < 2 or not 2 <= len(alias) <= 40:
+        raise kernel.ToolFailed("need the existing person and the new name")
+    person_id = persons.resolve(name)
+    if not person_id:
+        raise kernel.ToolFailed(
+            f"{name!r} is not in the person registry — persons.add first")
+    already = persons.resolve(alias)
+    if already == person_id:
+        return {"aliased": False,
+                "note": f'"{alias}" already means {person_id}'}
+    if already:
+        raise kernel.ToolFailed(
+            f'"{alias}" already means {already} — one name cannot point at '
+            "two people")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("persons.alias", dict(args))
+    await _aio.to_thread(persons.add_alias, person_id, alias)
+    return {"aliased": True, "person_id": person_id, "alias": alias}
+
+
 async def _persons_profile(chat_id: int, args: dict, raw_text: str):
     """ONE deterministic aggregation of everything known about a person
     (undo-matrix batch, 2026-08-28): registry row, aliases, facts naming
@@ -1139,11 +1169,20 @@ TOOLS = {
     },
     "persons.add": {
         "params": '{"name": "<the person\'s name>"}',
-        "about": ("Add a friend/contact to the person registry so documents "
-                  "and graph facts can link to them. Grants NO access of "
-                  "any kind. For track/add-a-person asks (\"add Kamal as a "
-                  "person\")."),
+        "about": ("Add a NEW friend/contact to the person registry so "
+                  "documents and graph facts can link to them. Grants NO "
+                  "access of any kind. For track/add-a-person asks. To "
+                  "RENAME or nickname an EXISTING person use persons.alias "
+                  "— never add them again."),
         "run": _persons_add,
+    },
+    "persons.alias": {
+        "params": '{"name": "<existing person>", "alias": "<new name for them>"}',
+        "about": ("Give an existing person another name — for rename/"
+                  "nickname asks (\"rename Kamal to Habu\", \"we call her "
+                  "Mimi\"). Both names mean the same person afterward; "
+                  "documents, facts, graph, and face data all follow."),
+        "run": _persons_alias,
     },
     "faces.list": {
         "params": "{}",
@@ -1329,6 +1368,7 @@ UNDO_MAP = {
         ("rules.reactivate", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
     "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
+    "persons.alias": lambda a, r, p: None,  # alias removal likewise
     "files.send": lambda a, r, p: None,   # a delivered file can't be unsent
     "documents.show": lambda a, r, p: None,  # ditto — it re-sends the owner's own upload
     "email.draft": lambda a, r, p: (
@@ -1536,6 +1576,10 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "documents.rename":
         return (f'About to rename the saved document matching '
                 f'"{args.get("query")}" to "{args.get("new_name")}"')
+    if tool == "persons.alias":
+        return (f"About to make \"{args.get('alias')}\" another name for "
+                f"\"{args.get('name')}\" — same person, both names work "
+                "everywhere (documents, facts, faces)")
     if tool == "persons.add":
         return (f"About to add \"{args.get('name')}\" to the person "
                 "registry as a CONTACT — no chat access, no messages, no "
@@ -1603,6 +1647,11 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "documents.rename" and isinstance(outcome, dict):
         return (f'Renamed the document "{outcome.get("prior")}" → '
                 f'"{outcome.get("now")}" — ask for it by that name anytime.')
+    if tool == "persons.alias" and isinstance(outcome, dict):
+        if not outcome.get("aliased"):
+            return outcome.get("note", "Nothing to change.")
+        return (f'Done — "{outcome.get("alias")}" now means '
+                f'{outcome.get("person_id")}; both names work everywhere.')
     if tool == "persons.add" and isinstance(outcome, dict):
         if not outcome.get("added"):
             return outcome.get("note", "Already in the registry.")

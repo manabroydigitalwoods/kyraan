@@ -139,3 +139,31 @@ def test_self_claim_reads_its_me_variants(monkeypatch):
                         lambda: {"owner": "owner", "maan": "owner",
                                  "manab roy": "owner", "kamal": "kamal"})
     assert faces.owner_display_name() == "Manab Roy"
+
+
+async def test_persons_alias_renames_never_duplicates(monkeypatch):
+    """Live 2026-08-28 02:45: "rename Kamal to Habu" produced a junk
+    standalone contact. An alias makes both names one person; a name
+    already meaning someone ELSE is refused."""
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    import pytest as _pytest
+    added = []
+    mapping = {"kamal": "kamal", "ruma": "ruma"}
+    monkeypatch.setattr(persons, "resolve", lambda n: mapping.get(n.lower()))
+    monkeypatch.setattr(persons, "add_alias",
+                        lambda pid, alias: added.append((pid, alias)))
+    with _pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._persons_alias(7, {"name": "Kamal",
+                                            "alias": "Habu"}, "")
+    noop = await loop_tools._persons_alias(7, {"name": "Kamal",
+                                               "alias": "kamal"}, "")
+    assert noop["aliased"] is False       # already means them: no ask
+    with _pytest.raises(kernel.ToolFailed, match="cannot point at two"):
+        await loop_tools._persons_alias(7, {"name": "Kamal",
+                                            "alias": "Ruma"}, "")
+    with _pytest.raises(kernel.ToolFailed, match="not in the person"):
+        await loop_tools._persons_alias(7, {"name": "Nobody",
+                                            "alias": "Xy"}, "")
+    assert added == []                    # nothing written without a yes
