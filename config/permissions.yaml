@@ -190,6 +190,9 @@ skills:
   undo.last:
     permission: confirm   # P3.1c: reversing an action is itself an action —
     model_tier: cheap     # the ask names the concrete inverse before it runs
+  memory.consolidate:
+    permission: confirm   # semantic dedup: the model proposes, the ask names
+    model_tier: cheap     # every group, only the owner's yes supersedes
   home.query:
     permission: auto      # read-only: AC state + power/energy readout
     model_tier: cheap

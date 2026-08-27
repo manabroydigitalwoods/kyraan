@@ -571,6 +571,23 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                     _triples.catch_up()
 
                 await _aio.to_thread(_self_heal)
+
+                # Semantic dedup scan (owner: "make it automate",
+                # 2026-08-27): the model PROPOSES nightly; applying
+                # stays behind the owner's yes via the "consolidate
+                # memory" chat phrase. DND-gated like every proactive.
+                from kyraan.control_plane import kernel as _kernel
+                from kyraan.memory import consolidate as _consolidate
+                proposals = await _aio.to_thread(_consolidate.scan)
+                if proposals and _kernel.can_send_proactively():
+                    lines = [f'• keep "{p["keep_content"][:70]}" over '
+                             + "; ".join(f'"{c[:60]}"' for _, c in p["duplicates"])
+                             for p in proposals]
+                    await _send(context, _owner_id(),
+                                "🧹 Memory dedup: "
+                                f"{len(proposals)} duplicate group(s) found:\n"
+                                + "\n".join(lines)
+                                + '\n\nSay "consolidate memory" to review and apply.')
             except Exception as exc:  # never let episodes break self-review night
                 logger.warning("episode ingest failed: %s", exc)
 

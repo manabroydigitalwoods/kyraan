@@ -71,3 +71,62 @@ def test_apply_skips_unknown_and_already_inactive():
     a, b = _seed("one thing", "same thing, better")
     engine.forget([a])
     assert consolidate.apply(b, [a, "nosuchid"]) == []
+
+
+# --- the chat surface ("consolidate memory") ------------------------------
+
+def _proposal(keep, keep_content, dups):
+    return {"keep": keep, "keep_content": keep_content,
+            "duplicates": dups, "reason": "same fact"}
+
+
+async def test_chat_phrase_asks_with_every_group_named(monkeypatch):
+    from kyraan.agents import orchestrator
+    a, b = _seed("born around October", "born on 12-10-2025")
+    monkeypatch.setattr(consolidate, "scan", lambda: [
+        _proposal(b, "born on 12-10-2025", [(a, "born around October")])])
+    reply = await orchestrator._dispatch(920_001, "consolidate memory")
+    assert 'keep "born on 12-10-2025"' in reply
+    assert 'supersede "born around October"' in reply
+    assert 'reply "yes"' in reply
+
+
+async def test_chat_yes_applies_the_stashed_proposals(monkeypatch):
+    from kyraan.agents import orchestrator
+    a, b = _seed("vague thing", "precise thing")
+    monkeypatch.setattr(consolidate, "scan", lambda: [
+        _proposal(b, "precise thing", [(a, "vague thing")])])
+    await orchestrator._dispatch(920_002, "consolidate memory")
+    reply = await orchestrator._dispatch(920_002, "yes")
+    assert "1 duplicate fact(s) are now history" in reply
+    entries = {e["id"]: e for e in engine._load()}
+    assert entries[a]["active"] is False and entries[a]["superseded_by"] == b
+
+
+async def test_chat_no_applies_nothing(monkeypatch):
+    from kyraan.agents import orchestrator
+    a, b = _seed("vague thing", "precise thing")
+    monkeypatch.setattr(consolidate, "scan", lambda: [
+        _proposal(b, "precise thing", [(a, "vague thing")])])
+    await orchestrator._dispatch(920_003, "consolidate memory")
+    reply = await orchestrator._dispatch(920_003, "no")
+    assert "nothing was done" in reply.lower()
+    assert {e["id"]: e for e in engine._load()}[a]["active"] is True
+
+
+async def test_chat_clean_store_never_gates(monkeypatch):
+    from kyraan.agents import orchestrator
+    monkeypatch.setattr(consolidate, "scan", lambda: [])
+    reply = await orchestrator._dispatch(920_004, "dedupe memory")
+    assert "clean" in reply.lower() and 'reply "yes"' not in reply
+
+
+async def test_chat_scan_failure_is_honest(monkeypatch):
+    from kyraan.agents import orchestrator
+
+    def boom():
+        raise RuntimeError("cloud down")
+
+    monkeypatch.setattr(consolidate, "scan", boom)
+    reply = await orchestrator._dispatch(920_005, "consolidate memory")
+    assert "isn't reachable" in reply

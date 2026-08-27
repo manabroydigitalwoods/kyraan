@@ -58,6 +58,9 @@ _FORGET_FACE_RE = _re.compile(
     _re.IGNORECASE)
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 # P3.1c: bare "undo" or a targeted "undo the reminder/task/event/...".
+_CONSOLIDATE_RE = _re.compile(
+    r"^\s*(?:consolidate|dedupe?|de-dupe)\s+(?:my\s+)?memor(?:y|ies)\s*[.!]?\s*$",
+    _re.IGNORECASE)
 _UNDO_RE = _re.compile(
     r"^\s*undo(?:\s+(?:the\s+|that\s+|my\s+|last\s+)*"
     r"(reminder|task|event|meeting|switch|light|ac|plug|face)s?)?"
@@ -614,6 +617,12 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        if _CONSOLIDATE_RE.match(raw_text):
+            # Deterministic, like review: the nightly scan invites this
+            # phrase; the apply must never depend on model routing.
+            _skip_extraction.set(True)
+            return await _consolidate_memory(chat_id)
+
         undo_match = _UNDO_RE.match(raw_text)
         if undo_match:
             # Deterministic, like forget-face: reversing an action must
@@ -797,6 +806,47 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # generic and safe.
         log_event("handle_message_error", raw_text=raw_text, error=str(exc), error_type=type(exc).__name__)
         return "Something went wrong handling that — try again, or rephrase."
+
+
+# --- semantic memory consolidation (chat surface) -------------------------
+
+async def _consolidate_memory(chat_id: int) -> str:
+    """Scan (frontier model proposes), then a confirm ask that NAMES
+    every group; the owner's yes applies exactly the stashed proposals —
+    supersession, never deletion."""
+    import asyncio as _aio
+
+    from kyraan.memory import consolidate
+    try:
+        proposals = await _aio.to_thread(consolidate.scan)
+    except Exception as exc:
+        log_event("consolidation_scan_failed", error=str(exc)[:150])
+        return ("The dedup scan needs the frontier model and it isn't "
+                "reachable right now — try again later.")
+    if not proposals:
+        return "Memory is clean — no duplicate facts found."
+    lines = []
+    for n, p in enumerate(proposals, 1):
+        dups = "; ".join(f'"{c}"' for _, c in p["duplicates"])
+        lines.append(f'{n}. keep "{p["keep_content"]}" — supersede {dups}')
+    describe = ("Consolidate memory (duplicates become history, nothing "
+                "is deleted):\n" + "\n".join(lines))
+
+    async def _apply(_a: dict) -> str:
+        superseded = []
+        for p in proposals:  # the exact stashed proposals, nothing re-scanned
+            superseded += consolidate.apply(
+                p["keep"], [d for d, _ in p["duplicates"]])
+        _skip_extraction.set(True)
+        if not superseded:
+            return "Nothing needed doing — those facts were already consolidated."
+        kept = "\n".join(f'• {p["keep_content"]}' for p in proposals)
+        return (f"Done — {len(superseded)} duplicate fact(s) are now "
+                f"history. Kept:\n{kept}")
+
+    return await _gated(chat_id, SkillCall("memory.consolidate",
+                                           {"groups": len(proposals)}),
+                        _apply, describe=describe)
 
 
 # --- P3.1c: the undo command ----------------------------------------------
