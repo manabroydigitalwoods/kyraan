@@ -24,11 +24,11 @@ def _friendly_entity(entity: str) -> str:
 
 def capability_brief() -> str:
     lines = ["THINGS YOU CAN DO (live right now):"]
-    lines.append('- Reminders: create, list, cancel — one-shot or recurring (daily/weekdays/weekly/monthly, or intervals with a daily window: "every hour from 10am to 9pm remind me to drink water"; smallest interval 5 min — under 15 min needs the owner\'s yes on the message volume); they arrive as Telegram messages.')
+    lines.append("- Reminders: create/list/cancel/snooze — one-shot or recurring incl. intervals with a daily window (details in the tool menu).")
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
     lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
-    lines.append('- Scheduled tasks: run an instruction at a set time with read-only tools and message the result ("every evening at 8 check tomorrow\'s calendar and warn me about early meetings"). Creation needs the owner\'s yes.')
+    lines.append("- Scheduled tasks: run a read-only instruction at set times and message the result (owner confirms creation).")
     try:
         from kyraan.channels import voice as _voice
         if _voice.available():
@@ -40,22 +40,22 @@ def capability_brief() -> str:
 
     lines.append("- Live weather and a 3-day forecast for any named place or shared location pin (exact data, not web snippets).")
     if _has_env("GOOGLE_MAPS_API_KEY") or _has_env("TOMTOM_API_KEY"):
-        lines.append('- Distance and travel time with LIVE traffic between any two places, or from a shared pin ("how far is Jalpaiguri?", "how\'s traffic to the airport?") — by car, two-wheeler, or on foot.')
+        lines.append("- Distance/travel time with LIVE traffic between any two places or from a shared pin — car, two-wheeler, foot.")
     else:
         not_connected.append("Travel times / traffic (needs GOOGLE_MAPS_API_KEY with the Routes API enabled, or TOMTOM_API_KEY)")
-    lines.append("- Find nearby places by category — hospitals, pharmacies, ATMs, banks, restaurants, cafes, hotels, sightseeing, fuel, police, groceries — around a shared pin or any named place, with distances and map links.")
+    lines.append("- Find nearby places by category around a pin or named place, with distances and map links.")
     tiers_now = config.load().get("model_tiers", {})
     vision_ok = tiers_now.get("frontier", {}).get("provider") == "openai"
     if vision_ok:
-        lines.append("- See and analyze PHOTOS sent in the chat — describe them, read text in them, answer questions about them (each photo is handled in its own turn; actions still need a normal text message).")
+        lines.append("- See and analyze PHOTOS sent in the chat — describe, read text, answer about them (photo turns are their own turn; actions need a text message).")
         try:
             from kyraan.agents import faces as _faces
             if _faces.available():
-                lines.append('- Recognize ENROLLED faces in photos — matching happens on this machine only; the face data never leaves it. When the user asks to remember/save a face (any wording) after sending a photo, call the faces.remember tool — never tell them to resend with a special caption. Delete: "forget the face <name>".')
+                lines.append('- Recognize ENROLLED faces in photos (on-machine only). Remember-a-face asks -> faces.remember, never a resend-with-caption instruction. Delete: "forget the face <name>".')
         except Exception:
             pass
-    lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')
-    lines.append('- Memory dedup runs nightly and proposes duplicate-fact merges. If the user asks to merge/clean/deduplicate saved memories, tell them to say EXACTLY "consolidate memory" — you cannot apply merges yourself.')
+    lines.append('- A shared location pin arrives as "[I\'m sharing my current location: <place> (lat, lon)]" — use it for local answers immediately; never ask which city after a pin. You cannot request or track location.')
+    lines.append('- Merge/dedup of saved memories: tell the user to say EXACTLY "consolidate memory" — you cannot apply merges yourself.')
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
         lines.append('- Read the Google Calendar ("what\'s on my calendar tomorrow?").')

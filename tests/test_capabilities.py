@@ -34,7 +34,7 @@ def test_reminders_and_memory_are_always_live(monkeypatch):
     for k in ("HASS_URL", "HASS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     brief = capabilities.capability_brief()
-    assert "Reminders: create, list, cancel" in brief
+    assert "Reminders: create/list/cancel" in brief
     assert "Remember stated personal facts" in brief
 
 
