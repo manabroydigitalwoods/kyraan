@@ -1,0 +1,237 @@
+"""Path-independent orchestrator invariants, ported out of the
+classifier-era test_orchestrator.py at its deletion (P3.7b): the
+deterministic guards, the confirm flow, the review flow, seeding
+redaction, and handle_message's decoration layer — everything here
+survives the classifier because it never depended on it."""
+import asyncio
+import json
+import time
+
+import pytest
+
+from kyraan.agents import agent_loop, orchestrator
+
+
+@pytest.fixture
+def loop_reply(monkeypatch):
+    """handle_message with the agent loop mocked to a fixed reply."""
+    calls = []
+
+    def set_reply(text="ok."):
+        async def fake_run(chat_id, raw_text, tier):
+            calls.append((raw_text, tier))
+            return text
+
+        monkeypatch.setattr(agent_loop, "run", fake_run)
+        return calls
+
+    return set_reply
+
+
+# --- deterministic guards -------------------------------------------------
+
+async def test_bare_time_phrase_is_deterministically_patient(loop_reply):
+    loop_reply()
+    reply = await orchestrator._dispatch(950_001, "at 9pm")
+    assert reply == "Go on — I'm listening…"
+
+
+def test_time_fragment_detector_boundaries():
+    assert orchestrator.is_time_fragment("at 9pm")
+    assert orchestrator.is_time_fragment("tomorrow at 7")
+    assert not orchestrator.is_time_fragment("remind me to call mom at 9pm")
+    assert not orchestrator.is_time_fragment("what time is it?")
+
+
+def test_thought_open_reads_message_shape():
+    assert orchestrator.thought_open("remind me to")
+    assert orchestrator.thought_open("set a")
+    assert not orchestrator.thought_open("what's the weather in Kolkata?")
+
+
+def test_meta_detection_covers_complaints_and_questions():
+    assert orchestrator._is_meta_question("are these the latest emails?")
+    assert not orchestrator._is_meta_question("any new emails?")
+
+
+def test_review_decision_parser_boundaries():
+    assert orchestrator._parse_review_decision("approve all", 3) == ([0, 1, 2], [])
+    assert orchestrator._parse_review_decision("approve 1 reject 2", 3) == ([0], [1])
+    assert orchestrator._parse_review_decision("maybe later", 3) is None
+
+
+# --- the confirm flow -----------------------------------------------------
+
+async def _stash_ask(chat_id):
+    from kyraan.control_plane import kernel
+
+    async def gate(_a):
+        raise kernel.ConfirmationRequired("home.control", {"entity": "switch.ac"})
+
+    return await orchestrator._gated(
+        chat_id, kernel.SkillCall("home.control", {}), gate,
+        describe="About to turn the AC ON")
+
+
+async def test_stale_confirmation_expires_instead_of_executing(loop_reply, monkeypatch):
+    loop_reply()
+    chat_id = 950_010
+    await _stash_ask(chat_id)
+    call, handler, _ = orchestrator._pending_confirmations[chat_id]
+    orchestrator._pending_confirmations[chat_id] = (
+        call, handler, time.monotonic() - orchestrator._CONFIRMATION_TTL_S - 1)
+    reply = await orchestrator._dispatch(chat_id, "yes")
+    assert "expired" in reply
+    assert chat_id not in orchestrator._pending_confirmations
+
+
+async def test_fresh_confirmation_still_works_within_ttl(monkeypatch):
+    from kyraan.control_plane import kernel
+    chat_id = 950_011
+    ran = []
+
+    async def gate(_a):
+        if not kernel.confirmed_context():
+            raise kernel.ConfirmationRequired("home.control", {})
+        ran.append(True)
+        return "The AC is ON."
+
+    await orchestrator._gated(chat_id, kernel.SkillCall("home.control", {}),
+                              gate, describe="About to turn the AC ON")
+    reply = await orchestrator._dispatch(chat_id, "yes")
+    assert ran and "AC is ON" in reply
+
+
+async def test_orphaned_yes_after_restart_is_honest(loop_reply):
+    loop_reply()
+    chat_id = 950_012
+    orchestrator._history[chat_id].append(
+        ("assistant", 'About to turn the AC ON — reply "yes" to confirm or "no" to cancel.'))
+    reply = await orchestrator._dispatch(chat_id, "yes")
+    assert "didn't survive a restart" in reply
+
+
+async def test_dropped_ask_is_noted_for_the_next_reply(loop_reply):
+    loop_reply()
+    chat_id = 950_013
+    await _stash_ask(chat_id)
+    await orchestrator._dispatch(chat_id, "what's the weather?")  # moved on
+    assert orchestrator._dropped_ask_note.get(chat_id) == "home.control"
+    assert chat_id not in orchestrator._pending_confirmations
+
+
+# --- the review flow ------------------------------------------------------
+
+async def test_review_lists_then_mixed_decision_promotes_and_rejects(loop_reply):
+    loop_reply()
+    from kyraan.memory import store as memory_store
+    chat_id = 950_020
+    memory_store.propose_fact("preferences/a.md", "Fact alpha", "said a")
+    memory_store.propose_fact("preferences/b.md", "Fact beta", "said b")
+    listing = await orchestrator._dispatch(chat_id, "review memory")
+    assert "Fact alpha" in listing and "Fact beta" in listing
+    # same-second filenames order by uuid — read alpha's number from the list
+    alpha_n = next(line[0] for line in listing.splitlines()
+                   if "Fact alpha" in line)
+    beta_n = "1" if alpha_n == "2" else "2"
+    verdict = await orchestrator._dispatch(
+        chat_id, f"approve {alpha_n} reject {beta_n}")
+    assert "Fact alpha" in verdict and "Rejected" in verdict
+    from kyraan.memory import engine
+    active = [e["content"] for e in engine.active_entries()]
+    assert "Fact alpha" in active and "Fact beta" not in active
+
+
+async def test_unrelated_reply_leaves_the_review_queue_untouched(loop_reply):
+    loop_reply()
+    from kyraan.memory import store as memory_store
+    chat_id = 950_021
+    memory_store.propose_fact("preferences/c.md", "Fact gamma", "said c")
+    await orchestrator._dispatch(chat_id, "review memory")
+    await orchestrator._dispatch(chat_id, "what's the weather?")
+    assert len(list(memory_store.PENDING_DIR.glob("*.md"))) == 1
+
+
+# --- seeding redaction ----------------------------------------------------
+
+def test_pre_upgrade_email_logs_are_redacted_at_seed(tmp_path, monkeypatch):
+    from kyraan.control_plane import logging_setup
+    log = tmp_path / "chat.jsonl"
+    log.write_text(json.dumps({
+        "ts": "2026-08-26T05:00:00+00:00", "chat_id": 7,
+        "role": "assistant",
+        "text": "You have about 4 unread emails. Latest unread:\n- Bank: secret"}) + "\n")
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    from kyraan.agents import session
+    monkeypatch.setattr(session, "_history",
+                        session._PerChat(session._ChatHistory))
+    session.seed_history_from_log()
+    entries = list(session._history[7])
+    assert entries == [("assistant", "[showed the unread email summary]")]
+
+
+def test_history_block_tiers_old_entries(loop_reply):
+    chat_id = 950_030
+    for i in range(20):
+        orchestrator._history[chat_id].append(("user", "x" * 500))
+    block = orchestrator._history_block(chat_id, clip=600, older_clip=100)
+    lines = block.splitlines()
+    assert len(lines[0]) < 120      # old entries clipped tight
+    assert len(lines[-1]) > 400     # recent entries keep full clip
+
+
+# --- handle_message decoration --------------------------------------------
+
+async def test_noted_for_review_line_rides_the_reply(loop_reply, monkeypatch):
+    loop_reply("Nice choice!")
+
+    async def fake_note(chat_id, raw_text):
+        return "\n\n📝 Noted for review: Favourite snack is murukku"
+
+    monkeypatch.setattr(orchestrator, "_extraction_note", fake_note)
+    reply = await orchestrator.handle_message(950_040, "my favourite snack is murukku")
+    assert reply.startswith("Nice choice!")
+    assert "Noted for review" in reply
+
+
+async def test_extraction_failure_never_breaks_the_reply(loop_reply, monkeypatch):
+    loop_reply("Answer stands.")
+
+    async def boom(chat_id, raw_text):
+        raise RuntimeError("extraction exploded")
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", boom)
+    reply = await orchestrator.handle_message(950_041, "a long enough statement here")
+    assert reply.startswith("Answer stands.")
+
+
+async def test_short_messages_skip_extraction_entirely(loop_reply, monkeypatch):
+    loop_reply("Hi!")
+    called = []
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message",
+                        lambda *a, **k: called.append(1))
+    reply = await orchestrator.handle_message(950_042, "hey")
+    assert reply.startswith("Hi!") and called == []
+
+
+async def test_statement_matching_a_saved_fact_says_already(loop_reply, monkeypatch):
+    loop_reply("Good taste!")
+    from kyraan.memory import engine
+    engine.add_fact("Favourite snack is murukku", "preferences/snack.md", "t")
+
+    async def nothing(*a, **k):
+        return []
+
+    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", nothing)
+    reply = await orchestrator.handle_message(950_043, "my favourite snack is murukku")
+    assert "already have that saved" in reply
+
+
+async def test_all_tiers_failing_is_an_honest_outage(monkeypatch):
+    async def fake_run(chat_id, raw_text, tier):
+        raise agent_loop.AgentUnavailable(f"{tier} down")
+
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    reply = await orchestrator._dispatch(950_044, "what's the weather?")
+    assert "nothing was done" in reply.lower()
+    assert "unreachable" in reply.lower()

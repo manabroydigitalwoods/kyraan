@@ -1,7 +1,8 @@
-"""Single orchestrator for Phase 1 — no agent router yet (that's Phase 3).
-
-Flow: normalize intent -> gate + dispatch through the kernel -> return text
-for the Response Engine (here, just the Telegram send call) to deliver.
+"""The orchestrator: deterministic guards -> confirm flow -> the agent
+loop (frontier, then local cheap tier) -> honest outage reply. One
+brain, two tiers, zero dispatch rules — the classify-and-dispatch
+architecture retired 2026-08-27 (P3.7b) after the cheap-tier loop
+passed the full HARD eval twice consecutively.
 """
 import contextvars
 import json
@@ -27,7 +28,6 @@ from kyraan.agents.review import (  # noqa: F401
 from kyraan.control_plane import kernel
 from kyraan.control_plane.kernel import ConfirmationRequired, KillSwitchEngaged, SkillCall
 from kyraan.control_plane.logging_setup import log_chat, log_event
-from kyraan.intent.normalize import normalize
 from kyraan.memory import extraction
 from kyraan.memory import store as memory_store
 from kyraan.model_router import router
@@ -116,11 +116,6 @@ _pending_reviews: dict = {}
 # and then wondered why the list was empty).
 _dropped_ask_note: dict = {}
 
-# The model-driven loop is the primary path in production; the classifier
-# tests flip this off to exercise the fallback path in isolation.
-AGENT_LOOP_ENABLED = True
-
-
 async def _review_memory(chat_id: int, text: str) -> str:
     # A queue command states no facts — running extraction on "yes save
     # it" appended a bogus couldn't-distill warning under the review list
@@ -162,23 +157,6 @@ def _cloud_tier_in_use() -> bool:
 # right — seeded history must never look like a live exchange).
 _last_sent_reply: dict = {}
 _last_reply_at: dict = {}
-
-async def _read_or_meta(chat_id: int, raw_text: str, intent: str, reply: str) -> str:
-    """Deterministic backstop behind the classifier: a read-intent reply
-    identical to the previous reply, triggered by a meta-question, means
-    the classifier re-ran a tool the user was asking ABOUT — answer the
-    question instead."""
-    last = _last_sent_reply.get(chat_id, "").strip()
-    # Containment, not equality: the re-run reply may carry a prefix (the
-    # wants-body boundary line) around the same listing — live: "these
-    # emails are already shared by u" got the boundary text PLUS the same
-    # five emails again.
-    same = bool(last) and reply.strip() and (reply.strip() in last or last in reply.strip())
-    if same and _is_meta_question(raw_text):
-        log_event("meta_question_rerouted", chat_id=chat_id, intent=intent, text=raw_text)
-        return await _answer(chat_id, raw_text)
-    return reply
-
 
 _CLOCK_RE = None
 
@@ -361,15 +339,12 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
     if len(texts) == 1:
         return [(0, await handle_message(chat_id, texts[0]))]
 
-    if AGENT_LOOP_ENABLED:
-        # G-03: the agent loop reads the whole conversation and handles a
-        # multi-part message natively — the separate frontier planning
-        # call (and its per-request loop runs) doubled latency for
-        # nothing. The joined burst goes through as ONE message; the
-        # planner below remains only for the classifier fallback path.
-        joined = "\n".join(texts)
-        log_event("burst_joined_for_agent", chat_id=chat_id, n=len(texts))
-        return [(len(texts) - 1, await handle_message(chat_id, joined))]
+    # G-03: the agent loop reads the whole conversation and handles a
+    # multi-part message natively — the joined burst goes through as ONE
+    # message (the classifier-era planner retired with P3.7b).
+    joined = "\n".join(texts)
+    log_event("burst_joined_for_agent", chat_id=chat_id, n=len(texts))
+    return [(len(texts) - 1, await handle_message(chat_id, joined))]
 
     requests = ["\n".join(texts)]  # last-resort: treat as one merged message
     # Deterministic pre-verdict: all complete questions = distinct asks,
@@ -687,153 +662,34 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             # depend on a model's routing choice.
             return await _review_memory(chat_id, raw_text)
 
-        if AGENT_LOOP_ENABLED:
-            # ONE brain, two tiers (G-02): the same agent loop runs on the
-            # frontier, then on the local cheap tier when the cloud is
-            # unreachable — degraded mode no longer means a different
-            # system, just a smaller model behind the same doctrine. The
-            # legacy classifier below survives only as the third line, for
-            # the case where the local model can't even hold the loop's
-            # decision JSON.
-            from kyraan.agents import agent_loop
-            for tier in ("frontier", "cheap"):
-                if tier == "cheap":
-                    # P3.7a: the local model now holds BOTH the loop and
-                    # extraction — the extraction cutoff widens for this
-                    # turn or contention silently eats every "Noted for
-                    # review" (9× in one degraded eval run).
-                    _degraded_turn.set(True)
-                try:
-                    return await agent_loop.run(chat_id, raw_text, tier=tier)
-                except KillSwitchEngaged:
-                    raise
-                except agent_loop.AgentUnavailable as exc:
-                    log_event("agent_tier_fallback", tier=tier, error=str(exc)[:200])
-                except Exception as exc:
-                    log_event("agent_loop_error", tier=tier, error=str(exc),
-                              error_type=type(exc).__name__)
-            log_event("agent_fallback_classifier")
-
-        # Structured JSON intent classification needs more reliability than
-        # the cheap tier's local 3B model consistently gives — verified
-        # live (2026-08-25): the cheap tier misclassified a clear reminder
-        # request ("set reminder in 5mis 'Call to MIra'" got routed to
-        # reminders.list) and missed simple questions like "what time is
-        # it?"/"who are you?", while frontier (still free, via Groq) was
-        # 14/14 correct across the same test set. Classification is a tiny,
-        # fast call even on the bigger model — there's no real cost to
-        # always using it here, so this isn't a cheap-first-then-escalate
-        # dance anymore, just the reliable tier directly.
-        context = _classifier_context(chat_id)
-        try:
-            import asyncio as _aio
-            parsed = await _aio.to_thread(normalize, raw_text, tier="frontier", history=context)
-        except router.ModelProviderError as exc:
-            # Frontier (Groq) is classification's single cloud dependency —
-            # if it's down or rate-limited, degrade to the local cheap tier
-            # (measured at 12-13/14 on the same test set) instead of
-            # refusing to understand anything at all.
-            log_event("intent_fallback_cheap", error=str(exc))
-            parsed = await _aio.to_thread(normalize, raw_text, tier="cheap", history=context)
-
-        # Sanity-guard the rewrite: a degraded classifier was seen turning
-        # "Do you know my father?" into the ANSWER "I don't have any
-        # information about your family members." — which qa then answered
-        # instead of the user's words. A legit contextual rewrite draws its
-        # words from the message or the recent conversation; one that draws
-        # from neither is hallucination — use the raw text.
-        def _words(t):
-            return {w.strip(".,!?'\"").lower() for w in t.split() if len(w) > 2}
-        import difflib
-        norm_w = _words(parsed.normalized_text)
-        allowed = _words(raw_text) | _words(context)
-        word_grounded = bool(norm_w) and len(norm_w & allowed) / len(norm_w) >= 0.3
-        # Typo corrections change the words themselves ("wat tym" ->
-        # "what time"), so textual similarity is the other legitimate
-        # path — the guard was seen rejecting a correct typo fix.
-        textually_close = difflib.SequenceMatcher(
-            None, raw_text.lower(), parsed.normalized_text.lower()
-        ).ratio() >= 0.5
-        if norm_w and not word_grounded and not textually_close:
-            log_event("normalized_text_rejected", chat_id=chat_id,
-                      normalized=parsed.normalized_text, raw=raw_text)
-            parsed.normalized_text = raw_text
-            if parsed.intent not in ("qa.answer", "unknown", "incomplete"):
-                # The intent came from the same hallucinated reading the
-                # rewrite did — seen live: "on my smoke havite" rewrote to
-                # "what's the status of my humidifier" (rejected) but the
-                # home.query intent survived and dumped the AC status.
-                # Discredit both together; conversation is the safe path.
-                log_event("intent_demoted_after_rejected_rewrite",
-                          chat_id=chat_id, intent=parsed.intent)
-                parsed.intent = "qa.answer"
-        log_event("intent_classified", chat_id=chat_id, intent=parsed.intent,
-                  confidence=parsed.confidence, normalized=parsed.normalized_text)
-        if parsed.confidence < 0.4:
-            _skip_extraction.set(True)  # a message we couldn't parse can't state reliable facts
-            return "I'm not confident I understood that — could you rephrase?"
-
-        if parsed.intent == "incomplete":
-            # A human doesn't answer half a sentence — they wait for the
-            # rest. Seen live: "tomorrow morning" (sent a minute before
-            # "remind me at 9") got an irrelevant morning-brief answer.
-            # Deterministic, no model call; the fragment stays in history
-            # so the next message completes the thought.
-            _skip_extraction.set(True)
-            return "Go on — I'm listening…"
-        if parsed.intent == "reminders.create":
-            wording = f"{raw_text} {parsed.normalized_text}".lower()
-            if not any(w in wording for w in _REMIND_WORDS):
-                # Seen live: "to buy something" — a fragment of a STORY
-                # about the user's morning — became a junk midnight
-                # reminder. Nobody asks for a reminder without remind-ish
-                # wording; without it the classifier is over-reaching, so
-                # treat the message as conversation instead.
-                log_event("reminder_intent_demoted", chat_id=chat_id, text=raw_text)
-                return await _answer(chat_id, parsed.normalized_text)
-            return await _create_reminder(chat_id, parsed.normalized_text)
-        if parsed.intent == "reminders.list":
-            return await _read_or_meta(chat_id, raw_text, parsed.intent,
-                                       await _list_reminders(chat_id))
-        if parsed.intent == "reminders.cancel":
-            return await _cancel_reminder(chat_id, parsed.normalized_text)
-        if parsed.intent == "calendar.list":
-            return await _read_or_meta(chat_id, raw_text, parsed.intent,
-                                       await _list_calendar(chat_id, parsed.normalized_text))
-        if parsed.intent == "calendar.create":
-            return await _create_event(chat_id, parsed.normalized_text)
-        if parsed.intent == "calendar.cancel":
-            return await _cancel_event(chat_id, parsed.normalized_text)
-        if parsed.intent == "email.check":
-            return await _read_or_meta(chat_id, raw_text, parsed.intent,
-                                       await _check_email(chat_id, parsed.normalized_text))
-        if parsed.intent == "memory.review":
-            return await _review_memory(chat_id, parsed.normalized_text)
-        if parsed.intent == "home.query":
-            wording = f"{raw_text} {parsed.normalized_text}"
-            if not _mentions_home(wording):
-                # Same over-reach family as the reminder guard: a home
-                # status question mentions the home somehow ("AC",
-                # "temperature", "bedroom", ...). Without any such word
-                # ("on my smoke havite", seen live answered with the full
-                # AC/climate dump) the classifier is guessing — converse.
-                log_event("home_query_demoted", chat_id=chat_id, text=raw_text)
-                return await _answer(chat_id, parsed.normalized_text)
-            return await _read_or_meta(chat_id, raw_text, parsed.intent,
-                                       await _home_query(chat_id, parsed.normalized_text))
-        if parsed.intent == "home.control":
-            return await _home_control(chat_id, parsed.normalized_text)
-        # qa.answer, and anything the classifier couldn't place ("unknown"
-        # with reasonable confidence) both fall through here — Phase 1's
-        # taxonomy only has one truly distinct path (reminders), so
-        # "everything else" should get a best-effort answer rather than a
-        # dead-end "I didn't recognize a command" that reads like a broken
-        # command parser for what's usually just an ordinary question. Use
-        # the model's typo-corrected text for a real qa.answer, but the
-        # raw text for "unknown" — normalized_text isn't trustworthy there
-        # since the model itself gave up on classifying it.
-        text_for_answer = raw_text if parsed.intent == "unknown" else parsed.normalized_text
-        return await _answer(chat_id, text_for_answer)
+        # ONE brain, two tiers (arch §1, delivered by P3.7b): the same
+        # agent loop runs on the frontier, then on the local cheap tier
+        # behind the same doctrine — degraded mode is a smaller model,
+        # not a different system. Both tiers failing is an OUTAGE and is
+        # reported as one; the legacy classifier was retired 2026-08-27
+        # after two consecutive all-green degraded eval runs (P3.7a).
+        from kyraan.agents import agent_loop
+        for tier in ("frontier", "cheap"):
+            if tier == "cheap":
+                # P3.7a: the local model now holds BOTH the loop and
+                # extraction — the extraction cutoff widens for this
+                # turn or contention silently eats every "Noted for
+                # review" (9x in one degraded eval run).
+                _degraded_turn.set(True)
+            try:
+                return await agent_loop.run(chat_id, raw_text, tier=tier)
+            except KillSwitchEngaged:
+                raise
+            except agent_loop.AgentUnavailable as exc:
+                log_event("agent_tier_fallback", tier=tier, error=str(exc)[:200])
+            except Exception as exc:
+                log_event("agent_loop_error", tier=tier, error=str(exc),
+                          error_type=type(exc).__name__)
+        log_event("agent_all_tiers_failed")
+        return ("Both my reasoning models are unreachable right now, so I "
+                "couldn't act on that — nothing was done. Reminders and "
+                "scheduled tasks still fire on their own; try me again in "
+                "a few minutes.")
     except KillSwitchEngaged:
         return "The kill switch is engaged — no autonomous action will run until it's disengaged."
     except kernel.ToolFailed as exc:
@@ -1068,13 +924,4 @@ async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "",
 
 
 
-# Imported LAST (module bottom): legacy_handlers imports this module back,
-# and by now every name it needs at call time exists. The handlers bind
-# into THIS namespace as bare names so both _dispatch and the tests'
-# monkeypatch.setattr(orchestrator, "_answer", ...) resolve through the
-# same global.
-from kyraan.agents.legacy_handlers import (  # noqa: E402,F401
-    _answer, _cancel_event, _cancel_reminder, _check_email,
-    _create_event, _create_reminder, _home_control, _home_query,
-    _list_calendar, _list_reminders,
-)
+

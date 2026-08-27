@@ -96,7 +96,6 @@ def test_extraction_timeout_widens_only_on_degraded_turns():
 
 
 async def test_cheap_fallback_marks_the_turn_degraded(monkeypatch):
-    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
     seen = {}
 
     async def fake_run(chat_id, raw_text, tier):

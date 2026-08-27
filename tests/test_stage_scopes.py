@@ -95,7 +95,6 @@ async def test_read_mostly_cannot_switch_the_ac(read_mostly, monkeypatch):
     monkeypatch.setitem(agent_loop.TOOLS["home.turn_on"], "run",
                         lambda *a, **k: switched.append(a))
     from kyraan.agents import orchestrator
-    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
     reply = await agent_loop.run(5, "switch on the AC please", tier="cheap")
     assert switched == []  # the executor never ran
     assert "access level" in reply or "can't switch" in reply

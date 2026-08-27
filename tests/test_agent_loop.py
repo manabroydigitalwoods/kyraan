@@ -216,31 +216,6 @@ async def test_provider_outage_raises_unavailable(monkeypatch):
         await agent_loop.run(90, "hello")
 
 
-async def test_orchestrator_falls_back_to_the_classifier_path(monkeypatch):
-    """AgentUnavailable = degraded mode: the proven classifier path takes
-    over, invisible to the user."""
-    from kyraan.intent.normalize import NormalizedIntent
-
-    async def unavailable(chat_id, raw_text, tier="frontier"):
-        raise agent_loop.AgentUnavailable("down")
-
-    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
-    monkeypatch.setattr(agent_loop, "run", unavailable)
-    monkeypatch.setattr(orchestrator, "normalize", lambda raw_text, tier="cheap", history="":
-                        NormalizedIntent(intent="qa.answer", confidence=1.0, normalized_text=raw_text))
-
-    async def fake_answer(chat_id, text):
-        return "Classifier fallback answered."
-
-    async def no_facts(raw_text, context="", insist=False):
-        return []
-
-    monkeypatch.setattr(orchestrator, "_answer", fake_answer)
-    monkeypatch.setattr(orchestrator.extraction, "propose_from_message", no_facts)
-    result = await orchestrator.handle_message(chat_id=90, raw_text="hello")
-    assert result.startswith("Classifier fallback answered.")
-
-
 async def test_step_cap_raises_unavailable(scripted_model, monkeypatch, tmp_path):
     from kyraan.triggers import store as rstore
 
@@ -341,7 +316,6 @@ async def test_cheap_tier_loop_takes_over_when_frontier_is_down(monkeypatch):
             raise agent_loop.AgentUnavailable("cloud down")
         return "local loop reply"
 
-    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)
     monkeypatch.setattr(agent_loop, "run", tiered)
 
     async def no_facts(raw_text, context="", insist=False):
@@ -475,18 +449,6 @@ def test_unrelated_time_pair_does_not_hijack_the_event_range(monkeypatch):
     start, end = agent_loop._normalized_event_times(
         args, "after the 9pm call tomorrow, add dinner — not at 8am obviously")
     assert "T20:00:00" in start and "T21:00:00" in end  # model times kept
-
-
-def test_partial_deletion_receipt_names_the_working_resume_phrase():
-    """Round-4 P2 — and the round-3 lesson: this wording 'fix' silently
-    never applied because nothing asserted it. Now something does."""
-    import inspect
-    from kyraan.agents import orchestrator as o
-
-    source = inspect.getsource(o._cancel_event)
-    # round-8: the resume carries BOTH the title filter and the window
-    assert 'say \"cancel all {title_part}events {label}\" again' in source
-    assert '— say \"cancel\" again' not in source
 
 
 def test_anchor_tolerance_rejects_hours_away_hijacks(monkeypatch):

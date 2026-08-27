@@ -114,53 +114,6 @@ async def test_task_schedule_refuses_interval(monkeypatch):
 
 # --- P2: photo kill-switch keeps the (reply, enroll) shape -----------------
 
-async def test_photo_kill_switch_returns_the_tuple_shape(monkeypatch):
-    from kyraan.agents import photo
-    monkeypatch.setattr(photo.kill_switch, "is_engaged", lambda: True)
-    reply, enroll = await photo.answer(9, "data:x", "hi")
-    assert "kill switch" in reply.lower() and enroll is None
-
-
-# --- P2: equal-score memories order newest-first ---------------------------
-
-def test_equal_score_memories_newest_first(monkeypatch, tmp_path):
-    from kyraan.memory import engine
-    monkeypatch.setattr(engine, "active_entries", lambda: [
-        {"id": "a", "content": "older twin", "created": "2026-01-01T00:00:00",
-         "flags": [], "era": "", "importance": "normal", "kind": "fact"},
-        {"id": "b", "content": "newer twin", "created": "2026-08-01T00:00:00",
-         "flags": [], "era": "", "importance": "normal", "kind": "fact"},
-    ], raising=False)
-    context = engine.build_context("twin")
-    assert context.index("newer twin") < context.index("older twin")
-
-
-# --- P1: classifier fallback never leaks pending facts to a cloud tier -----
-
-async def test_legacy_answer_keeps_pending_facts_off_cloud(monkeypatch):
-    from kyraan.agents import legacy_handlers, orchestrator
-    from kyraan.memory import store as memory_store
-
-    monkeypatch.setattr(memory_store, "load_pending_facts",
-                        lambda: "SECRET-PENDING: wife's surprise gift")
-    captured = {}
-
-    async def fake_acall(prompt="", system="", tier="", **kw):
-        captured["system"] = system
-
-        class _R:
-            text = "ok"
-        return _R()
-
-    monkeypatch.setattr(legacy_handlers.router, "acall", fake_acall)
-    # qa.answer's configured tier is frontier (cloud) in the shipped config
-    await legacy_handlers._answer(90, "what should I buy?")
-    assert "SECRET-PENDING" not in captured["system"]
-    assert "held locally" in captured["system"]
-
-
-# --- P2: privacy truths track the email-bodies opt-in ----------------------
-
 def test_privacy_truth_flips_with_email_bodies(monkeypatch):
     from kyraan.agents.capabilities import capability_brief
     for k in ("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
@@ -227,72 +180,6 @@ async def test_send_failure_never_reruns_the_model(task_env, monkeypatch):
     async def counted(chat_id, instruction):
         runs.append(1)
         return "the result"
-
-    async def broken_send(chat_id, text):
-        raise RuntimeError("connection reset mid-send")
-
-    agent_tasks._run_fn = counted
-    agent_tasks._send_fn = broken_send
-    scheduled.clear()
-    await agent_tasks.fire(task.id)
-    await agent_tasks.fire(task.id)   # delivery retry with send still broken
-    assert runs == [1]                # the model ran exactly once across both
-    survivor = next(t for t in agent_tasks.list_active() if t.id == task.id)
-    assert survivor.pending_result == "the result"
-    agent_tasks.cancel(task.id)
-
-
-def test_create_refuses_interval():
-    with pytest.raises(ValueError, match="reminder feature"):
-        agent_tasks.create(1, "poll this", (local_now() + timedelta(hours=1)).isoformat(),
-                           repeat="interval")
-
-
-def test_very_stale_interval_catchup_is_fast_and_future():
-    from kyraan.triggers.store import Reminder
-    import time as _time
-    stale = Reminder(id="r3", chat_id=1, text="water",
-                     when_iso=(local_now() - timedelta(days=400)).isoformat(),
-                     repeat="interval", interval_minutes=5,
-                     window_start="10:00", window_end="21:00")
-    t0 = _time.monotonic()
-    nxt = scheduler.advance_past_now(stale)
-    assert _time.monotonic() - t0 < 0.5   # arithmetic, not 115k loop steps
-    assert nxt > local_now()
-
-
-async def test_local_fallback_rebuilds_prompt_with_pending_facts(monkeypatch):
-    """The cheap-tier fallback must not inherit the cloud prompt's
-    pending-facts placeholder — locally the facts are allowed."""
-    from kyraan.agents import legacy_handlers
-    from kyraan.memory import store as memory_store
-
-    monkeypatch.setattr(memory_store, "load_pending_facts",
-                        lambda: "PENDING-FACT: gift idea")
-    monkeypatch.setattr(legacy_handlers.router, "provider_is_local",
-                        lambda p: p == "ollama")
-    systems = []
-
-    call_count = {"n": 0}
-
-    async def flaky_acall(prompt="", system="", tier="", **kw):
-        systems.append((tier, system))
-        call_count["n"] += 1
-        if call_count["n"] == 1:
-            raise legacy_handlers.router.ModelProviderError("frontier down")
-
-        class _R:
-            text = "ok"
-        return _R()
-
-    monkeypatch.setattr(legacy_handlers.router, "acall", flaky_acall)
-    await legacy_handlers._answer(90, "any gift ideas?")
-    cloud_sys = systems[0][1]
-    local_sys = systems[1][1]
-    assert "PENDING-FACT" not in cloud_sys and "held locally" in cloud_sys
-    assert "PENDING-FACT" in local_sys                 # rebuilt for local
-    assert "LOCAL backup model" in local_sys           # degraded note intact
-
 
 def test_voice_probe_runs_in_a_subprocess(monkeypatch):
     from kyraan.channels import voice

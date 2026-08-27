@@ -31,15 +31,6 @@ def _isolated_event_log(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _classifier_path_by_default(monkeypatch):
-    """Legacy orchestrator tests exercise the classifier path; the agent
-    loop (which would consume their scripted router fakes first) is opt-in
-    per test via monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", True)."""
-    from kyraan.agents import orchestrator
-    monkeypatch.setattr(orchestrator, "AGENT_LOOP_ENABLED", False)
-
-
-@pytest.fixture(autouse=True)
 def _no_fact_mirroring(monkeypatch, tmp_path):
     """The memory tree is isolated below, but the P3.2a/P3.2d mirrors
     would still write into the LIVE Postgres container — off by default;
