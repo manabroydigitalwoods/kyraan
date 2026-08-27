@@ -95,7 +95,14 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
               f"OWNER'S CAPTION: {question}")
     try:
         response = await router.acall(prompt=prompt, system=_SYSTEM,
-                                      tier="frontier", max_tokens=700,
+                                      tier="frontier", max_tokens=2200,
+                                      # 700 broke live (2026-08-27 14:08,
+                                      # twice): document_text asks for a
+                                      # FULL transcription and nano's
+                                      # hidden reasoning shares this
+                                      # budget — the cap truncated the
+                                      # JSON to empty on any text-bearing
+                                      # photo
                                       force_json=True,
                                       images=[image_data_url])
     except router.ModelProviderError as exc:
