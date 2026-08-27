@@ -167,10 +167,12 @@ def init(send_fn) -> None:
     _send_fn = send_fn
 
 
-async def tick() -> int:
+async def tick(send=None) -> int:
     """One evaluation pass over every active rule. Fired count returned.
     A DND-blocked notification does NOT mark the rule fired — it re-fires
-    on the first tick after quiet hours, still true, still unheard."""
+    on the first tick after quiet hours, still true, still unheard.
+    `send` (job-context-bound in the bot) overrides the init() fallback."""
+    send = send or _send_fn
     fired = 0
     for rule in list_active():
         try:
@@ -186,8 +188,8 @@ async def tick() -> int:
             text = (rule.message
                     or f"👁 Watch rule: {rule.description} — "
                        f"{rule.entity} is {state.get('state')}.")
-            if _send_fn is not None:
-                await _send_fn(rule.chat_id, text)
+            if send is not None:
+                await send(rule.chat_id, text)
             _mark_fired(rule.id)
             fired += 1
             log_event("event_rule_fired", rule_id=rule.id,

@@ -22,7 +22,7 @@ load_dotenv(REPO / ".env")
 from kyraan.store.episodes import _TAG_SYSTEM  # noqa: E402 — the REAL prompt
 from kyraan.store.episodes import normalize_flags  # noqa: E402 — and filter
 
-CANDIDATES = ["qwen3:8b", "llama3.2:latest", "qwen3:1.7b", "gemma3:1b"]
+CANDIDATES = ["ministral-3:3b", "qwen3:8b", "llama3.2:latest"]
 
 # (snippet, expected flags). Kyraan-shaped: reminders, family, home,
 # email chatter — plus the clear positives each flag exists for.

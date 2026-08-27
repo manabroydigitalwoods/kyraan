@@ -825,14 +825,12 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
     # conditions evaluated every 15 min — notify-only by doctrine.
     from kyraan.triggers import event_rules
 
-    async def _rules_send(chat_id: int, text: str) -> None:
-        orchestrator.record_proactive(chat_id, text)
-        await app.bot.send_message(chat_id=chat_id, text=_plain(text))
-
-    event_rules.init(_rules_send)
-
     async def _rules_job(context: ContextTypes.DEFAULT_TYPE) -> None:
-        await event_rules.tick()
+        # Send via the job's context like every proactive job here — a
+        # module-level send_fn captured at wiring time referenced a name
+        # not in this scope and every tick died with NameError (found
+        # live: the owner's first rule never fired at 27.4°C).
+        await event_rules.tick(lambda c, t: _send(context, c, t))
 
     job_queue.run_repeating(_rules_job, interval=900, first=180,
                             name="event_rules")

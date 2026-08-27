@@ -100,13 +100,16 @@ def episode_uuid(chat_id: int, first_ts: str) -> str:
     return str(uuid.uuid5(EPISODE_NS, f"{chat_id}:{first_ts}"))
 
 
-# Pinned by scripts/probe_tagger.py (2026-08-27, 16 labeled probes):
-# llama3.2:3b — 13/16 exact vs the qwen3:8b baseline's 12/16, fewer
-# over-tags (2 vs 4), zero misses on every clear positive, 280ms vs
-# 503ms — AND it keeps the nightly batch off the resident chat model.
-# The sub-2GB candidates (qwen3:1.7b, gemma3:1b) invented flags outside
-# the vocabulary and missed clear positives: disqualified.
-TAG_MODEL = "llama3.2:latest"
+# Pinned by scripts/probe_tagger.py (re-probed 2026-08-27, 16 labeled
+# probes, misses are the axis that decides): ministral-3:3b's one miss
+# is a strict subset of llama3.2:3b's two — it catches the gas-smell
+# safety flag llama3.2 drops — at comparable latency (~395ms vs 305ms)
+# and the same size class, so it took the fallback pin. Neither 3B is
+# miss-free (both drop `health` on "reminder for Kiaan's vaccination");
+# that's why nano stays primary and this model only tags non-cloud_ok
+# episodes and cloud-failure fallbacks. qwen3:8b is the only miss-free
+# local model if this pin ever needs a safer (slower) replacement.
+TAG_MODEL = "ministral-3:3b"
 
 
 def _tag_chat(text: str) -> list:
@@ -157,7 +160,7 @@ def normalize_flags(raw: list) -> list:
 def sensitivity_flags(text: str, exposure: str = "cloud_ok") -> list:
     """Tagging: nano (frontier) for cloud_ok text — episode text is
     built from cloud_text twins, already cloud-safe — with the LOCAL
-    llama3.2 path for any non-cloud_ok episode AND as fallback when the
+    TAG_MODEL path for any non-cloud_ok episode AND as fallback when the
     cloud fails; total failure = 'sensitive' (§3 absence discipline)."""
     if exposure == "cloud_ok":
         try:

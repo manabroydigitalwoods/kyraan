@@ -109,6 +109,19 @@ async def test_dnd_hold_does_not_burn_the_rule(ticking, monkeypatch):
     assert await event_rules.tick() == 1          # fires after quiet hours
 
 
+async def test_tick_send_override_beats_init(ticking):
+    # The bot passes a job-context-bound send per tick; the init() fn is
+    # only the fallback. (The captured-send wiring NameError'd live.)
+    _rule()
+    got = []
+
+    async def override(chat_id, text):
+        got.append((chat_id, text))
+
+    assert await event_rules.tick(send=override) == 1
+    assert got and ticking == []
+
+
 async def test_read_failure_is_contained(ticking, monkeypatch):
     _rule()
 
