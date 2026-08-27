@@ -96,6 +96,7 @@ async def test_tick_fires_once_then_cooldown(ticking):
     _rule()
     assert await event_rules.tick() == 1
     assert "AC on too long" in ticking[0][1]
+    assert "on" in ticking[0][1]  # the live reading rides every alert
     assert await event_rules.tick() == 0          # cooldown holds
     assert len(ticking) == 1
 
@@ -107,6 +108,13 @@ async def test_dnd_hold_does_not_burn_the_rule(ticking, monkeypatch):
     assert ticking == []
     monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
     assert await event_rules.tick() == 1          # fires after quiet hours
+
+
+async def test_custom_message_carries_the_reading(ticking):
+    # The owner got "above 27°C" with the actual 27.7 nowhere in sight.
+    _rule(message="Bedroom is hot")
+    await event_rules.tick()
+    assert ticking[0][1] == "Bedroom is hot (now: on)"
 
 
 async def test_tick_send_override_beats_init(ticking):

@@ -116,3 +116,24 @@ def test_ollama_native_payload_sets_context_think_and_json(monkeypatch):
     assert captured["payload"]["format"] == "json"
     assert result.text == "{\"ok\": true}"
     assert result.usage.input_tokens == 5 and result.usage.output_tokens == 3
+
+
+def test_auth_errors_never_retry(monkeypatch):
+    """A 401 is permanent for this process: it got 3 full attempts live
+    (2026-08-27, bad key at boot), delaying the local fallback on every
+    message. Auth failures break out of the retry loop immediately."""
+    import pytest
+
+    monkeypatch.setattr(router, "_cooldown_until", {})
+    monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [0, 0])
+    attempts = []
+
+    def unauthorized(provider, model, prompt, system, max_tokens, force_json=False):
+        attempts.append(1)
+        raise RuntimeError("Error code: 401 - {'error': {'message': "
+                           "'Incorrect API key provided: sk-inval***'}}")
+
+    monkeypatch.setattr(router, "_dispatch", unauthorized)
+    with pytest.raises(router.ModelProviderError):
+        router.call(prompt="x", tier="frontier")
+    assert len(attempts) == 1

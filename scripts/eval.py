@@ -116,8 +116,11 @@ CASES = [
     # P3.1c: the undo command, end to end — create, undo-ask naming the
     # concrete inverse, yes executes it, and the reminder is really gone.
     # HARD: deterministic path (needs the local Postgres container up).
-    Case("undo.create", "remind me to water the plants at 8:30pm today",
-         [["8:30 PM"], ["remind", "Reminder set"]]),
+    # "tomorrow at 9am" — a fixed "8:30pm today" made this case fail on
+    # any eval run after 8:30 PM local (Kyraan rightly refuses past
+    # times and asks for a new one, breaking the whole undo chain).
+    Case("undo.create", "remind me to water the plants tomorrow at 9am",
+         [["9:00 AM"], ["remind", "Reminder set"]]),
     Case("undo.ask", "undo",
          [["cancel the reminder"], ["water the plants"], ["reply \"yes\""]]),
     Case("undo.confirm", "yes", [["undone"]]),

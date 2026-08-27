@@ -50,6 +50,14 @@ _confirmation_nonce: dict = {}
 # actions deserve freshness.
 _CONFIRMATION_TTL_S = 300
 _CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead"}
+# A bare acknowledgment deserves a bare acknowledgment. Round five of
+# the menu disease (2026-08-27): a lone "ok" reached the loop and came
+# back as "Okay 👍 Anything else you want me to check (bedroom temp,
+# AC status...)?" — a menu question laundered as an ack. Deterministic
+# branch, zero model calls, nothing to extract.
+_ACK_WORDS = {"ok", "okay", "k", "kk", "thanks", "thank you", "thx", "ty",
+              "got it", "nice", "cool", "great", "perfect", "👍", "🙏", "❤️",
+              "ok thanks", "okay thanks", "thik ache", "thik", "acha"}
 
 import re as _re
 
@@ -620,21 +628,41 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # same kernel gates for every tool. The classifier path below is
         # its fallback: degraded mode (cloud down) or any loop failure.
         word = raw_text.strip().lower().rstrip(".!")
-        if word in ("yes", "no"):
-            last_assistant = next((t for role, t in reversed(_history[chat_id])
-                                   if role == "assistant"), "")
-            if 'reply "yes"' in last_assistant:
-                # G-05: the last reply WAS a confirm ask, but nothing is
-                # pending (checked above) — the ask died with a restart,
-                # since pending confirmations live in process memory.
-                # Landing this yes/no in the agent loop produced confusing
-                # improvisation; honesty first. Conversational assent
-                # ("go ahead", a yes to a model's own question) falls
-                # through to the loop as normal conversation.
+        if word in _CONFIRM_WORDS or word in _DENY_WORDS:
+            # Scan the last few assistant turns, not just the newest: a
+            # proactive (temp alert, reminder) landing between the ask
+            # and the answer hid the ask and the owner's "ok" fell to
+            # the loop as small talk (found live 2026-08-27, AC-on ask
+            # killed by a deploy restart one minute after it was asked).
+            # An ask FOLLOWED by a resolution reply ("Done — ...",
+            # "cancelled") is settled — a casual "ok" after a completed
+            # confirm must not trigger a false "that ask expired".
+            recent = [t for role, t in _history[chat_id]
+                      if role == "assistant"][-5:]
+            ask_idx = max((i for i, t in enumerate(recent)
+                           if 'reply "yes"' in t), default=-1)
+            resolved = any(t.lstrip().startswith("Done")
+                           or "cancel" in t.lower()
+                           or "no longer pending" in t  # this very notice
+                           for t in recent[ask_idx + 1:]) if ask_idx >= 0 \
+                else True
+            if ask_idx >= 0 and not resolved:
+                # G-05: a recent reply WAS a confirm ask, but nothing is
+                # pending (checked above) — the ask died with a restart
+                # or its freshness TTL. Landing this word in the agent
+                # loop produced confusing improvisation; honesty first.
+                # Assent to a model's own conversational question still
+                # falls through: those replies never contain the literal
+                # 'reply "yes"' phrasing.
                 log_event("orphaned_confirmation_word", chat_id=chat_id, word=word)
-                return ("That ask didn't survive a restart, so nothing is "
-                        "waiting for your yes/no — please repeat the request "
-                        "and I'll ask again.")
+                return ("That ask is no longer pending (it expired or died "
+                        "with a restart), so nothing is waiting for your "
+                        f"\"{word}\" — please repeat the request and I'll "
+                        "ask again.")
+
+        if word in _ACK_WORDS:
+            _skip_extraction.set(True)
+            return "👍"
 
         forget_doc = _re.match(
             r"^\s*forget\s+(?:the\s+|that\s+)?(?:document|doc|card|pdf|brochure)"

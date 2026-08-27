@@ -651,8 +651,15 @@ def call(
         except Exception as exc:
             last_exc = exc
             log_event("model_call_error", tier=tier, provider=provider, model=model, attempt=attempt, error=str(exc))
-            if "is not set in this process" in str(exc):
-                break  # a missing api key never heals by retrying
+            text = str(exc)
+            if ("is not set in this process" in text  # missing api key
+                    # Auth failures are permanent for this process: a 401
+                    # got 3 full attempts live (2026-08-27, bad key at
+                    # boot), wasting two calls and delaying the local
+                    # fallback on EVERY message until the env was fixed.
+                    or "401" in text or "invalid_api_key" in text.lower()
+                    or isinstance(exc, KeyError)):  # env[...] miss
+                break
             if attempt < attempts - 1:
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 

@@ -146,3 +146,31 @@ def test_brief_flips_the_image_denial(monkeypatch):
     brief = capabilities.capability_brief()
     assert "analyze PHOTOS" not in brief
     assert "cannot create, draft, see" in brief
+
+
+async def test_empty_vision_answer_retries_once(monkeypatch):
+    """A successful call with a BLANK reply gets one in-process retry
+    (found live 2026-08-27: 7s call, empty answer, the owner had to
+    resend the photo); a second blank still gets the honest apology."""
+    calls = []
+
+    async def blank_then_good(prompt="", **kw):
+        calls.append(1)
+        text = '{"reply": ""}' if len(calls) == 1 else '{"reply": "A receipt."}'
+        return SimpleNamespace(text=text, latency_ms=1.0)
+
+    monkeypatch.setattr(photo.router, "acall", blank_then_good)
+    reply, _ = await photo.answer(9, "data:image/jpeg;base64,AAA", "")
+    assert reply == "A receipt."
+    assert len(calls) == 2
+
+    calls.clear()
+
+    async def always_blank(prompt="", **kw):
+        calls.append(1)
+        return SimpleNamespace(text='{"reply": ""}', latency_ms=1.0)
+
+    monkeypatch.setattr(photo.router, "acall", always_blank)
+    reply, _ = await photo.answer(9, "data:image/jpeg;base64,AAA", "")
+    assert "couldn't read that photo" in reply
+    assert len(calls) == 2  # exactly one retry, never a loop

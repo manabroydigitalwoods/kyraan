@@ -109,34 +109,43 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
                        "fact.\n")
     prompt = (f"Current date/time: {local_now().isoformat()}\n{faces_line}"
               f"OWNER'S CAPTION: {question}")
-    try:
-        response = await router.acall(prompt=prompt, system=_SYSTEM,
-                                      tier="frontier", max_tokens=2200,
-                                      # 700 broke live (2026-08-27 14:08,
-                                      # twice): document_text asks for a
-                                      # FULL transcription and nano's
-                                      # hidden reasoning shares this
-                                      # budget — the cap truncated the
-                                      # JSON to empty on any text-bearing
-                                      # photo
-                                      force_json=True,
-                                      images=[image_data_url])
-    except router.ModelProviderError as exc:
-        log_event("photo_vision_unavailable", error=str(exc)[:200])
-        raise VisionUnavailable(str(exc)) from exc
-    log_event("photo_answered", chat_id=chat_id, caption=caption[:80],
-              latency_ms=round(response.latency_ms))
     import json
-    try:
-        decision = json.loads(router.strip_code_fence(response.text))
-        reply = str(decision.get("reply", "")).strip()
-        name = decision.get("remember_face_as")
-        enroll_name = str(name).strip() if name else None
-        document_text = str(decision.get("document_text") or "").strip()
-    except (json.JSONDecodeError, AttributeError, TypeError):
-        # Robustness: an unparseable response is still a reply — losing
-        # the intent field beats losing the answer.
-        reply, enroll_name, document_text = response.text.strip(), None, ""
+    reply, enroll_name, document_text = "", None, ""
+    # An EMPTY answer from an otherwise-successful vision call happens
+    # (2026-08-27 19:38 live: 7s call, blank reply, the owner had to
+    # resend the photo). One in-process retry beats making a human be
+    # the retry loop; a second blank still gets the honest apology.
+    for attempt in range(2):
+        try:
+            response = await router.acall(prompt=prompt, system=_SYSTEM,
+                                          tier="frontier", max_tokens=2200,
+                                          # 700 broke live (2026-08-27
+                                          # 14:08, twice): document_text
+                                          # asks for a FULL transcription
+                                          # and nano's hidden reasoning
+                                          # shares this budget — the cap
+                                          # truncated the JSON to empty on
+                                          # any text-bearing photo
+                                          force_json=True,
+                                          images=[image_data_url])
+        except router.ModelProviderError as exc:
+            log_event("photo_vision_unavailable", error=str(exc)[:200])
+            raise VisionUnavailable(str(exc)) from exc
+        log_event("photo_answered", chat_id=chat_id, caption=caption[:80],
+                  latency_ms=round(response.latency_ms))
+        try:
+            decision = json.loads(router.strip_code_fence(response.text))
+            reply = str(decision.get("reply", "")).strip()
+            name = decision.get("remember_face_as")
+            enroll_name = str(name).strip() if name else None
+            document_text = str(decision.get("document_text") or "").strip()
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            # Robustness: an unparseable response is still a reply —
+            # losing the intent field beats losing the answer.
+            reply, enroll_name, document_text = response.text.strip(), None, ""
+        if reply:
+            break
+        log_event("photo_empty_retry", chat_id=chat_id, attempt=attempt)
     if enroll_name and (len(enroll_name) < 2 or len(enroll_name) > 40):
         enroll_name = None
     if document_text:

@@ -102,13 +102,47 @@ async def test_fresh_confirmation_still_works_within_ttl(monkeypatch):
     assert ran and "AC is ON" in reply
 
 
+_ASK = 'About to turn the AC ON — reply "yes" to confirm or "no" to cancel.'
+
+
 async def test_orphaned_yes_after_restart_is_honest(loop_reply):
     loop_reply()
     chat_id = 950_012
-    orchestrator._history[chat_id].append(
-        ("assistant", 'About to turn the AC ON — reply "yes" to confirm or "no" to cancel.'))
+    orchestrator._history[chat_id].append(("assistant", _ASK))
     reply = await orchestrator._dispatch(chat_id, "yes")
-    assert "didn't survive a restart" in reply
+    assert "no longer pending" in reply
+
+
+async def test_orphaned_ok_behind_a_proactive_is_honest(loop_reply):
+    # Found live 2026-08-27: a temp alert landed between the ask and the
+    # owner's "ok", hiding the ask from the single-newest-message check;
+    # "ok" fell to the loop as small talk.
+    loop_reply()
+    chat_id = 950_014
+    orchestrator._history[chat_id].append(("assistant", _ASK))
+    orchestrator._history[chat_id].append(
+        ("assistant", "Bedroom temperature is above 27°C"))
+    reply = await orchestrator._dispatch(chat_id, "ok")
+    assert "no longer pending" in reply
+
+
+async def test_ok_after_resolved_ask_is_a_plain_ack(loop_reply):
+    # An ask FOLLOWED by "Done — ..." is settled: a casual "ok" must not
+    # trigger a false "that ask expired" (it gets the bare-ack reply).
+    loop_reply()
+    chat_id = 950_015
+    orchestrator._history[chat_id].append(("assistant", _ASK))
+    orchestrator._history[chat_id].append(("assistant", "Done — the ac is on."))
+    reply = await orchestrator._dispatch(chat_id, "ok")
+    assert reply == "👍"
+
+
+async def test_bare_ack_never_reaches_the_loop(loop_reply):
+    calls = loop_reply()
+    chat_id = 950_016
+    reply = await orchestrator._dispatch(chat_id, "thanks")
+    assert reply == "👍"
+    assert not calls
 
 
 async def test_dropped_ask_is_noted_for_the_next_reply(loop_reply):

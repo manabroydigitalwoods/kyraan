@@ -185,9 +185,12 @@ async def tick(send=None) -> int:
             if not kernel.can_send_proactively(chat_id=rule.chat_id):
                 log_event("event_rule_held_dnd", rule_id=rule.id)
                 continue
-            text = (rule.message
-                    or f"👁 Watch rule: {rule.description} — "
-                       f"{rule.entity} is {state.get('state')}.")
+            # The custom message carries the live reading too — the owner
+            # got "above 27°C" with the actual 27.7 nowhere in sight.
+            reading = str(state.get("state"))
+            text = (f"{rule.message} (now: {reading})" if rule.message
+                    else f"👁 Watch rule: {rule.description} — "
+                         f"{rule.entity} is {reading}.")
             if send is not None:
                 await send(rule.chat_id, text)
             _mark_fired(rule.id)
