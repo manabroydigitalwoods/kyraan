@@ -232,6 +232,7 @@ ANOMALY_KINDS = frozenset({
     "budget_exhausted", "person_budget_exhausted",
     "token_guard_blocked", "pg_mirror_stale", "auto_approve_failed",
     "nightly_stage_failed", "pending_purge_failed", "event_rule_error",
+    "reply_delivery_failed",
 })
 
 _turn_anomalies: contextvars.ContextVar = contextvars.ContextVar(

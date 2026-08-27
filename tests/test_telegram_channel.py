@@ -535,3 +535,32 @@ async def test_voice_unavailable_and_empty_transcripts_stay_honest(monkeypatch):
     monkeypatch.setattr(voice, "transcribe", empty)
     await telegram_bot._on_voice(update, SimpleNamespace(bot=FakeBot()))
     assert "couldn't make out" in replies[1]
+
+
+async def test_deliver_retries_once_then_records_the_divergence(monkeypatch):
+    """CommitKernel-lite (2026-08-28): execution status and delivery
+    status are different facts — a dropped receipt after an executed
+    write gets one retry, then a greppable reply_delivery_failed event
+    carrying the undelivered text."""
+    import json
+    from kyraan.control_plane import logging_setup
+
+    attempts = []
+
+    async def flaky():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError("Timed out")
+
+    ok = await telegram_bot._deliver(7, flaky, "Done — the ac is off.")
+    assert ok is True and len(attempts) == 2
+
+    async def dead():
+        raise RuntimeError("Bad Gateway")
+
+    ok = await telegram_bot._deliver(7, dead, "Done — the ac is off.")
+    assert ok is False
+    events = [json.loads(l) for l in
+              logging_setup.EVENT_LOG.read_text().splitlines()]
+    failed = [e for e in events if e["kind"] == "reply_delivery_failed"]
+    assert failed and failed[-1]["undelivered"] == "Done — the ac is off."

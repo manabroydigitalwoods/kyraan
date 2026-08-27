@@ -124,7 +124,35 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply = await orchestrator.handle_message(chat_id, word)
         finally:
             _kernel.reset_viewer_stage(stage_token)
-    await context.bot.send_message(chat_id=chat_id, text=_plain(reply))
+    await _deliver(
+        chat_id,
+        lambda: context.bot.send_message(chat_id=chat_id, text=_plain(reply)),
+        reply)
+
+
+async def _deliver(chat_id: int, send, reply_preview: str) -> bool:
+    """Delivery truth (CommitKernel-lite, 2026-08-28): an action may have
+    EXECUTED even when Telegram drops the receipt — the turn's execution
+    status and its delivery status are different facts. One retry, then
+    an event that records the divergence with the undelivered text, so
+    "the AC switched but the owner never saw the receipt" is a greppable
+    fact instead of a mystery."""
+    from kyraan.control_plane.logging_setup import log_event
+    try:
+        await send()
+        return True
+    except Exception as exc:
+        log_event("reply_delivery_retry", chat_id=chat_id,
+                  error=str(exc)[:120])
+        await asyncio.sleep(1.5)
+        try:
+            await send()
+            return True
+        except Exception as exc2:
+            log_event("reply_delivery_failed", chat_id=chat_id,
+                      error=str(exc2)[:120],
+                      undelivered=reply_preview[:300])
+            return False
 
 
 # Burst coalescing, modeled on how two humans chat: B watches A's typing
@@ -291,7 +319,11 @@ async def _ingest_inner(update: Update, context: ContextTypes.DEFAULT_TYPE, text
             for position, (idx, reply) in enumerate(results):
                 source = fragments[min(idx, len(fragments) - 1)][0]
                 markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
-                await source.reply_text(_plain(reply), reply_markup=markup, do_quote=True)
+                await _deliver(
+                    chat_id,
+                    lambda s=source, r=reply, m=markup: s.reply_text(
+                        _plain(r), reply_markup=m, do_quote=True),
+                    reply)
             # A fragment that arrived after composition passed its safe
             # point couldn't retract this reply — it starts the next round
             # now (with this reply already in context) instead of sitting
