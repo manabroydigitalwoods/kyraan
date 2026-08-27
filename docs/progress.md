@@ -487,6 +487,18 @@ scripts/migrate.py, pg-marked tests, pg_dump in the nightly backup and
 scripts/restore.py — restore DRILLED into a scratch database (5 tables
 verified). Next: P3.0c (CI services), then P3.1 undo.
 
+**P3.0c + P3.1 DONE (2026-08-27):** CI got a dedicated job with real
+pgvector+redis service containers where the pg-marked tests must
+EXECUTE (a silent skip fails the job). Undo is live: every loop write
+declares its inverse in UNDO_MAP (home switches capture the observed
+prior state first; no-ops SKIP so they never occupy the undo head),
+both success points record to action_log, and the deterministic `undo`
+command (bare or targeted: "undo the reminder") asks with the concrete
+inverse named, replays it byte-identically through kernel gates on yes,
+and never silently reaches past an irreversible head. Eval grew four
+HARD cases running the two-step flow end to end — 20/20 HARD on the
+deploy run; bot restarted 12:21. Next: P3.2a (person + fact sync).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
