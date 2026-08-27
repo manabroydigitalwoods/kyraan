@@ -624,14 +624,20 @@ async def _documents_list(chat_id: int, args: dict, raw_text: str):
     import asyncio as _aio
 
     from kyraan.store import documents
+    person = str(args.get("person", "") or "").strip()
     try:
-        docs = await _aio.to_thread(documents.list_documents, chat_id)
+        docs = await _aio.to_thread(documents.list_documents, chat_id,
+                                    15, person)
     except Exception as exc:
         raise kernel.ToolFailed(
             f"document memory is unavailable right now ({str(exc)[:100]})")
     if not docs:
-        return {"found": 0, "note": "no documents saved yet"}
-    return [f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars)'
+        return {"found": 0,
+                "note": (f"no saved documents about {person}" if person
+                         else "no documents saved yet")}
+    return [f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars'
+            + (f', about: {", ".join(d["subjects"])}' if d["subjects"] else "")
+            + ')'
             for d in docs]
 
 
@@ -846,9 +852,10 @@ TOOLS = {
         "run": _memory_relations,
     },
     "documents.list": {
-        "params": "{}",
+        "params": '{"person": "<optional: only docs about this household member>"}',
         "about": ("The user's saved documents (caption, kind, date) — for "
                   "\"what documents do I have\", \"list my saved cards/PDFs\". "
+                  "Pass person for \"show Kiaan's documents\". "
                   'To delete one, tell the user to say "forget the document '
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,

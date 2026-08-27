@@ -53,14 +53,60 @@ def _chunks(text: str) -> list:
     return pieces or [text.strip()]
 
 
+def _registry_ids() -> list:
+    try:
+        from kyraan.store import persons
+        return [p[0] for p in persons.list_persons()]
+    except Exception:
+        return []
+
+
+def valid_subjects(candidates) -> list:
+    """Only ids from the person registry are ever stored as a document's
+    subjects — the model may PROPOSE them, the registry decides (house
+    pattern). Owner is never a subject: his docs are his by default."""
+    if isinstance(candidates, str):
+        candidates = [candidates]
+    ids = set(_registry_ids())
+    out = []
+    for candidate in candidates or []:
+        wanted = str(candidate or "").strip().lower().replace(" ", "_")
+        if wanted and wanted != "owner" and wanted in ids and wanted not in out:
+            out.append(wanted)
+    return out
+
+
+def subjects_from_name(title: str) -> list:
+    """Deterministic subjects from a human title: every enrolled person
+    named possessively ("Kiaan's vaccination card", "Ruma and Kiaan's
+    policy") or as "for <name>". Plain mentions don't count — a shop
+    called "Ruma Stores" must not tag the doc as being about Ruma."""
+    import re
+    low = str(title or "").lower()
+    out = []
+    for pid in _registry_ids():
+        if pid == "owner":
+            continue
+        name = re.escape(pid.replace("_", " "))
+        if re.search(rf"\b{name}(?:[’']s\b|\s+and\b)|\bfor {name}\b", low):
+            out.append(pid)
+    return out
+
+
 def ingest(chat_id: int, kind: str, text: str, caption: str = "",
-           filename: str = "") -> str | None:
+           filename: str = "", subjects=None) -> str | None:
     """Store one captured document. Returns the doc id, or None when the
     text is too thin to be a document. Idempotent: the same text in the
-    same chat is one document (re-sending a card doesn't duplicate)."""
+    same chat is one document (re-sending a card doesn't duplicate).
+    `subjects` are PROPOSED person ids (vision model / caller) — each
+    sticks only if the person registry knows it; a possessive caption
+    adds its people deterministically either way. One doc can be about
+    several people (a family policy naming Ruma AND Kiaan)."""
     text = text.strip()
     if len(text) < _MIN_TEXT_CHARS:
         return None
+    subjects = valid_subjects(subjects)
+    subjects += [p for p in subjects_from_name(caption) if p not in subjects]
     if not caption and not filename:
         # Last-resort human name: the first meaningful content line —
         # "show me all docs" listing photo "(untitled)" rows told the
@@ -79,11 +125,13 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
     with pg.connection() as conn:
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
-                                     text, flags)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)
+                                     text, flags, subject_persons)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
-                   caption = EXCLUDED.caption, flags = EXCLUDED.flags""",
-            (doc_id, chat_id, kind, caption[:300], filename[:200], text, flags))
+                   caption = EXCLUDED.caption, flags = EXCLUDED.flags,
+                   subject_persons = EXCLUDED.subject_persons""",
+            (doc_id, chat_id, kind, caption[:300], filename[:200], text,
+             flags, subjects))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):
@@ -176,17 +224,19 @@ def relevant_snippet(chat_id: int, message: str) -> str | None:
             + clipped.replace("\n", " ⏎ "))
 
 
-def list_documents(chat_id: int, limit: int = 15) -> list:
+def list_documents(chat_id: int, limit: int = 15, person: str = "") -> list:
+    person = (valid_subjects(person) or [""])[0]
     with pg.connection() as conn:
         rows = conn.execute(
             """SELECT id, kind, caption, filename, created_at::date,
-                      length(text)
+                      length(text), subject_persons
                FROM document WHERE chat_id = %s AND suppressed_by = '{}'
+                     AND (%s = '' OR %s = ANY(subject_persons))
                ORDER BY created_at DESC LIMIT %s""",
-            (chat_id, limit)).fetchall()
+            (chat_id, person, person, limit)).fetchall()
     return [{"id": str(i), "kind": k, "caption": c or f or "(untitled)",
-             "date": d.isoformat(), "chars": n}
-            for i, k, c, f, d, n in rows]
+             "date": d.isoformat(), "chars": n, "subjects": list(s or [])}
+            for i, k, c, f, d, n, s in rows]
 
 
 def rename_document(chat_id: int, doc_id: str, caption: str) -> str | None:
@@ -202,9 +252,20 @@ def rename_document(chat_id: int, doc_id: str, caption: str) -> str | None:
             (chat_id, doc_id)).fetchone()
         if not row:
             return None
-        conn.execute("UPDATE document SET caption = %s WHERE id = %s",
-                     (caption[:300], doc_id))
-    log_event("document_renamed", chat_id=chat_id, caption=caption[:80])
+        # People named in the new title JOIN the doc's subjects (union,
+        # never replace): renaming "Kiaan's vaccination card" to plain
+        # "vaccination card" must not orphan the link, and adding
+        # "…and Ruma's" must not drop Kiaan.
+        subjects = subjects_from_name(caption)
+        conn.execute(
+            """UPDATE document SET caption = %s,
+                   subject_persons = (SELECT coalesce(array_agg(DISTINCT p),
+                                                      '{}')
+                                      FROM unnest(subject_persons || %s) p)
+               WHERE id = %s""",
+            (caption[:300], subjects, doc_id))
+    log_event("document_renamed", chat_id=chat_id, caption=caption[:80],
+              subjects=subjects)
     return row[0]
 
 

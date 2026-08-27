@@ -160,3 +160,44 @@ def test_rename_undo_swaps_names_back():
              "now": "Kiaan's card"}, None
     ) == ("documents.rename", {"query": "Kiaan's card",
                                "new_name": "Immunization card"})
+
+
+@pytest.fixture
+def _household(monkeypatch):
+    monkeypatch.setattr(documents, "_registry_ids",
+                        lambda: ["owner", "kiaan", "ruma"])
+
+
+def test_subjects_from_name_is_possessive_only(_household):
+    assert documents.subjects_from_name("Kiaan's vaccination card") == ["kiaan"]
+    assert documents.subjects_from_name("policy for Ruma and Kiaan's future") \
+        == ["kiaan", "ruma"]
+    # a business named after a person is not ABOUT them
+    assert documents.subjects_from_name("Ruma Stores cash memo") == []
+    assert documents.subjects_from_name("the owner's receipt") == []
+
+
+def test_valid_subjects_registry_decides(_household):
+    assert documents.valid_subjects(["Kiaan", "stranger", "owner", "kiaan"]) \
+        == ["kiaan"]  # registry-only, never owner, deduped
+
+
+@pytest.mark.pg
+def test_multi_person_doc_and_person_filter(doc_db, _household):
+    documents.ingest(7, "photo", _CARD, caption="Ruma and Kiaan's policy")
+    documents.ingest(7, "photo", _CARD + " extra", caption="AC invoice")
+    both = documents.list_documents(7)
+    assert sorted(both[1]["subjects"]) == ["kiaan", "ruma"]
+    assert [d["caption"] for d in documents.list_documents(7, person="Kiaan")] \
+        == ["Ruma and Kiaan's policy"]
+
+
+@pytest.mark.pg
+def test_rename_unions_subjects_never_drops(doc_db, _household):
+    doc_id = documents.ingest(7, "photo", _CARD,
+                              caption="Kiaan's vaccination card")
+    documents.rename_document(7, doc_id, "vaccination card")  # no name
+    assert documents.list_documents(7)[0]["subjects"] == ["kiaan"]
+    documents.rename_document(7, doc_id, "Ruma's copy of the card")
+    assert sorted(documents.list_documents(7)[0]["subjects"]) \
+        == ["kiaan", "ruma"]

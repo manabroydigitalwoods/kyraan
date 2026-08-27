@@ -68,6 +68,10 @@ there.
 When document_text is set, also set "document_title" to a 2-6 word
 human name for it ("HP Gas cash memo", "Sharma Medical visiting
 card") — what the owner would call this document; otherwise "".
+Also set "document_subjects" to a list of household member names the
+document is ABOUT — the patient on a medical card, the people a
+policy names — using names from the caption/faces line only, [] when
+unsure. Businesses and strangers are never subjects.
 Set "remember_face_as" to a NAME string instead of null ONLY when the
 caption asks — in any wording or language — to remember/save/enroll this
 face for future recognition ("remember this face as Maan", "save him as
@@ -150,11 +154,13 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             enroll_name = str(name).strip() if name else None
             document_text = str(decision.get("document_text") or "").strip()
             document_title = str(decision.get("document_title") or "").strip()
+            document_subjects = decision.get("document_subjects") or []
         except (json.JSONDecodeError, AttributeError, TypeError):
             # Robustness: an unparseable response is still a reply —
             # losing the intent field beats losing the answer.
             reply, enroll_name = response.text.strip(), None
             document_text = document_title = ""
+            document_subjects = []
         if reply:
             break
         log_event("photo_empty_retry", chat_id=chat_id, attempt=attempt)
@@ -170,8 +176,11 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             # model's 2-6 word title otherwise — "show me all docs" was
             # a wall of photo "(untitled)" entries (owner: "human
             # readability", 2026-08-27).
+            # Subjects are PROPOSED here; the person registry decides
+            # inside ingest (only enrolled ids ever stick).
             doc_id = documents.ingest(chat_id, "photo", document_text,
-                                      caption=(caption or document_title)[:120])
+                                      caption=(caption or document_title)[:120],
+                                      subjects=document_subjects)
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "
                           "it anytime.")
