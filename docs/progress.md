@@ -613,6 +613,27 @@ Redis window survived a real bot restart; 17 chats seeded. Eval 21/21
 HARD, soft 11/11 on the final build. Remaining in Phase 3: P3.5
 (gated on the 8-fact subject review queue), then the gate + Part 7.
 
+**Part 5 COMPLETE — ENGINEERING-DONE functionally met (2026-08-27):**
+the owner cleared the subject queue in-chat (8 facts assigned; family
+facts to ganak_roy/ruma/kiaan) and P3.5a-e all landed same day:
+explicit enrollment ceremony with the audit-P1 gate enforced in code;
+three-layer per-stage tool scoping (menu, loop dispatch rail, kernel
+wall — the AC probe caught the kernel-less-executor hole); the §4
+visibility WHERE clause in the one fact read path with fail-closed
+file fallbacks, per-person extraction flags, and person-keyed review
+queues; cross-person disputes (author-stamped facts, both stand
+flagged, subject-owner resolves — supersession never crosses
+reviewers), per-person DND windows and daily budget caps; and
+governance-§6 review scaling (200/90% earns sampled mode, 24h
+objection windows, retriggers on wrong auto-approval/tier
+change/prompt change, trust re-earned after any). Eval 21/21 HARD +
+11/11 soft on the final build; suite 644. Every ENGINEERING-DONE
+criterion in arch §7 is met EXCEPT the soak rhythm, which the owner
+explicitly waived (cutovers + parts compressed into 2026-08-27).
+ROLLOUT-APPROVED stays independent: the 30-day clock runs to
+~2026-09-26 + Ruma's §1 consent. Remaining engineering: Part 7
+(P3.7a degraded parity — baseline 17/21; P3.7b classifier deletion).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
