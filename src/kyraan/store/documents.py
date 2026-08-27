@@ -113,7 +113,8 @@ def _store_original(doc_id: str, original: tuple) -> str:
     import os
     data, ext = original
     ext = "." + str(ext).strip(". ").lower()
-    if ext not in (".jpg", ".jpeg", ".png", ".pdf"):
+    if ext not in (".jpg", ".jpeg", ".png", ".pdf", ".txt", ".csv",
+                   ".md", ".json", ".log", ".docx"):
         return ""
     FILES_DIR.mkdir(parents=True, exist_ok=True)
     try:

@@ -546,6 +546,70 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 _PDF_MAX_BYTES = 15 * 1024 * 1024
 
 
+_TEXT_DOC_EXTS = (".txt", ".csv", ".md", ".json", ".log")
+
+
+async def _on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Non-PDF document intake (audit item 3, 2026-08-28): text files
+    and .docx join document memory — same pipeline as PDFs (local
+    extraction, original stored, hash-deduped). Anything else gets the
+    honest unsupported reply."""
+    if not _owner_private(update):
+        return
+    document = update.message.document
+    filename = (document.file_name or "").lower()
+    chat_id = update.effective_chat.id
+    ext = "." + filename.rsplit(".", 1)[-1] if "." in filename else ""
+    if ext not in _TEXT_DOC_EXTS and ext != ".docx":
+        await update.message.reply_text(
+            f"I can't read {ext or 'that'} files yet — PDF, Word (.docx), "
+            "or plain text/CSV work.", do_quote=True)
+        return
+    if (document.file_size or 0) > _PDF_MAX_BYTES:
+        await update.message.reply_text(
+            "That file is too large for me to keep — under "
+            f"{_PDF_MAX_BYTES // (1024 * 1024)}MB works.", do_quote=True)
+        return
+    handle = await document.get_file()
+    data = bytes(await handle.download_as_bytearray())
+    if ext == ".docx":
+        import io as _io
+
+        def _read_docx() -> str:
+            import docx as _docx
+            parsed = _docx.Document(_io.BytesIO(data))
+            parts = [p.text for p in parsed.paragraphs if p.text.strip()]
+            for table in parsed.tables:
+                for row in table.rows:
+                    parts.append(" | ".join(c.text.strip()
+                                            for c in row.cells))
+            return "\n".join(parts).strip()
+
+        try:
+            text = await asyncio.to_thread(_read_docx)
+        except Exception as exc:
+            logger.warning("docx read failed: %s", exc)
+            await update.message.reply_text(
+                "I couldn't read that Word file — is it a real .docx?",
+                do_quote=True)
+            return
+    else:
+        text = data.decode("utf-8", errors="replace").strip()
+    from kyraan.store import documents
+    import asyncio as _aio
+    doc_id = await _aio.to_thread(
+        lambda: documents.ingest(
+            chat_id, "file", text, (update.message.caption or "")[:120],
+            document.file_name or "", original=(data, ext.lstrip("."))))
+    reply = (f'📄 Saved "{document.file_name}" to document memory '
+             f"({len(text):,} chars) — ask me about it anytime."
+             if doc_id else
+             "I couldn't distill any text worth keeping from that file.")
+    await update.message.reply_text(reply, do_quote=True)
+    orchestrator.record_exchange(
+        chat_id, f"[sent a file: {document.file_name}]", reply)
+
+
 async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Document memory (2026-08-27): a PDF from the OWNER is captured —
     text layer extracted locally (no model, no cloud), chunked, embedded
@@ -854,6 +918,19 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
     # conditions evaluated every 15 min — notify-only by doctrine.
     from kyraan.triggers import event_rules
 
+    # Same-day episode catch-up (2026-08-28): recall stays within ~30
+    # min of live instead of waiting for the 21:45 ingest.
+    async def _episode_catchup(context: ContextTypes.DEFAULT_TYPE) -> None:
+        import asyncio as _aio2
+        from kyraan.store import episodes as _episodes
+        try:
+            await _aio2.to_thread(_episodes.catch_up_today)
+        except Exception as exc:
+            logger.warning("episode catch-up failed: %s", exc)
+
+    job_queue.run_repeating(_episode_catchup, interval=1800, first=600,
+                            name="episode_catchup")
+
     async def _rules_job(context: ContextTypes.DEFAULT_TYPE) -> None:
         # Send via the job's context like every proactive job here — a
         # module-level send_fn captured at wiring time referenced a name
@@ -953,6 +1030,8 @@ def run() -> None:
     app.add_handler(MessageHandler(filters.LOCATION | filters.VENUE, _on_location))
     app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
     app.add_handler(MessageHandler(filters.Document.PDF, _on_pdf))
+    app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.PDF,
+                                   _on_document))
     app.add_handler(MessageHandler(
         filters.VIDEO | filters.AUDIO
         | filters.Sticker.ALL | filters.Document.ALL,

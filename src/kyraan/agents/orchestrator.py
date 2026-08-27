@@ -61,6 +61,12 @@ _ACK_WORDS = {"ok", "okay", "k", "kk", "thanks", "thank you", "thx", "ty",
 
 import re as _re
 
+_CORRECTION_RE = _re.compile(
+    r"^\s*(?:no[,.! ]|that'?s (?:wrong|not right|not it)|wrong[,.! ]"
+    r"|i meant\b|i said\b|not that\b|it (?:will|should) be\b"
+    r"|actually[,. ]|you (?:got|read) (?:it|that) wrong)",
+    _re.IGNORECASE)
+
 _FORGET_FACE_RE = _re.compile(
     r"^\s*forget\s+(?:the\s+)?face\s+(?:of\s+)?(.{2,40}?)\s*[.!]?\s*$",
     _re.IGNORECASE)
@@ -401,6 +407,15 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     start_anomaly_capture()  # health layer: this turn's anomaly verdict
     turn_started = time.monotonic()
     log_trace("turn_start", chat_id=chat_id, user_text=raw_text)
+    if _CORRECTION_RE.match(raw_text):
+        # Eval-candidate capture (audit item 5, 2026-08-28): a turn the
+        # user opens by CORRECTING the previous reply is the highest-
+        # value eval material there is — logged with the reply it
+        # corrects, greppable as a corpus for the golden suite.
+        last = next((t for role, t in reversed(_history[chat_id])
+                     if role == "assistant"), "")
+        log_event("user_correction_candidate", chat_id=chat_id,
+                  correction=raw_text[:200], corrected_reply=last[:300])
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
     degraded_token = _degraded_turn.set(False)

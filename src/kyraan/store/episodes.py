@@ -185,7 +185,8 @@ def _participants(conn, chat_id: int) -> list:
     return sorted({person, "owner"})
 
 
-def ingest_day(day: str, records: list, tag=None) -> dict:
+def ingest_day(day: str, records: list, tag=None,
+               skip_unchanged: bool = False) -> dict:
     """Chunk → tag → embed → upsert one day's records. Returns counts.
     `tag` is injectable for tests; defaults to the local model pass."""
     tag = tag or sensitivity_flags
@@ -198,6 +199,25 @@ def ingest_day(day: str, records: list, tag=None) -> dict:
             meta.append((chat_id, chunk[0][0], body))
     if not texts:
         return {"episodes": 0}
+    if skip_unchanged:
+        # Same-day catch-up (2026-08-28): every pass re-tagged and
+        # re-embedded EVERY chunk (a nano call each) — a half-hourly job
+        # must touch only chunks whose text actually grew. Chunk ids are
+        # deterministic (chat, first_ts), so identical text = no work.
+        wanted = [episode_uuid(c, ts) for c, ts, _ in meta]
+        with pg.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, text FROM episode WHERE id = ANY(%s)",
+                (wanted,)).fetchall()
+        unchanged = {str(i) for i, t in rows}
+        existing_text = {str(i): t for i, t in rows}
+        keep = [k for k, (c, ts, body) in enumerate(meta)
+                if episode_uuid(c, ts) not in unchanged
+                or existing_text[episode_uuid(c, ts)] != body]
+        if not keep:
+            return {"episodes": 0}
+        texts = [texts[k] for k in keep]
+        meta = [meta[k] for k in keep]
     vectors = embed.embed(texts)
     written = 0
     with pg.connection() as conn:
@@ -399,7 +419,16 @@ def ingest_recent(days: list) -> dict:
             continue
     totals = {"episodes": 0}
     for day in days:
-        result = ingest_day(day, records_for_day(day, parsed))
+        result = ingest_day(day, records_for_day(day, parsed),
+                            skip_unchanged=True)
         totals["episodes"] += result.get("episodes", 0)
     log_event("episodes_ingested", days=days, **totals)
     return totals
+
+
+def catch_up_today() -> dict:
+    """Same-day recall (2026-08-28): episodes ingested only at 21:45
+    made "what did we discuss this morning?" blind until tonight. A
+    half-hourly pass keeps recall within ~30 min of live, touching only
+    chunks whose text changed."""
+    return ingest_recent([local_now().date().isoformat()])

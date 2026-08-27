@@ -369,3 +369,34 @@ def test_normalize_maps_paraphrases_and_drops_junk():
     assert episodes.normalize_flags(
         ["finances", "legal matters", "_sensitive", "grief", "health",
          "sensory", "banana"]) == ["emotional", "health", "sensitive"]
+
+
+@pytest.mark.pg
+def test_catch_up_skips_unchanged_chunks(episode_db, monkeypatch):
+    """Same-day recall (2026-08-28): the half-hourly pass must re-tag
+    only chunks whose text actually changed."""
+    tags = []
+
+    def counting_tag(text, exposure="cloud_ok"):
+        tags.append(text)
+        return []
+
+    records = [
+        {"ts": "2026-08-28T05:00:00+00:00", "chat_id": 7, "role": "user",
+         "text": "morning plan: gym then office"},
+        {"ts": "2026-08-28T05:01:00+00:00", "chat_id": 7, "role": "assistant",
+         "text": "Noted — gym first."},
+    ]
+    day = "2026-08-28"
+    from kyraan.store import episodes
+    first = episodes.ingest_day(day, records, tag=counting_tag,
+                                skip_unchanged=True)
+    assert first["episodes"] == 1 and len(tags) == 1
+    again = episodes.ingest_day(day, records, tag=counting_tag,
+                                skip_unchanged=True)
+    assert again["episodes"] == 0 and len(tags) == 1   # nothing re-tagged
+    records.append({"ts": "2026-08-28T05:05:00+00:00", "chat_id": 7,
+                    "role": "user", "text": "also call the dentist"})
+    grown = episodes.ingest_day(day, records, tag=counting_tag,
+                                skip_unchanged=True)
+    assert grown["episodes"] == 1 and len(tags) == 2   # only the grown chunk

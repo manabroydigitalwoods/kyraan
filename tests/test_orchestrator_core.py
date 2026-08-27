@@ -294,3 +294,14 @@ async def test_unprompted_time_fragment_still_waits(loop_reply):
     reply = await orchestrator._dispatch(chat_id, "at 5am")
     assert reply == "Go on — I'm listening…"
     assert not calls
+
+
+def test_correction_openers_are_flagged():
+    """Audit item 5 (2026-08-28): correction turns are eval-corpus gold."""
+    for yes in ("no, that reminder is wrong", "that's wrong", "i meant 5am",
+                "it will be OMNIGEL not OMINM", "actually, make it Friday",
+                "you got it wrong"):
+        assert orchestrator._CORRECTION_RE.match(yes), yes
+    for no in ("nothing much", "note this down", "noon works",
+               "it is hot today", "say that again"):
+        assert not orchestrator._CORRECTION_RE.match(no), no
