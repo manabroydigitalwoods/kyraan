@@ -663,6 +663,36 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
             for h in hits]
 
 
+async def _email_draft(chat_id: int, args: dict, raw_text: str):
+    """Create a Gmail DRAFT — never send (owner: "we can hold email
+    reply... we can just draft the email", 2026-08-27). The owner
+    reviews and presses send in Gmail; undo deletes the draft. The body
+    is composed from the user's own words plus sender/subject metadata —
+    the loop has never seen any email body (local-only boundary), so a
+    draft can never quote one."""
+    import asyncio as _aio
+
+    from kyraan.tools import gmail
+    to = str(args.get("to", "") or "").strip()
+    reply_to = str(args.get("reply_to_query", "") or "").strip()
+    subject = str(args.get("subject", "") or "").strip()
+    body = str(args.get("body", "") or "").strip()
+    if not body or len(body) > 5000:
+        raise kernel.ToolFailed("give the draft a body (up to 5000 chars)")
+    if not to and not reply_to:
+        raise kernel.ToolFailed(
+            "need either a recipient (to) or the email to reply to "
+            "(reply_to_query)")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("email.draft", dict(args))
+    try:
+        result = await _aio.to_thread(gmail._create_draft, to, subject,
+                                      body, reply_to)
+    except gmail.ToolError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"drafted": True, **result}
+
+
 async def _documents_rename(chat_id: int, args: dict, raw_text: str):
     """The user naming a saved capture in conversation ("this is
     Kiaan's vaccination card") must stick — found live 2026-08-27: the
@@ -860,6 +890,20 @@ TOOLS = {
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,
     },
+    "email.draft": {
+        "params": ('{"reply_to_query": "<sender/subject words of the email '
+                   'to reply to, or empty>", "to": "<address, for a fresh '
+                   'mail>", "subject": "<empty = Re: original>", '
+                   '"body": "<the draft text>"}'),
+        "about": ("Save a DRAFT in the user's Gmail — never sends; the user "
+                  "reviews and sends it from Gmail themselves. Use when "
+                  "asked to draft/write/prepare an email or a reply "
+                  "(\"draft a reply to the Amazon Pay mail: paid it "
+                  "today\"). Compose the body from the user's words — you "
+                  "have never seen any email body, so never invent quotes "
+                  "from one."),
+        "run": _email_draft,
+    },
     "documents.rename": {
         "params": '{"query": "<words that find it>", "new_name": "<short name>"}',
         "about": ("Give a saved document a better name. Use when the user "
@@ -1045,6 +1089,9 @@ UNDO_MAP = {
         ("rules.cancel", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
     "rules.cancel": lambda a, r, p: None,  # re-creation needs the full spec
+    "email.draft": lambda a, r, p: (
+        ("email.draft_delete", {"draft_id": r["draft_id"]})
+        if isinstance(r, dict) and r.get("draft_id") else None),
     "documents.rename": lambda a, r, p: (
         ("documents.rename", {"query": r["now"], "new_name": r["prior"]})
         if isinstance(r, dict) and r.get("prior") and r.get("now") else None),
@@ -1201,6 +1248,15 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "documents.rename":
         return (f'About to rename the saved document matching '
                 f'"{args.get("query")}" to "{args.get("new_name")}"')
+    if tool == "email.draft":
+        target = (f'a REPLY to the email matching "{args.get("reply_to_query")}"'
+                  if args.get("reply_to_query")
+                  else f'a new email to {args.get("to")}')
+        subject = f'\nSubject: {args.get("subject")}' if args.get("subject") else ""
+        # The owner approves the ACTUAL text — a draft lands in their
+        # Gmail under their name, so no summary stands in for it.
+        return (f"About to save {target} as a Gmail DRAFT (never sent — "
+                f"you send it from Gmail):{subject}\n---\n{args.get('body')}\n---")
     return f"Run {tool} with {json.dumps(args)}?"
 
 
@@ -1253,4 +1309,8 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "documents.rename" and isinstance(outcome, dict):
         return (f'Renamed the document "{outcome.get("prior")}" → '
                 f'"{outcome.get("now")}" — ask for it by that name anytime.')
+    if tool == "email.draft" and isinstance(outcome, dict):
+        return (f'Draft saved in your Gmail (to {outcome.get("to")}, '
+                f'subject "{outcome.get("subject")}") — open Gmail to '
+                'review and send it. Say "undo" to delete the draft.')
     return f"Done: {tool}."

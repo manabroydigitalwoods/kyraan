@@ -901,6 +901,9 @@ def _describe_undo(action) -> str:
     if action.tool == "documents.rename":
         return (f'Undo: rename that document back to '
                 f'"{ua.get("new_name", "")}"')
+    if action.tool == "email.draft":
+        return (f'Undo: delete the Gmail draft "{a.get("subject") or ""}" '
+                "I just saved")
     return f"Undo the last action ({action.tool})"
 
 
@@ -958,6 +961,11 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
             elif ut == "rules.cancel":
                 from kyraan.triggers import event_rules
                 event_rules.cancel(chat_id, ua["rule_id"])
+            elif ut == "email.draft_delete":
+                from kyraan.tools import gmail as _gmail
+                if not await _aio.to_thread(
+                        _gmail._delete_draft, str(ua.get("draft_id", ""))):
+                    raise kernel.ToolFailed("that draft is already gone")
             elif ut == "documents.rename":
                 from kyraan.store import documents as _documents
                 hits = await _aio.to_thread(

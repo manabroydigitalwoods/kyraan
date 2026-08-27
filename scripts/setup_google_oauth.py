@@ -45,6 +45,12 @@ SCOPES = [
     ("https://www.googleapis.com/auth/gmail.readonly"
      if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local"
      else "https://www.googleapis.com/auth/gmail.metadata"),
+    # KYRAAN_EMAIL_DRAFTS=on (owner, 2026-08-27): Kyraan may CREATE
+    # drafts — the owner sends from Gmail. Google offers no drafts-only
+    # scope (compose is the narrowest and technically permits sending);
+    # the enforced boundary is the codebase: NO send code path exists.
+    *(["https://www.googleapis.com/auth/gmail.compose"]
+      if os.environ.get("KYRAAN_EMAIL_DRAFTS", "").strip() == "on" else []),
 ]
 
 

@@ -9,6 +9,7 @@ Adapter contract (docs/design/tool_registry.md): `async def call(tool_name, args
 import asyncio
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from kyraan.tools.google_auth import access_token
@@ -46,6 +47,103 @@ def _api(path: str) -> dict:
         raise ToolError(f"Gmail error {exc.code} on {path}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise TransientToolError(f"could not reach Gmail: {exc}") from exc
+
+
+def _api_post(path: str, payload: dict, method: str = "POST") -> dict:
+    request = urllib.request.Request(
+        f"{_BASE}{path}", data=json.dumps(payload).encode(), method=method,
+        headers={"Authorization": f"Bearer {access_token()}",
+                 "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=10) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ToolError(
+                f"Gmail refused the draft ({exc.code}) — drafts need the "
+                "gmail.compose scope: set KYRAAN_EMAIL_DRAFTS=on in .env and "
+                "re-run scripts/setup_google_oauth.py") from exc
+        if exc.code >= 500:
+            raise TransientToolError(f"Gmail returned {exc.code}") from exc
+        raise ToolError(f"Gmail error {exc.code} on {path}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise TransientToolError(f"could not reach Gmail: {exc}") from exc
+
+
+def drafts_enabled() -> bool:
+    """Owner opt-in (2026-08-27, after "we can hold email reply... we can
+    just draft the email"): Kyraan may CREATE drafts in the owner's Gmail
+    — the owner reviews and presses send in Gmail themselves. Gmail has
+    no drafts-only scope (gmail.compose is the narrowest), so the real
+    boundary is this codebase: NO send code path exists anywhere."""
+    import os
+    return os.environ.get("KYRAAN_EMAIL_DRAFTS", "").strip() == "on"
+
+
+def _mime_raw(to: str, subject: str, body: str,
+              reply_headers: dict | None = None) -> str:
+    import base64
+    from email.mime.text import MIMEText
+    mime = MIMEText(body, "plain", "utf-8")
+    mime["To"] = to
+    mime["Subject"] = subject
+    for name, value in (reply_headers or {}).items():
+        mime[name] = value
+    return base64.urlsafe_b64encode(mime.as_bytes()).decode()
+
+
+def _create_draft(to: str, subject: str, body: str,
+                  reply_to_query: str = "") -> dict:
+    """Create ONE Gmail draft; replies thread onto the matched message
+    (In-Reply-To/References + threadId) so Gmail shows them in place."""
+    reply_headers, thread_id = {}, None
+    if reply_to_query:
+        listing = _api(f"/messages?maxResults=1&q={urllib.parse.quote(reply_to_query)}"
+                       ) if bodies_enabled() else None
+        # metadata scope forbids q= — fall back to scanning unread headers
+        if listing is None:
+            listing = _api("/messages?maxResults=25&labelIds=UNREAD")
+            wanted = reply_to_query.lower()
+            match_id = None
+            for m in listing.get("messages", []):
+                meta = _api(f"/messages/{m['id']}?format=metadata"
+                            "&metadataHeaders=From&metadataHeaders=Subject")
+                if wanted in (_header(meta, "From") + " "
+                              + _header(meta, "Subject")).lower():
+                    match_id = m["id"]
+                    break
+            listing = {"messages": [{"id": match_id}]} if match_id else {}
+        messages = listing.get("messages") or []
+        if not messages:
+            raise ToolError(f"no email matches {reply_to_query!r} to reply to")
+        original = _api(f"/messages/{messages[0]['id']}?format=metadata"
+                        "&metadataHeaders=From&metadataHeaders=Subject"
+                        "&metadataHeaders=Message-ID")
+        thread_id = original.get("threadId")
+        message_id = _header(original, "Message-ID")
+        if message_id:
+            reply_headers = {"In-Reply-To": message_id,
+                             "References": message_id}
+        to = to or _header(original, "From")
+        original_subject = _header(original, "Subject")
+        if not subject and original_subject:
+            subject = original_subject if original_subject.lower().startswith(
+                "re:") else f"Re: {original_subject}"
+    message: dict = {"raw": _mime_raw(to, subject, body, reply_headers)}
+    if thread_id:
+        message["threadId"] = thread_id
+    draft = _api_post("/drafts", {"message": message})
+    return {"draft_id": draft.get("id", ""), "to": to, "subject": subject}
+
+
+def _delete_draft(draft_id: str) -> bool:
+    try:
+        _api_post(f"/drafts/{urllib.parse.quote(draft_id)}", {},
+                  method="DELETE")
+        return True
+    except ToolError:
+        return False  # already gone / never existed
 
 
 def _header(message: dict, name: str) -> str:

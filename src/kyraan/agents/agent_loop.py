@@ -296,6 +296,8 @@ def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
             continue  # same rule: no key, no menu entry, no false ability
         if name == "email.read" and not _gmail.bodies_enabled():
             continue  # owner hasn't opted into local body reading
+        if name == "email.draft" and not _gmail.drafts_enabled():
+            continue  # owner hasn't opted into draft creation
         about = spec["about"].replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
         about = about.replace(
             "PLACEHOLDER_EMAIL_BODIES",
