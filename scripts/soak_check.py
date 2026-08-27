@@ -24,7 +24,9 @@ from kyraan.control_plane.dnd import local_now  # noqa: E402
 
 _DIRTY = ("memory_backend_fallback", "promises_backend_fallback",
           "promise_sync_deferred", "fact_sync_deferred",
-          "episode_suppress_deferred")
+          "episode_suppress_deferred",
+          # P3.4 (Redis session backend, soaking since 2026-08-27):
+          "session_backend_fallback", "confirmation_restore_failed")
 _SOAK_START = "2026-08-27"  # both flags set this day
 
 
