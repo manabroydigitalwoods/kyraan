@@ -442,13 +442,18 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
               anomaly_count=len(anomalies),
               latency_ms=round((time.monotonic() - turn_started) * 1000),
               degraded=_degraded_turn.get() or None)
-    try:
-        from kyraan.triggers import health_alerts
-        alert = health_alerts.check(anomalies)
-        if alert:
-            reply += alert
-    except Exception as exc:  # the warning light must never break the reply
-        log_event("health_alert_failed", error=str(exc)[:120])
+    if kernel.viewer_person() == "owner":
+        # Warning lights are OWNER-ONLY: a non-owner turn's anomalies
+        # still land in events and the nightly census, but the in-band
+        # line must never surface system internals in someone else's
+        # chat — nor burn the daily alert where the owner can't see it.
+        try:
+            from kyraan.triggers import health_alerts
+            alert = health_alerts.check(anomalies)
+            if alert:
+                reply += alert
+        except Exception as exc:  # the light must never break the reply
+            log_event("health_alert_failed", error=str(exc)[:120])
 
     quota_warning = router.quota_alert_due()
     if quota_warning:

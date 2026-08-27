@@ -118,3 +118,37 @@ async def test_health_report_chat_phrase(monkeypatch):
     reply = await orchestrator._dispatch(960_004, "health report")
     assert reply.startswith("🩺 OK")
     assert "COMPONENTS" in reply
+
+async def test_non_owner_turns_never_carry_the_warning_line(monkeypatch):
+    from kyraan.control_plane import kernel
+
+    async def fake_run(chat_id, raw_text, tier):
+        logging_setup.log_event("agent_all_tiers_failed")
+        return "her reply."
+
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    token = kernel.set_viewer("ruma", "read_mostly")
+    try:
+        reply = await orchestrator.handle_message(960_005, "hello out there!")
+    finally:
+        kernel.reset_viewer_stage(token)
+    assert "⚠️ Health" not in reply
+    # and the daily alert was NOT burned — the owner still gets it
+    assert health_alerts.check(["agent_all_tiers_failed"]) is not None
+
+
+async def test_health_report_phrase_is_owner_only(monkeypatch):
+    from kyraan.control_plane import kernel
+    monkeypatch.setattr(health, "report",
+                        lambda: ("OK", "SECRET INTERNALS"))
+
+    async def fake_run(chat_id, raw_text, tier):
+        return "normal reply."
+
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    token = kernel.set_viewer("ruma", "read_mostly")
+    try:
+        reply = await orchestrator._dispatch(960_006, "health report")
+    finally:
+        kernel.reset_viewer_stage(token)
+    assert "SECRET INTERNALS" not in reply
