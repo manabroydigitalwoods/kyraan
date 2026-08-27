@@ -117,7 +117,12 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 text="That button belongs to an earlier ask and is no longer "
                      "active — reply to the latest confirmation instead.")
             return
-        reply = await orchestrator.handle_message(chat_id, word)
+        from kyraan.control_plane import kernel as _kernel
+        stage_token = _kernel.set_viewer_stage(_viewer_stage_for(update))
+        try:
+            reply = await orchestrator.handle_message(chat_id, word)
+        finally:
+            _kernel.reset_viewer_stage(stage_token)
     await context.bot.send_message(chat_id=chat_id, text=_plain(reply))
 
 
@@ -178,9 +183,29 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _ingest(update, context, update.message.text or "")
 
 
+def _viewer_stage_for(update: Update) -> str:
+    """P3.5b: the stage the kernel scopes this turn to. Owner (env check)
+    is unscoped; an enrolled chat gets its enrolled stage; anything else
+    is 'none' (belt — such updates were already rejected upstream)."""
+    if _owner_private(update):
+        return "owner"
+    from kyraan.store import persons
+    row = persons.person_for_chat(update.effective_chat.id)
+    return row[1] if row else "none"
+
+
 async def _ingest(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     """Everything after the ownership gate — shared by typed messages and
     transcribed voice notes (which ARE text by the time they get here)."""
+    from kyraan.control_plane import kernel
+    stage_token = kernel.set_viewer_stage(_viewer_stage_for(update))
+    try:
+        await _ingest_inner(update, context, text)
+    finally:
+        kernel.reset_viewer_stage(stage_token)
+
+
+async def _ingest_inner(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     chat_id = update.effective_chat.id
     _burst_buffers.setdefault(chat_id, []).append((update.message, text))
     if chat_id in _burst_flushing:

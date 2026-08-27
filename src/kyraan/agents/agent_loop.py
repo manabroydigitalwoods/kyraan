@@ -208,13 +208,17 @@ Style rules:
 - If a tool errors, tell the user honestly what failed; don't retry blindly."""
 
 
-def _tools_block(read_only: bool = False) -> str:
+def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
     from kyraan.tools import gmail as _gmail
     from kyraan.tools import routes as _routes
     from kyraan.tools import web_search as _web
     lines = []
     for name, spec in TOOLS.items():
         if read_only and name not in _READ_ONLY_TOOLS:
+            continue
+        if not kernel.stage_allows(name, stage=stage):
+            # P3.5b menu layer: an out-of-scope tool never appears to a
+            # non-owner viewer — the kernel gate below it is the wall.
             continue
         if name == "web.search" and not _web.configured():
             # An unconfigured tool in the menu contradicts the capability
@@ -276,7 +280,8 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     with _stage("prompt_build"):
         system = _AGENT_SYSTEM.format(
             capabilities=capability_brief(),
-            tools=_tools_block(read_only=read_only),
+            tools=_tools_block(read_only=read_only,
+                               stage=kernel.viewer_stage()),
         )
     if read_only:
         system += ("\n\nSCHEDULED RUN: you are executing a scheduled task, "
@@ -396,6 +401,17 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         if read_only and tool not in _READ_ONLY_TOOLS:
             transcript += (f"\nSYSTEM: {tool} is not available in a scheduled "
                            "run — reads only; suggest it to the owner instead.")
+            continue
+        if not kernel.stage_allows(tool):
+            # P3.5b dispatch rail: some executors (recall, listings,
+            # usage) never reach kernel.run_tool — without this check
+            # the MENU was their only guard, and a model can name a
+            # tool it was never shown. Deterministic, like read_only.
+            log_event("blocked_stage_scope", chat_id=chat_id, tool=tool,
+                      stage=kernel.viewer_stage())
+            transcript += (f"\nSYSTEM: {tool} is not available at this "
+                           "user's access level — answer without it and "
+                           "say so if they asked for exactly that.")
             continue
         if web_tainted and tool not in _READ_ONLY_TOOLS:
             # The taint rail: once ANY web text is in the transcript, no

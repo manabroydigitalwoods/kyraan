@@ -55,11 +55,53 @@ def confirmed_context() -> bool:
     return _skill_confirmed.get()
 
 
+# --- P3.5b: per-stage tool scoping (arch §1 two-layer pattern) ------------
+# The VIEWER'S stage for the current turn — set at the channel boundary,
+# default "owner" so every internal path (scheduled runs, proactive
+# sends, scripts) keeps full capability. Non-owner stages execute ONLY
+# what config's stage_toolsets allowlist names; the menu filter in the
+# agent loop is the polite layer, this is the wall — a model asking for
+# an out-of-scope tool by any phrasing is refused HERE.
+_viewer_stage = contextvars.ContextVar("kyraan_viewer_stage", default="owner")
+
+
+def viewer_stage() -> str:
+    return _viewer_stage.get()
+
+
+def set_viewer_stage(stage: str):
+    return _viewer_stage.set(stage or "none")
+
+
+def reset_viewer_stage(token) -> None:
+    _viewer_stage.reset(token)
+
+
+def stage_allows(name: str, stage: str | None = None) -> bool:
+    stage = stage if stage is not None else _viewer_stage.get()
+    if stage == "owner":
+        return True
+    allowed = (config.load().get("stage_toolsets") or {}).get(stage) or []
+    # entries are exact names or prefixes ("reminders" covers reminders.*)
+    return any(name == entry or name.startswith(entry + ".")
+               for entry in allowed)
+
+
+def _stage_gate(kind: str, name: str, args) -> None:
+    if not stage_allows(name):
+        log_event("blocked_stage_scope", stage=_viewer_stage.get(),
+                  **{kind: name}, args=args)
+        raise ToolFailed(
+            f"'{name}' is not available at your access level — "
+            "ask the owner if you need it")
+
+
 async def run_skill(call: SkillCall, handler: Callable[[dict], Awaitable[object]]) -> object:
     """Gate + execute a skill. `handler` does the actual work."""
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", skill=call.skill_name, args=call.args)
         raise KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
+    _stage_gate("skill", call.skill_name, call.args)
 
     skill_cfg = config.skill_config(call.skill_name)
     if skill_cfg["permission"] == "confirm" and not call.confirmed:
@@ -132,6 +174,7 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", tool=spec.name, args=call.args)
         raise KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
+    _stage_gate("tool", spec.name, call.args)
     if spec.permission == "disabled":
         raise ToolFailed(f"tool {spec.name!r} is disabled in config/permissions.yaml")
     if spec.permission == "confirm" and not (call.confirmed or _skill_confirmed.get()):

@@ -402,6 +402,11 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
     reply = await _dispatch(chat_id, raw_text)
+    if kernel.viewer_stage() != "owner":
+        # P3.5c's first-month rule, enforced early (P3.5b): extraction
+        # from a non-owner's messages is off by default — their words
+        # must not become facts without their own review flow.
+        _skip_extraction.set(True)
     if not _skip_extraction.get():
         import asyncio as _aio
 

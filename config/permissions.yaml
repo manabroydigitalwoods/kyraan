@@ -451,3 +451,23 @@ curiosity_queue:
 cost_monitor:
   daily_budget_usd: 5.00
   alert_threshold_pct: 80
+
+# P3.5b (arch §1): per-stage tool allowlists. The owner is unscoped;
+# every OTHER stage executes only what its list names (exact name or
+# prefix — "reminders" covers reminders.*), enforced in the kernel at
+# BOTH run_tool and run_skill on top of the agent loop's menu filter.
+# read_mostly = governance §8 stage 2: Q&A, their own reminders,
+# calendar READING, live data. NO home control, NO memory writes,
+# NO email, NO tasks, NO faces, NO undo. "full" (stage 3) starts as
+# the same list — P3.5c/d widen it deliberately, never by default.
+stage_toolsets:
+  read_mostly: &read_mostly_tools
+    - qa
+    - agent.action        # the loop's confirm wrapper (inner tool still gated)
+    - reminders
+    - calendar.list_events
+    - weather
+    - places
+    - routes
+    - web.search
+  full: *read_mostly_tools
