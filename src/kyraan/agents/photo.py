@@ -51,13 +51,17 @@ photo", "Yep, I can see it" are filler): just answer about the photo,
 the way a person looking at it would.
 
 OUTPUT exactly one JSON object:
-  {"reply": "<your reply>", "remember_face_as": null, "document_text": ""}
+  {"reply": "<your reply>", "remember_face_as": null,
+   "document_text": "", "document_title": ""}
 Set "document_text" to a FULL transcription when the photo is a
 document — a visiting card, brochure, sign, label, letter, screen, or
 anything with readable text worth keeping: every name, phone number,
 address, price, date, exactly as printed, plain text. A photo of people
 or scenery with no meaningful text keeps "" — never describe the scene
 there.
+When document_text is set, also set "document_title" to a 2-6 word
+human name for it ("HP Gas cash memo", "Sharma Medical visiting
+card") — what the owner would call this document; otherwise "".
 Set "remember_face_as" to a NAME string instead of null ONLY when the
 caption asks — in any wording or language — to remember/save/enroll this
 face for future recognition ("remember this face as Maan", "save him as
@@ -110,7 +114,7 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
     prompt = (f"Current date/time: {local_now().isoformat()}\n{faces_line}"
               f"OWNER'S CAPTION: {question}")
     import json
-    reply, enroll_name, document_text = "", None, ""
+    reply, enroll_name, document_text, document_title = "", None, "", ""
     # An EMPTY answer from an otherwise-successful vision call happens
     # (2026-08-27 19:38 live: 7s call, blank reply, the owner had to
     # resend the photo). One in-process retry beats making a human be
@@ -139,10 +143,12 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             name = decision.get("remember_face_as")
             enroll_name = str(name).strip() if name else None
             document_text = str(decision.get("document_text") or "").strip()
+            document_title = str(decision.get("document_title") or "").strip()
         except (json.JSONDecodeError, AttributeError, TypeError):
             # Robustness: an unparseable response is still a reply —
             # losing the intent field beats losing the answer.
-            reply, enroll_name, document_text = response.text.strip(), None, ""
+            reply, enroll_name = response.text.strip(), None
+            document_text = document_title = ""
         if reply:
             break
         log_event("photo_empty_retry", chat_id=chat_id, attempt=attempt)
@@ -154,8 +160,12 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
         # never fails on it.
         try:
             from kyraan.store import documents
+            # The owner's caption names the doc when there is one; the
+            # model's 2-6 word title otherwise — "show me all docs" was
+            # a wall of photo "(untitled)" entries (owner: "human
+            # readability", 2026-08-27).
             doc_id = documents.ingest(chat_id, "photo", document_text,
-                                      caption=caption[:120])
+                                      caption=(caption or document_title)[:120])
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "
                           "it anytime.")

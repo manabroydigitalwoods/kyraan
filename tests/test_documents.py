@@ -122,3 +122,14 @@ def test_exposure_helper_defaults_to_cloud_only(monkeypatch):
         assert documents._allowed_exposures() == ("cloud_ok",)
     finally:
         agent_loop._current_tier.reset(token)
+
+@pytest.mark.pg
+def test_captionless_ingest_gets_a_first_line_title(doc_db):
+    """"show me all docs" listed photo "(untitled)" rows that told the
+    owner nothing (2026-08-27) — a captionless, filenameless ingest
+    falls back to the first meaningful content line as its name."""
+    doc_id = documents.ingest(7, "photo",
+                              "Cash Memo\nAMANTARN HP GAS SERVICE\n"
+                              "Consumer: 607795, Amount 8340")
+    rows = documents.list_documents(7)
+    assert [r["caption"] for r in rows if r["id"] == doc_id] == ["Cash Memo"]

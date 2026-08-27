@@ -61,6 +61,14 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
     text = text.strip()
     if len(text) < _MIN_TEXT_CHARS:
         return None
+    if not caption and not filename:
+        # Last-resort human name: the first meaningful content line —
+        # "show me all docs" listing photo "(untitled)" rows told the
+        # owner nothing (2026-08-27). Callers with a better title
+        # (owner's caption, the vision model's) pass it instead.
+        first = next((ln.strip() for ln in text.splitlines()
+                      if len(ln.strip()) >= 4), "")
+        caption = first[:60]
     doc_id = _doc_uuid(chat_id, text)
     from kyraan.store.episodes import sensitivity_flags
     flags = sensitivity_flags(text)
