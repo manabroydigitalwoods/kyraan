@@ -461,6 +461,15 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # confirm gate still stands (seen live 2026-08-26 23:08: the
         # natural caption described the photo instead of enrolling).
         enroll_name = faces.enroll_request(caption) or faces.enroll_from_text(caption)
+        if enroll_name is None and not caption.strip():
+            # The bot's own last reply may have ASKED for this photo
+            # ("send a photo to save Kamal's face") — a captionless photo
+            # right after is the answer, not a random picture; the
+            # confirm gate below still owns the biometric write.
+            recent = [t for role, t in orchestrator._history[chat_id]
+                      if role == "assistant"]
+            if recent:
+                enroll_name = faces.invite_followup(recent[-1])
         if enroll_name is not None:
             # Biometric write → the standard confirm gate; the photo's
             # bytes stay captured in the handler for the owner's yes.

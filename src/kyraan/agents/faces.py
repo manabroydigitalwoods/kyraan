@@ -55,6 +55,25 @@ def enroll_request(caption: str):
     return m.group(1).strip() if m else None
 
 
+_INVITE_RE = re.compile(
+    r"(?:save|remember|store)\s+([A-Z][\w .'-]{1,30}?)[’']s\s+face",
+    re.IGNORECASE)
+
+
+def invite_followup(last_assistant: str) -> str | None:
+    """Deterministic: the assistant ITSELF just asked for a photo to save
+    NAME's face — a captionless photo that follows is the answer to that
+    ask, not a random picture. Found live 2026-08-27 23:37: "to save
+    Kamal's face... please send the latest photo" was answered with the
+    photo and the bot described the garden instead of enrolling. The
+    confirm gate still owns the biometric write."""
+    text = last_assistant or ""
+    if "photo" not in text.lower():
+        return None
+    m = _INVITE_RE.search(text)
+    return m.group(1).strip() if m else None
+
+
 _TEXT_ENROLL_RE = re.compile(
     r"^\s*remember\s+(?:(?:this|that|it|him|her)\s+)?(?:face\s+)?(?:is|as)\s+"
     r"([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$", re.IGNORECASE)
