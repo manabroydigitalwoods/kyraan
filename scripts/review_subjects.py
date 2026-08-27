@@ -22,7 +22,10 @@ from kyraan.store import pg  # noqa: E402
 def list_unreviewed(conn) -> int:
     rows = conn.execute(
         """SELECT legacy_id, subject, content FROM fact
-           WHERE NOT subject_reviewed ORDER BY created_at""").fetchall()
+           WHERE NOT subject_reviewed AND active
+           ORDER BY created_at""").fetchall()  # active only: the P3.5a
+    # gate counts ACTIVE unreviewed facts — a superseded duplicate must
+    # not demand review it can never satisfy (gap audit round 2)
     if not rows:
         print("no facts awaiting subject review — P3.5a's gate is satisfiable")
         return 0

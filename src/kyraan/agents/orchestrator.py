@@ -59,7 +59,9 @@ _FORGET_FACE_RE = _re.compile(
 _DENY_WORDS = {"no", "n", "cancel", "don't", "dont", "stop"}
 # P3.1c: bare "undo" or a targeted "undo the reminder/task/event/...".
 _CONSOLIDATE_RE = _re.compile(
-    r"^\s*(?:consolidate|dedupe?|de-dupe)\s+(?:my\s+)?memor(?:y|ies)\s*[.!]?\s*$",
+    r"^\s*(?:(?:please\s+)?(?:consolidate|dedupe?|de-dupe|deduplicate)"
+    r"|remove\s+duplicate|clean\s*up\s+(?:my\s+)?duplicate)"
+    r"\s*(?:my\s+)?(?:duplicate\s+)?memor(?:y|ies)\s*[.!?]?\s*$",
     _re.IGNORECASE)
 _UNDO_RE = _re.compile(
     r"^\s*undo(?:\s+(?:the\s+|that\s+|my\s+|last\s+)*"

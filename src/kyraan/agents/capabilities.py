@@ -55,6 +55,7 @@ def capability_brief() -> str:
         except Exception:
             pass
     lines.append('- Understand a shared Telegram location pin — it arrives as "[I\'m sharing my current location: <place> (lat, lon)]". Use that place for local answers (weather, nearby info) immediately; never ask which city the user is in after a pin arrives. You cannot REQUEST or track location — the user chooses to share a pin.')
+    lines.append('- Memory dedup runs nightly and proposes duplicate-fact merges. If the user asks to merge/clean/deduplicate saved memories, tell them to say EXACTLY "consolidate memory" — you cannot apply merges yourself.')
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
         lines.append('- Read the Google Calendar ("what\'s on my calendar tomorrow?").')
