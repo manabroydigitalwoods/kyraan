@@ -665,8 +665,11 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
-        if _re.match(r"^\s*health\s*(?:report|check|status)?\s*[?!.]?\s*$",
+        if _re.match(r"^\s*healt?h?\s+(?:report|check|status)\s*[?!.]?\s*$"
+                     r"|^\s*health\s*[?!.]?\s*$",
                      raw_text, _re.IGNORECASE) and kernel.viewer_person() == "owner":
+            # typo-tolerant ("healt report" seen live 13:52 — the loop
+            # improvised a generic question instead)
             # Deterministic, owner-only: the doctor's full report in chat.
             _skip_extraction.set(True)
             import asyncio as _aio

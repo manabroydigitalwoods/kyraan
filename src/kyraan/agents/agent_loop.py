@@ -61,8 +61,11 @@ _DEFLECTION_RE = re.compile(
     # A reply that OPENS with a menu question answered nothing — seen
     # live 2026-08-26 18:40: "task list" -> "What would you like to do
     # next—see your water reminders, or update/cancel...". Anchored to
-    # the start so a real answer with a trailing question still passes.
-    r"|\A(?:what|which) would you like)",
+    # the start so a real answer with a trailing question still passes;
+    # a short acknowledgment prefix doesn't launder it (live 2026-08-27
+    # 11:07: "ok" -> "Got it. What would you like to do next—...", the
+    # menu disease's FOURTH appearance, hiding behind the ack).
+    r"|\A(?:(?:got it|okay|ok|sure|great|noted)\W{0,4})?(?:what|which) would you like)",
     re.IGNORECASE)
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
