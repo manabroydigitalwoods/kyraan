@@ -469,6 +469,28 @@ async def _memory_pending(chat_id: int, args: dict, raw_text: str):
             for i, (_, target, fact) in enumerate(orchestrator._load_review_proposals())]
 
 
+async def _memory_relations(chat_id: int, args: dict, raw_text: str):
+    """P3.6b: the relationship graph — typed relations with the saved
+    facts that support them as citations."""
+    name = str(args.get("name", "")).strip()
+    if len(name) < 2:
+        raise kernel.ToolFailed("give the person, pet, or place to look up")
+    import asyncio as _aio
+
+    from kyraan.store import triples
+    try:
+        rows = await _aio.to_thread(triples.relations_for, name)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"the relationship graph is unavailable right now ({str(exc)[:100]})"
+            " — answer from your memory block and say the graph wasn't reachable")
+    if not rows:
+        return {"found": 0, "note": (f"no saved relations mention {name!r} — "
+                                     "say so honestly, never invent one")}
+    return [f'{r["head"]} —{r["relation"]}→ {r["tail"]} '
+            f'(from: "{r["sources"][0][:90]}")' for r in rows[:12]]
+
+
 async def _memory_recall(chat_id: int, args: dict, raw_text: str):
     """P3.3c: episodic recall — past conversations beyond the history
     window, retrieved local-only (embedding + Postgres on this machine)."""
@@ -570,6 +592,17 @@ TOOLS = {
         "params": "{}",
         "about": "Facts queued for the owner's review, numbered. To approve/reject, tell the user to say \"review memory\" — you cannot approve.",
         "run": _memory_pending,
+    },
+    "memory.relations": {
+        "params": '{"name": "<person, pet, or place>"}',
+        "about": ("Typed relations from the saved-fact graph, each citing "
+                  "its source fact — use for \"how is X related to Y\", "
+                  "\"whose son is Kiaan\", \"who is Ruma\". One lookup per "
+                  "name; relations read head —relation→ tail (kiaan "
+                  "—son_of→ owner means Kiaan IS the son OF the owner — "
+                  "'owner' is the user). Empty result = say no saved "
+                  "relation mentions them, never guess one."),
+        "run": _memory_relations,
     },
     "memory.recall_episodes": {
         "params": '{"query": "<topic words>", "k": 5}',
@@ -841,8 +874,8 @@ def _describe_call(tool: str, args: dict, raw_text: str = "") -> str:
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
-                    "web.search", "weather.get", "places.nearby",
-                    "routes.eta", "email.read"}
+                    "memory.relations", "web.search", "weather.get",
+                    "places.nearby", "routes.eta", "email.read"}
 
 
 

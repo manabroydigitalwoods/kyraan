@@ -46,6 +46,21 @@ def main() -> int:
             swept += episodes.suppress_for_fact(
                 facts.fact_uuid(entry["id"]), entry["content"])
     print(f"forget-cascade re-sweep: {swept} episode suppressions added")
+    # P3.6a: graph catch-up — extract triples for any active fact that
+    # has none (promote-time extraction is fire-and-forget; this is the
+    # self-heal). Local cheap-tier model; idempotent.
+    from kyraan.store import triples
+    missing = triples.facts_missing_triples()
+    extracted = 0
+    for legacy_id, content in missing:
+        try:
+            extracted += triples.extract_and_store(legacy_id, content)
+        except Exception as exc:
+            print(f"  triple extraction failed for {legacy_id}: {exc}")
+    with pg.connection() as conn:
+        total_triples, = conn.execute("SELECT count(*) FROM triple").fetchone()
+    print(f"graph: extracted for {len(missing)} facts (+{extracted} triples); "
+          f"triple table holds {total_triples}")
     return 0
 
 

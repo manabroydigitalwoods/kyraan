@@ -102,6 +102,10 @@ CASES = [
     # an "any hospitals near Siliguri?" conversation from 2026-08-26.
     Case("recall.episode", "what did we discuss about hospitals near Siliguri before?",
          [["hospital", "Hospital"]], hard=False),
+    # P3.6b: the relationship graph — "Wife's name is Ruma" is a live
+    # fact whose triple (ruma —wife_of→ owner) the graph carries.
+    Case("graph.relation", "how is Ruma related to me?",
+         [["wife", "Wife"]], hard=False),
     # P3.3d resurrection gate (HARD): main() seeded a dragonfruit fact +
     # episode and FORGOT the fact through the real cascade before any
     # case ran — nothing in this run's history names it, so any

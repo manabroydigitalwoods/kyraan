@@ -185,7 +185,31 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
     # The new fact FIRST: superseded links point at it, and sync_entries'
     # two-pass order needs its row in the same batch.
     _mirror([entries[-1]] + changed)
+    _extract_triples_async(new_id, entries[-1]["content"])
     return new_id
+
+
+def _extract_triples_async(fact_id: str, content: str) -> None:
+    """P3.6a: graph extraction off the promote path — a review approval
+    must not wait on a model call. A missed extraction self-heals: the
+    resync script extracts for any active fact with no triple rows."""
+    try:
+        from kyraan.store import facts
+        if not facts.MIRROR_ENABLED:  # tests: no PG/model side-effects
+            return
+        import threading
+
+        def _run():
+            try:
+                from kyraan.store import triples
+                triples.extract_and_store(fact_id, content)
+            except Exception as exc:
+                log_event("triple_extract_deferred", fact=fact_id,
+                          reason=str(exc)[:150])
+
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception as exc:
+        log_event("triple_extract_deferred", fact=fact_id, reason=str(exc)[:150])
 
 
 def active_entries() -> list:
