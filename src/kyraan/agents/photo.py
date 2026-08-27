@@ -185,15 +185,27 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             # inside ingest (only enrolled ids ever stick). The original
             # photo bytes persist too (owner 2026-08-28: "store the
             # uploaded files... therefore we can display the file").
+            # A caption that is a COMMAND ("save this supliment for
+            # kian") is an instruction, not a name — the vision title
+            # names the doc, the caption still supplies subjects (live
+            # 2026-08-28 01:49: a doc named "save this supliment...").
+            import re as _re
+            command_caption = bool(_re.match(
+                r"^\s*(?:please\s+)?(?:save|store|keep|remember|add|note)\b",
+                caption, _re.IGNORECASE))
+            title = (document_title if (command_caption and document_title)
+                     else (caption or document_title))
             import base64 as _b64
             try:
                 original = (_b64.b64decode(
                     image_data_url.split(",", 1)[1]), "jpg")
             except Exception:
                 original = None
+            from kyraan.store import documents as _docs
+            subjects = list(document_subjects) + _docs.subjects_from_name(caption)
             doc_id = documents.ingest(chat_id, "photo", document_text,
-                                      caption=(caption or document_title)[:120],
-                                      subjects=document_subjects,
+                                      caption=title[:120],
+                                      subjects=subjects,
                                       original=original)
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "

@@ -174,3 +174,37 @@ async def test_empty_vision_answer_retries_once(monkeypatch):
     reply, _ = await photo.answer(9, "data:image/jpeg;base64,AAA", "")
     assert "couldn't read that photo" in reply
     assert len(calls) == 2  # exactly one retry, never a loop
+
+
+async def test_command_caption_yields_title_not_the_command(monkeypatch):
+    """Live 2026-08-28 01:49: caption "save this supliment for kian"
+    became the document's NAME. A command caption is an instruction:
+    the vision title names the doc; the caption still supplies
+    subjects (via ingest's own resolution)."""
+    ingested = {}
+
+    def fake_ingest(chat_id, kind, text, caption="", subjects=None,
+                    original=None, **kw):
+        ingested.update(caption=caption, subjects=subjects)
+        return "doc-1"
+
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "ingest", fake_ingest)
+    monkeypatch.setattr(documents, "subjects_from_name",
+                        lambda title: ["kiaan"] if "kian" in title.lower() else [])
+
+    class _R:
+        text = ('{"reply": "A supplement box.", "remember_face_as": null, '
+                '"document_text": "Fourts B Drops Zinc Vitamin C", '
+                '"document_title": "Fourts B Drops box", '
+                '"document_subjects": []}')
+        latency_ms = 5.0
+
+    async def fake_acall(**kw):
+        return _R()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall)
+    reply, _ = await photo.answer(9, "data:image/jpeg;base64,AAAA",
+                                  "save this supliment for kian")
+    assert ingested["caption"] == "Fourts B Drops box"
+    assert "kiaan" in ingested["subjects"]
