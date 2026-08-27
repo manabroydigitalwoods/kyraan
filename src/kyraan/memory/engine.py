@@ -194,9 +194,9 @@ def _extract_triples_async(fact_id: str, content: str) -> None:
     must not wait on a model call. A missed extraction self-heals: the
     resync script extracts for any active fact with no triple rows."""
     try:
-        from kyraan.store import facts
-        if not facts.MIRROR_ENABLED:  # tests: no PG/model side-effects
-            return
+        from kyraan.store import facts, triples
+        if not (facts.MIRROR_ENABLED and triples.EXTRACT_ENABLED):
+            return  # tests: no PG/model side-effects
         import threading
 
         def _run():
@@ -373,6 +373,21 @@ def forget(entry_ids: list) -> list:
             _mirror(changed)
             _sweep_episodes(changed)
     return forgotten
+
+
+def resweep_forgotten() -> int:
+    """P3.3d self-heal (nightly + resync): re-run the episode sweep for
+    every FORGOTTEN fact — inactive, no supersessor (an update is not a
+    forget), long-term (an expired short is not a forget either).
+    Idempotent; catches sweeps deferred by a PG outage."""
+    from kyraan.store import episodes, facts
+    swept = 0
+    for entry in _load():
+        if (not entry.get("active") and not entry.get("superseded_by")
+                and entry.get("term") != "short"):
+            swept += episodes.suppress_for_fact(
+                facts.fact_uuid(entry["id"]), entry["content"])
+    return swept
 
 
 def _sweep_episodes(changed: list) -> None:

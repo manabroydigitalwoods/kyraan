@@ -131,6 +131,7 @@ def test_promote_hook_fires_extraction(monkeypatch):
     from kyraan.store import facts
     monkeypatch.setattr(facts, "MIRROR_ENABLED", True)
     monkeypatch.setattr(facts, "mirror_entries", lambda entries: True)
+    monkeypatch.setattr(triples, "EXTRACT_ENABLED", True)
     done = threading.Event()
     seen = {}
 

@@ -559,6 +559,18 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                 today = _now().date()
                 days = [(today - _td(days=1)).isoformat(), today.isoformat()]
                 await _aio.to_thread(_episodes.ingest_recent, days)
+
+                # The self-heals ride along nightly (gap audit
+                # 2026-08-27: they only ran on a manual resync): the
+                # forget re-sweep — new episodes about forgotten topics
+                # must not linger findable — then the graph catch-up.
+                def _self_heal():
+                    from kyraan.memory import engine as _engine
+                    from kyraan.store import triples as _triples
+                    _engine.resweep_forgotten()
+                    _triples.catch_up()
+
+                await _aio.to_thread(_self_heal)
             except Exception as exc:  # never let episodes break self-review night
                 logger.warning("episode ingest failed: %s", exc)
 

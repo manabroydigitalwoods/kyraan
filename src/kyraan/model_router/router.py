@@ -190,6 +190,11 @@ def _get_openai_compatible_client(provider: str, provider_cfg: dict):
         from openai import OpenAI
 
         api_key_env = provider_cfg.get("api_key_env")
+        if api_key_env and api_key_env not in os.environ:
+            # A raw KeyError here read as a code bug in the logs and got
+            # retried 3x; a missing key is a config fact — name it once.
+            raise ModelProviderError(
+                f"{api_key_env} is not set in this process's environment")
         api_key = os.environ[api_key_env] if api_key_env else "not-needed"
         kwargs = {"api_key": api_key}
         if base_url:
@@ -624,6 +629,8 @@ def call(
         except Exception as exc:
             last_exc = exc
             log_event("model_call_error", tier=tier, provider=provider, model=model, attempt=attempt, error=str(exc))
+            if "is not set in this process" in str(exc):
+                break  # a missing api key never heals by retrying
             if attempt < attempts - 1:
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 

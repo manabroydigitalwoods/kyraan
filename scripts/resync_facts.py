@@ -32,35 +32,15 @@ def main() -> int:
     print(f"synced {len(entries)} index entries — fact table now holds "
           f"{total} rows, {unreviewed} awaiting subject review "
           f"(scripts/review_subjects.py)")
-    # P3.3d: re-sweep for every FORGOTTEN fact — inactive with no
-    # supersessor (an update is not a forget) and long-term (a short-term
-    # expiry is not a forget either; the index can't distinguish an
-    # expired short from a forgotten one, so shorts only sweep at
-    # forget time). Catches forget-time sweeps deferred by a PG outage
-    # so a forgotten topic can't linger findable. Idempotent.
-    from kyraan.store import episodes
-    swept = 0
-    for entry in entries:
-        if (not entry.get("active") and not entry.get("superseded_by")
-                and entry.get("term") != "short"):
-            swept += episodes.suppress_for_fact(
-                facts.fact_uuid(entry["id"]), entry["content"])
+    # The self-heals, shared with the nightly job: the P3.3d forget
+    # re-sweep and the P3.6a graph catch-up.
+    swept = engine.resweep_forgotten()
     print(f"forget-cascade re-sweep: {swept} episode suppressions added")
-    # P3.6a: graph catch-up — extract triples for any active fact that
-    # has none (promote-time extraction is fire-and-forget; this is the
-    # self-heal). Local cheap-tier model; idempotent.
     from kyraan.store import triples
-    missing = triples.facts_missing_triples()
-    extracted = 0
-    for legacy_id, content in missing:
-        try:
-            extracted += triples.extract_and_store(legacy_id, content)
-        except Exception as exc:
-            print(f"  triple extraction failed for {legacy_id}: {exc}")
+    extracted = triples.catch_up()
     with pg.connection() as conn:
         total_triples, = conn.execute("SELECT count(*) FROM triple").fetchone()
-    print(f"graph: extracted for {len(missing)} facts (+{extracted} triples); "
-          f"triple table holds {total_triples}")
+    print(f"graph catch-up: +{extracted} triples; table holds {total_triples}")
     return 0
 
 

@@ -45,8 +45,8 @@ def main() -> int:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            name = event.get("event")
-            if name not in _DIRTY:
+            name = event.get("kind")  # the log's key is `kind` — filtering
+            if name not in _DIRTY:    # on `event` made every day "clean"
                 continue
             try:
                 day = datetime.fromisoformat(event["ts"]).astimezone(tz).date().isoformat()

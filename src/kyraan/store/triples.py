@@ -15,6 +15,11 @@ import uuid
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.store import facts, pg
 
+# Tests flip this off (conftest autouse): the promote hook fires a real
+# daemon thread, and with only the MIRROR flag guarding it, pg-marked
+# fact tests leaked router retries into the production event log.
+EXTRACT_ENABLED = True
+
 _EXTRACT_SYSTEM = """You extract explicit relationship triples from ONE saved fact
 about a person's life. Reply ONLY with JSON:
 {"triples": [{"head": "...", "relation": "...", "tail": "..."}]}
@@ -55,11 +60,18 @@ def extract_triples(content: str, exposure: str = "cloud_ok") -> list:
     response = router.call(prompt=content[:1000], system=_EXTRACT_SYSTEM,
                            tier=tier, force_json=True, max_tokens=768)
     rows = json.loads(router.strip_code_fence(response.text)).get("triples") or []
+    import re as _re
+
+    def _slug(value: str) -> str:
+        # one canonical spelling per entity: nano's run-to-run variance
+        # produced "ganak roy" AND "ganak_roy" rows (gap audit)
+        return _re.sub(r"[\s,]+", "_", str(value).strip().lower())[:80]
+
     clean = []
     for row in rows:
-        head = str(row.get("head", "")).strip().lower()[:80]
-        relation = str(row.get("relation", "")).strip().lower().replace(" ", "_")[:80]
-        tail = str(row.get("tail", "")).strip().lower()[:80]
+        head = _slug(row.get("head", ""))
+        relation = _slug(row.get("relation", ""))
+        tail = _slug(row.get("tail", ""))
         # Deterministic sanity, model-independent: a tail restating the
         # relation ("started_smoking"→"smoking") or a self-loop is noise.
         if not (head and relation and tail) or head == tail:
@@ -92,22 +104,38 @@ def store_triples(fact_legacy_id: str, rows: list) -> int:
 def extract_and_store(fact_legacy_id: str, content: str,
                       exposure: str = "cloud_ok") -> int:
     rows = extract_triples(content, exposure)
-    if not rows:
-        return 0
-    written = store_triples(fact_legacy_id, rows)
+    written = store_triples(fact_legacy_id, rows) if rows else 0
+    with pg.connection() as conn:
+        # Stamp even a zero-yield extraction — an unstamped routine fact
+        # was re-sent to the model on every catch-up (gap audit).
+        conn.execute("UPDATE fact SET triples_extracted_at = now() "
+                     "WHERE legacy_id = %s", (fact_legacy_id,))
+        conn.commit()
     log_event("triples_extracted", fact=fact_legacy_id, triples=written)
     return written
 
 
 def facts_missing_triples() -> list:
-    """(legacy_id, content) of active facts with no triple rows — the
-    resync catch-up set."""
+    """(legacy_id, content) of active facts never yet extracted — the
+    catch-up set (nightly + resync)."""
     with pg.connection() as conn:
         return conn.execute(
             """SELECT f.legacy_id, f.content FROM fact f
                WHERE f.active AND f.legacy_id IS NOT NULL
-                     AND NOT EXISTS (SELECT 1 FROM triple t
-                                     WHERE t.fact_id = f.id)""").fetchall()
+                     AND f.triples_extracted_at IS NULL""").fetchall()
+
+
+def catch_up() -> int:
+    """Extract for every active fact never yet extracted — the self-heal
+    for promote-time threads that died (called nightly and by resync)."""
+    extracted = 0
+    for legacy_id, content in facts_missing_triples():
+        try:
+            extracted += extract_and_store(legacy_id, content)
+        except Exception as exc:
+            log_event("triple_extract_deferred", fact=legacy_id,
+                      reason=str(exc)[:150])
+    return extracted
 
 
 def relations_for(name: str) -> list:

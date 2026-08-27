@@ -44,9 +44,14 @@ def _no_fact_mirroring(monkeypatch):
     """The memory tree is isolated below, but the P3.2a/P3.2d mirrors
     would still write into the LIVE Postgres container — off by default;
     the pg-marked sync tests re-enable them and clean up their own rows."""
-    from kyraan.store import facts, promises
+    from kyraan.store import facts, promises, triples
     monkeypatch.setattr(facts, "MIRROR_ENABLED", False)
     monkeypatch.setattr(promises, "MIRROR_ENABLED", False)
+    monkeypatch.setattr(triples, "EXTRACT_ENABLED", False)
+    # And the soak flags: a dev shell that sourced .env must not flip
+    # test backends to pg.
+    monkeypatch.delenv("KYRAAN_MEMORY_BACKEND", raising=False)
+    monkeypatch.delenv("KYRAAN_PROMISES_BACKEND", raising=False)
 
 
 @pytest.fixture(autouse=True)
