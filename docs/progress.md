@@ -532,6 +532,16 @@ built; P3.2c's default flips are calendar-gated. Next: P3.1d is
 deferred by design, so Part 3 — P3.3a (local embedder probe) — or
 clearing the 14-fact subject review queue (owner action) toward P3.5.
 
+**P3.3a DONE (2026-08-27):** the local embedder is pinned —
+qwen3-embedding:0.6b, 1024-d, probed head-to-head against
+nomic-embed-text on this Mac (4/4 similarity gates both; qwen wins
+margin and batch speed, ~0.9s cold reload — the probe's verdict now
+encodes a 2s reply-path load budget, the qwen3:8b 23s-reload lesson).
+store/embed.py refuses any non-local resolved endpoint, reusing
+routing's own resolution; migration 004 ships the full episode column
+model at vector(1024), pinned to the module constant by test. Next:
+P3.3b (nightly episode writer + backfill).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
