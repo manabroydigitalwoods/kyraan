@@ -1,8 +1,11 @@
 # Phase 3 Architecture — Datastore, Recall, Multi-User
 
-Status: DRAFT v1 (2026-08-27). Conforms to docs/governance.md (ACCEPTED
-2026-08-27) — every design below cites the governance section that
-constrains it. Prerequisite per plan.md §5: governance accepted ✅.
+Status: DRAFT v2 (2026-08-27, revised same day after a 16-finding design
+audit — identity/visibility/exposure/deletion models corrected, durable
+stores planned, undo made state-aware, exit gates split). Conforms to
+docs/governance.md (ACCEPTED 2026-08-27) — every design below cites the
+governance section that constrains it. Prerequisite per plan.md §5:
+governance accepted ✅.
 
 ---
 
@@ -55,14 +58,34 @@ CREATE TABLE person (
 
 -- Facts: the index.json entries, typed and owned
 CREATE TABLE fact (
-  id           uuid PRIMARY KEY,
+  id           uuid PRIMARY KEY,          -- uuid5(KYRAAN_NS, legacy_id):
+                                          -- deterministic + idempotent, so
+                                          -- resync never duplicates (audit)
+  legacy_id    text UNIQUE,               -- the index.json short id, kept
+                                          -- for joins and provenance
   subject      text NOT NULL REFERENCES person(id),  -- who it is ABOUT
+  subject_reviewed boolean NOT NULL DEFAULT false,
+    -- MIGRATION REALITY (audit P1): existing facts include family members;
+    -- blanket subject='owner' would mis-assign visibility and review
+    -- ownership. The importer derives subject from the memory tree's
+    -- people/<name> paths where unambiguous; everything else lands
+    -- subject='owner', subject_reviewed=false — and §4's HARD GATE: no
+    -- non-owner viewer can be enabled while any active fact has
+    -- subject_reviewed=false. Conservative default, explicit debt, gated.
   owner        text NOT NULL REFERENCES person(id),  -- whose review approved it
   content      text NOT NULL,
   kind         text NOT NULL,             -- mirror of memory engine kinds
   flags        text[] NOT NULL DEFAULT '{}',  -- health/safety/fun/sensitive/...
   era          text, sphere  text,
   visibility   text NOT NULL DEFAULT 'owner', -- §4: owner|shared|subject_only
+  exposure     text NOT NULL DEFAULT 'cloud_ok',
+    -- cloud_ok | local_only (audit P1): visibility says WHO may see a
+    -- fact; exposure says WHICH TIER may carry it. Context assembly
+    -- filters by the calling tier — local_only facts never enter a cloud
+    -- prompt (generalizes today's pending-facts rule). Governance §3
+    -- accepted no pull-backs TODAY, so every migrated fact starts
+    -- cloud_ok; the knob exists so a future pull-back (e.g. [HEALTH] →
+    -- local_only) is one UPDATE, not a schema change.
   active       boolean NOT NULL DEFAULT true,
   superseded_by uuid REFERENCES fact(id),
   created_at   timestamptz NOT NULL,
@@ -70,24 +93,36 @@ CREATE TABLE fact (
 );
 CREATE INDEX fact_fts ON fact USING gin (to_tsvector('english', content));
 
--- Episodic recall: conversation chunks, embedded
-CREATE TABLE episode (
-  id         uuid PRIMARY KEY,
-  chat_id    bigint NOT NULL,
-  day        date NOT NULL,
-  text       text NOT NULL,               -- cloud_text ONLY (privacy twin)
-  embedding  vector(1024),
-  created_at timestamptz NOT NULL
-);
-CREATE INDEX episode_ann ON episode
-  USING hnsw (embedding vector_cosine_ops);
+-- Episodic recall: conversation chunks, embedded.
+-- DDL ships in migration 002, AFTER the embedder probe pins the vector
+-- dimension (audit P2: installing vector(1024) before choosing a 768-d
+-- model forces a real migration with rows at stake). Column model:
+--   id uuid PK; chat_id bigint; day date;
+--   participants text[]         -- person ids present in the conversation
+--   visibility  text            -- derived: the chat's person + owner (§4)
+--   exposure    text            -- cloud_ok|local_only, as on fact
+--   flags       text[]          -- sensitivity tags, applied by a local
+--                               -- cheap-tier pass at write time so the
+--                               -- discretion rules (§3) are ENFORCEABLE
+--                               -- on episodes, not just facts (audit P1)
+--   fact_refs   uuid[]          -- facts this episode evidences, when known
+--   suppressed_by uuid[]        -- forget-cascade marks (see §3)
+--   text        text            -- cloud_text ONLY (privacy twin)
+--   embedding   vector(N)       -- N pinned by P3.3a's probe
+--   created_at  timestamptz
+-- Index: hnsw (embedding vector_cosine_ops), gin on flags.
 
--- Relationship graph: typed triples, facts are the provenance
+-- Relationship graph: typed triples, facts are the provenance.
+-- ONE ROW PER SUPPORTING FACT (audit P2): the earlier UNIQUE(head,
+-- relation,tail) allowed a single provenance, so forgetting that fact
+-- cascaded away a relationship still supported by another fact. Reads
+-- DISTINCT on (head, relation, tail); a relation disappears only when
+-- its LAST supporting row cascades.
 CREATE TABLE triple (
   id        uuid PRIMARY KEY,
   head      text NOT NULL, relation text NOT NULL, tail text NOT NULL,
-  fact_id   uuid REFERENCES fact(id) ON DELETE CASCADE,
-  UNIQUE (head, relation, tail)
+  fact_id   uuid NOT NULL REFERENCES fact(id) ON DELETE CASCADE,
+  UNIQUE (head, relation, tail, fact_id)
 );
 
 -- Undo ledger (governance §7 deliverable)
@@ -125,10 +160,21 @@ Rules carried over from Phase 2, now schema-enforced:
 
 Owns only state allowed to vanish (plan §3): `_history` buffers,
 session summaries backlog, listing caches, confirmation stashes +
-nonces, cost counters for the day, burst/fragment timers. Process
-memory and small JSON files migrate here 1:1; a Redis flush must leave
-Kyraan stale-but-honest, never wrong (governance §5's unmaintained
-bar). Reminders/tasks stay in Postgres — they are promises, not cache.
+nonces, burst/fragment timers. Process memory and small JSON files
+migrate here 1:1; a Redis flush must leave Kyraan stale-but-honest,
+never wrong (governance §5's unmaintained bar).
+
+Day cost/token counters may CACHE in Redis, but the durable ledger
+stays persistent — the budget hard-cap must survive a flush.
+
+**Reminders, tasks, and the cost ledger get real Postgres tables**
+(audit P1: v1 promised this without DDL or a migration step). Migration
+003: `reminder` and `agent_task` tables mirroring the JSON stores'
+fields exactly (including pending_result, window/interval columns, the
+lease/claim fields), plus `cost_ledger(day, key, value)`. Same
+flag+parity pattern as facts: `KYRAAN_PROMISES_BACKEND=files|pg`,
+byte-level parity check, files stay the fallback until cutover. This is
+workplan P3.2d — sequenced with Part 2, before Redis takes anything.
 
 ### 2.3 Migration order (each step shippable, soak between)
 
@@ -159,8 +205,16 @@ bar). Reminders/tasks stay in Postgres — they are promises, not cache.
   rule 3); recall resolves against memory first, always.
 - Episodes older than the 90-day chat retention are kept — the episode
   table IS the long-term memory the log rotation deliberately isn't.
-  "Forget X" cascades: fact → its triples; a person's delete-me request
-  (§1) deletes their episodes by chat_id, honored without debate.
+- **Forget cascades to episodes** (audit P1: without this, a forgotten
+  fact resurrects through recall). "Forget X" does three things: the
+  fact deactivates; its triples' rows cascade (per-provenance, §2.1);
+  and an episode sweep marks every episode that references the fact
+  (fact_refs) OR matches its content (FTS above a fixed threshold) with
+  `suppressed_by += fact_id`. Retrieval excludes suppressed episodes
+  unconditionally. Suppression is soft (auditable, reversible if the
+  forget was a mistake) but the exclusion is hard.
+- A person's delete-me request (§1) deletes their episodes by
+  participant, honored without debate — hard delete, not suppression.
 
 ## 4. Multi-user identity (the real Phase 3 gate)
 
@@ -186,12 +240,36 @@ Required before spouse stage 2 (governance §8). Design:
 ## 5. Undo (governance §7 deliverable — early, step 2)
 
 Every write executor logs `(tool, args, undo_tool, undo_args)` to
-`action_log` at success time. `undo` (bare word, no argument) shows
-the last undoable action and its inverse as a normal confirm ask:
-"Undo: delete the event 'lunch Friday 1pm' I just created — yes/no?".
-One level deep by design; the confirm gate keeps it safe; irreversible
-actions (a sent message) log with `undo_tool = NULL` and `undo` says
-honestly why it can't.
+`action_log` at success time. Two semantics fixed by the audit:
+
+- **`undo` means the LAST action, period** (audit P1: skipping to the
+  last UNDOABLE action would silently reverse an older action than the
+  one the user is looking at). If the newest action is irreversible,
+  `undo` says so honestly and does NOT walk back: "Your last action was
+  sending the brief — that can't be undone. The action before it
+  (reminder 'call mom') can: say 'undo the reminder' to target it."
+  Targeted forms ("undo the reminder") reach past the head explicitly.
+- **Inverses capture PRIOR STATE at execution time** (audit P1):
+  home.turn_on reads the switch state BEFORE acting; its undo restores
+  that observed state, and if the device was already in the requested
+  state the row logs `undo_tool = NULL` ("no change was made"). The
+  UNDO_MAP signature is `(args, result, prior) -> inverse | None`.
+
+One level deep by design; the confirm gate keeps it safe.
+
+## 5a. Advisor personas (optional scope, AFTER the engineering gate)
+
+Consultable specialists (workplan P3.8) are deliberately OUTSIDE the
+Phase 3 exit bar (audit P2: they were workplan-only scope). Their trust
+boundary, stated here so the architecture owns it: `advisor.consult` is
+a READ tool — a persona call gets doctrine + domain-filtered context
+(facts/episodes passing the §4 visibility AND exposure filters for the
+requesting viewer/tier), makes ONE model call (per-persona model choice
+honored; a non-default provider is a §0-table policy event per
+governance §3), and returns text. Personas hold no tools, no memory
+writes, no conversation state. Hard lines (e.g. wealth: no personalized
+recommendations) are deterministic refusals in the executor. None of
+this starts before ENGINEERING-DONE.
 
 ## 6. What Phase 3 explicitly does NOT do
 
@@ -204,10 +282,25 @@ honestly why it can't.
 - No cloud embedding/vector service — retrieval infra is local by
   construction, keeping §0's table unchanged.
 
-## 7. Exit bar
+## 7. Exit gates — engineering vs rollout (audit P2: one bar conflated
+three different clocks)
 
-Phase 3 is done when: eval gate green on the PG-backed context path;
-327+ property tests still pinning every Phase-2 invariant (privacy
-twins, delivery honesty, receipt integrity) against the new stores;
-`undo` live; spouse stage-2 technically possible behind her consent
-flag — and stage-1's 30 clean soak days (governance §8) elapsed.
+**ENGINEERING-DONE** (this build's own bar): eval gate green on the
+PG-backed context path; the full property-test suite still pinning
+every Phase-2 invariant (privacy twins, delivery honesty, receipt
+integrity) against the new stores; `undo` live; reminders/tasks durable
+in PG with parity proven; backup covers PG (pg_dump in the nightly tar,
+restore DRILLED once); spouse stage-2 technically possible behind her
+consent flag; zero active facts with subject_reviewed=false. Soak
+rhythm during the build: ≥3 clean days per backend flag before its
+cutover, ≥1 quiet week between Parts.
+
+**ROLLOUT-APPROVED** (governance §8's calendar gate, independent of
+engineering): stage-1's 30 clean soak days elapsed AND the §1 consent
+recorded. Engineering can finish first and wait; the calendar can
+elapse first and wait — neither substitutes for the other.
+
+All schema changes ship as versioned migrations
+(`migrations/00N_*.sql`, applied in order, recorded in
+`schema_version`) — v1 is person/fact/triple/action_log; 002 episodes
+(post-embedder); 003 reminders/tasks/ledger.

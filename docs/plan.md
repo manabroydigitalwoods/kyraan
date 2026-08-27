@@ -194,7 +194,17 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 - Outage fallback for core home actions (local control path)
 
 ### **Phase 3 — Multi-Agent Specialization**
-- **Prerequisite:** resolve governance gaps first — family consent, work/personal data boundary, third-party data exposure policy, staged rollout sequence (see Section 3a)
+
+> **AMENDED 2026-08-27** — the accepted design is
+> [design/phase3_architecture.md](design/phase3_architecture.md): **one
+> loop with scoped contexts**, not multiple agents behind a router.
+> Phase 2's live evidence (the classifier/dispatch architecture losing
+> to the single tool loop) superseded this section's agent-split plan;
+> the split's real goals — capability boundaries, data boundaries — ship
+> as per-person tool scopes and a visibility layer. The Work agent is
+> deferred by governance §2. The items below otherwise stand.
+
+- **Prerequisite:** resolve governance gaps first — family consent, work/personal data boundary, third-party data exposure policy, staged rollout sequence (see Section 3a) — **RESOLVED, see governance.md**
 - Split into Home / Work / Family agents with defined ownership boundaries
 - Build Agent Router (classifier + multi-agent coordination for cross-domain requests)
 - Introduce Skills as reusable, permissioned capability packages

@@ -33,6 +33,11 @@ See [plan.md §1](plan.md#1-vision--design-principles) for the full vision.
 
 ## What's built
 
+> **This section is a dated JOURNAL** — each entry was true when
+> written and is kept as history (audit note, 2026-08-27): figures like
+> "92 tests" or "frontier → Groq" describe those dates, not today.
+> The **Where we are** header above is the only current-state claim.
+
 **Control Plane** (`src/kyraan/control_plane/`)
 - Kill switch (`touch KILL_SWITCH`) — halts all skill execution and
   proactive sends, checked before every action
@@ -252,7 +257,8 @@ prudent; `/setjoingroups` → Disable keeps the bot strictly personal.
   cancelled) — fine for dev, not for production
 - The confirm flow's pending state is in-memory only — a restart drops an
   unanswered confirmation (fails safe: the action just doesn't run)
-- No CI (tests only run when run by hand)
+- ~~No CI~~ (resolved 2026-08-27: GitHub Actions runs the full suite on
+  every push — kept for the record)
 - Budget alert at `alert_threshold_pct` warns in-reply once per day
   (marker persisted in the cost ledger); the hard stop caps spend at 100%
 - Section 3a governance gaps (family consent, work/personal data boundary,
