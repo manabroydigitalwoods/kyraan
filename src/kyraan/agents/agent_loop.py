@@ -249,7 +249,16 @@ Style rules:
 - Snippets from a forecast page are FORECAST data: say "today's high is
   32°C", never "currently sunny", unless the source states current
   conditions (the weather tool labels the two for you).
-- If a tool errors, tell the user honestly what failed; don't retry blindly."""
+- If a tool errors, tell the user honestly what failed; don't retry blindly.
+- You do NOT have the text of any book, article, or document unless the
+  user sent it (a photo, a saved doc). Asked to summarize one: give what
+  you genuinely know about the work DIRECTLY, labeled as general
+  knowledge — never claim it matches "your copy"/"your edition", never
+  guess authors or editions aloud, and never interrogate first (edition?
+  last phrase you read?) — seen live 2026-08-27: two rounds of edition
+  questions, a guessed author, and a promise to "align it to your exact
+  copy" for a book whose pages were never sent. One offer at the end
+  ("send me a photo of the pages for specifics") beats every question."""
 
 
 def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
