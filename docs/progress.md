@@ -655,6 +655,21 @@ per-run session state, mirror-aware reminder purge). Only P3.7b
 (classifier deletion — the one-way door, owner's explicit call)
 remains in Phase 3 engineering.
 
+**P3.7b DONE — PHASE 3 ENGINEERING COMPLETE (2026-08-27).** The
+classifier is retired: legacy_handlers.py, intent/normalize,
+AGENT_LOOP_ENABLED, the burst planner, and the 2,100-line classifier
+test file are gone (~20 path-independent invariants ported first into
+test_orchestrator_core.py). _dispatch is now guards → confirm flow →
+deterministic branches → the agent loop on frontier then cheap → an
+honest outage reply. One brain, two tiers, zero dispatch rules —
+arch §1's consequence, delivered. Suite 558 green; frontier eval
+21/21 HARD + 11/11 soft on the classifier-free build; degraded parity
+was proven twice in P3.7a. Phase 3's remaining items are all
+NON-engineering: the ROLLOUT-APPROVED calendar (30 clean days →
+~2026-09-26, plus Ruma's §1 consent), the P3.8 advisor personas
+(optional, explicitly outside the exit bar), owner-side credential
+rotations, and the still-unpushed CI verification.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
