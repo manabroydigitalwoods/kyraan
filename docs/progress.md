@@ -499,6 +499,22 @@ and never silently reaches past an irreversible head. Eval grew four
 HARD cases running the two-step flow end to end — 20/20 HARD on the
 deploy run; bot restarted 12:21. Next: P3.2a (person + fact sync).
 
+**P3.2a+b DONE, P3.2c soak STARTED (2026-08-27):** facts mirror to
+Postgres on every mutation (files stay authority; uuid5 identity makes
+resync idempotent; PG failures defer behind a 60s breaker). Subject
+derivation per the audit: 14 real family facts (Kiaan's DOB, wife,
+father...) now sit honestly in the review queue
+(scripts/review_subjects.py) instead of silently owned — P3.5a stays
+gated on clearing it. check_fact_sync ran green twice on the live 25.
+Migration 002 added importance/term/target; the pg read path went live
+behind KYRAAN_MEMORY_BACKEND=pg (set in .env 2026-08-27 — the P3.2c
+soak clock runs from today, default flips after >=3 clean days):
+candidate retrieval from PG (FTS + flags + newest-100), ranking code
+shared verbatim, parity harness byte-identical on 50/50 probes, eval
+20/20 HARD on the soaked build. Also fixed live: SearXNG had ZERO
+working general engines (google suspended, qwant CAPTCHA) — bing
+enabled as the floor. Next: P3.2d (promises to PG).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
