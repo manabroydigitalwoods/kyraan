@@ -41,11 +41,12 @@ def _classifier_path_by_default(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_fact_mirroring(monkeypatch):
-    """The memory tree is isolated below, but the P3.2a mirror would still
-    write into the LIVE Postgres container — off by default; the pg-marked
-    sync tests re-enable it and clean up their own rows."""
-    from kyraan.store import facts
+    """The memory tree is isolated below, but the P3.2a/P3.2d mirrors
+    would still write into the LIVE Postgres container — off by default;
+    the pg-marked sync tests re-enable them and clean up their own rows."""
+    from kyraan.store import facts, promises
     monkeypatch.setattr(facts, "MIRROR_ENABLED", False)
+    monkeypatch.setattr(promises, "MIRROR_ENABLED", False)
 
 
 @pytest.fixture(autouse=True)

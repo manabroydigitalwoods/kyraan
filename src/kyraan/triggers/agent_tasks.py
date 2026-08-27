@@ -60,10 +60,17 @@ def _load() -> list:
 def _save(records: list) -> None:
     TASKS_PATH.parent.mkdir(exist_ok=True)
     atomic_write_text(TASKS_PATH, json.dumps(records, indent=1, ensure_ascii=False))
+    # P3.2d: mirror AFTER the file write; failures defer inside.
+    from kyraan.store import promises
+    promises.mirror_tasks(records)
 
 
 def list_active(chat_id: int | None = None) -> list:
-    tasks = [AgentTask(**r) for r in _load() if r.get("active")]
+    from kyraan.store import promises
+    records = promises.load_tasks() if promises.backend() == "pg" else None
+    if records is None:
+        records = _load()
+    tasks = [AgentTask(**r) for r in records if r.get("active")]
     if chat_id is not None:
         tasks = [t for t in tasks if t.chat_id == chat_id]
     return tasks

@@ -26,11 +26,33 @@ from kyraan.control_plane.logging_setup import log_event
 COST_LEDGER_PATH = Path(__file__).resolve().parents[3] / "data" / "cost_ledger.json"
 
 
-def _read_ledger() -> dict:
+def _read_ledger_file() -> dict:
+    """The FILE ledger — every read-modify-write mutation uses this (the
+    files→PG direction never reverses; a pg read feeding a file write
+    could lose spend)."""
     try:
         return json.loads(COST_LEDGER_PATH.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
+
+
+def _read_ledger() -> dict:
+    """Pure reads honor KYRAAN_PROMISES_BACKEND=pg (P3.2d)."""
+    from kyraan.store import promises
+    if promises.backend() == "pg":
+        ledger = promises.load_ledger()  # None falls through to the file
+        if ledger is not None:
+            return ledger
+    return _read_ledger_file()
+
+
+def _save_ledger(ledger: dict) -> None:
+    """The one ledger write point: file first (authority), then the P3.2d
+    Postgres mirror (failures defer inside, never raise)."""
+    COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
+    atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+    from kyraan.store import promises
+    promises.mirror_ledger(ledger)
 
 
 def today_cost_usd() -> float:
@@ -41,11 +63,10 @@ def _record_cost(cost_usd: float) -> None:
     if cost_usd <= 0:
         return
     with locked(COST_LEDGER_PATH):
-        ledger = _read_ledger()
+        ledger = _read_ledger_file()
         key = local_now().date().isoformat()
         ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
-        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+        _save_ledger(ledger)
 
 
 def _provider_token_limit(provider: str) -> int:
@@ -62,11 +83,10 @@ def _record_tokens(provider: str, usage: "Usage") -> None:
     if total <= 0:
         return
     with locked(COST_LEDGER_PATH):
-        ledger = _read_ledger()
+        ledger = _read_ledger_file()
         key = f"tokens:{provider}:{local_now().date().isoformat()}"
         ledger[key] = int(ledger.get(key, 0)) + total
-        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+        _save_ledger(ledger)
 
 
 def quota_alert_due() -> str:
@@ -497,11 +517,10 @@ def _token_guard(prompt: str, system: str, tier: str) -> None:
     if estimated > _TOKEN_GUARD_WARN:
         marker = f"token_warned:{tier}:{local_now().date().isoformat()}"
         with locked(COST_LEDGER_PATH):
-            ledger = _read_ledger()
+            ledger = _read_ledger_file()
             if not ledger.get(marker):
                 ledger[marker] = True
-                COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-                atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+                _save_ledger(ledger)
                 log_event("token_guard_warn", tier=tier, estimated_tokens=estimated,
                           warn_limit=_TOKEN_GUARD_WARN)
 

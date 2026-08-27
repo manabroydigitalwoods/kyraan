@@ -40,6 +40,21 @@ def _load_all() -> list[dict]:
 
 def _save_all(records: list[dict]) -> None:
     atomic_write_text(REMINDERS_PATH, json.dumps(records, indent=2))
+    # P3.2d: mirror the full store state to Postgres AFTER the file write
+    # — file is authority; failures defer inside (never raise here).
+    from kyraan.store import promises
+    promises.mirror_reminders(records)
+
+
+def _records_for_read() -> list[dict]:
+    """Pure reads honor KYRAAN_PROMISES_BACKEND=pg (P3.2d); mutations
+    always read-modify-write the FILE — the direction never reverses."""
+    from kyraan.store import promises
+    if promises.backend() == "pg":
+        records = promises.load_reminders()
+        if records is not None:
+            return records
+    return _load_all()
 
 
 def add(chat_id: int, text: str, when_iso: str, repeat: str = "") -> Reminder:
@@ -57,14 +72,15 @@ def _add_locked(chat_id: int, text: str, when_iso: str, repeat: str = "") -> Rem
 
 
 def list_pending(chat_id: int | None = None) -> list[Reminder]:
-    records = [r for r in _load_all() if not r["sent"]]
+    records = [r for r in _records_for_read() if not r["sent"]]
     if chat_id is not None:
         records = [r for r in records if r["chat_id"] == chat_id]
     return [Reminder(**r) for r in records]
 
 
 def get(reminder_id: str) -> Reminder | None:
-    return next((Reminder(**r) for r in _load_all() if r["id"] == reminder_id), None)
+    return next((Reminder(**r) for r in _records_for_read()
+                 if r["id"] == reminder_id), None)
 
 
 def mark_sent(reminder_id: str) -> None:
