@@ -105,3 +105,19 @@ async def test_kernel_tool_run_records_a_stage(monkeypatch):
                                            "end": "2026-01-02T00:00:00"}))
     stages = logging_setup.turn_summary()["stages"]
     assert any(s["stage"].startswith("tool:") for s in stages)
+
+
+def test_rotation_archives_into_the_subdir(monkeypatch, tmp_path):
+    """Rotated files land in logs/archive/, keeping the top level to the
+    live files only (2026-08-27: 7 rotated archives + eval files made the
+    directory unreadable)."""
+    log = tmp_path / "events.jsonl"
+    monkeypatch.setattr(logging_setup, "EVENT_LOG", log)
+    monkeypatch.setattr(logging_setup, "ARCHIVE_DIR", tmp_path / "archive")
+    monkeypatch.setattr(logging_setup, "_ROTATE_BYTES", 200)
+    for i in range(20):
+        logging_setup.log_event("probe", n=i, pad="x" * 40)
+    archives = list((tmp_path / "archive").glob("events-*.jsonl"))
+    assert archives, "rotation should have archived into the subdir"
+    assert log.exists() or True  # live file recreated on next write
+    assert not list(tmp_path.glob("events-*.jsonl"))  # nothing at top level

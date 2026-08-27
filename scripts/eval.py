@@ -113,8 +113,11 @@ async def main() -> int:
     # Eval traffic stays out of the production transcript (it was writing
     # dev-chat noise into chat.jsonl) — and events go with it.
     from kyraan.control_plane import logging_setup
-    logging_setup.CHAT_LOG = logging_setup.CHAT_LOG.with_name("eval-chat.jsonl")
-    logging_setup.EVENT_LOG = logging_setup.EVENT_LOG.with_name("eval-events.jsonl")
+    eval_dir = logging_setup.LOG_DIR / "eval"
+    eval_dir.mkdir(exist_ok=True)
+    logging_setup.CHAT_LOG = eval_dir / "chat.jsonl"
+    logging_setup.EVENT_LOG = eval_dir / "events.jsonl"
+    logging_setup.TRACE_LOG = eval_dir / "traces.jsonl"
 
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None,
                    send_fn=None, only_chat=CHAT)

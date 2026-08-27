@@ -27,6 +27,7 @@ def _isolated_event_log(monkeypatch, tmp_path):
     monkeypatch.setattr(logging_setup, "EVENT_LOG", tmp_path / "events.jsonl")
     monkeypatch.setattr(logging_setup, "CHAT_LOG", tmp_path / "chat.jsonl")
     monkeypatch.setattr(logging_setup, "TRACE_LOG", tmp_path / "traces.jsonl")
+    monkeypatch.setattr(logging_setup, "ARCHIVE_DIR", tmp_path / "log_archive")
 
 
 @pytest.fixture(autouse=True)

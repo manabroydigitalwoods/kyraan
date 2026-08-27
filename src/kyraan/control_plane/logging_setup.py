@@ -18,8 +18,18 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+import os as _os
+
+# KYRAAN_LOG_DIR redirects ALL logging — scratch scripts and benchmarks
+# MUST set it (a catch-up benchmark once sprayed 220k synthetic events
+# into the production audit trail, 2026-08-27); pytest isolates via
+# conftest, but nothing isolated bare scripts until this knob.
+LOG_DIR = Path(_os.environ.get("KYRAAN_LOG_DIR", "") or
+               Path(__file__).resolve().parents[3] / "logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+# Rotated archives live out of the way; the top level holds only the
+# LIVE files (events/traces/chat + process logs).
+ARCHIVE_DIR = LOG_DIR / "archive"
 EVENT_LOG = LOG_DIR / "events.jsonl"
 # Full-text flow traces: assembled prompts, raw model responses, turn
 # start/end. Separate file because one turn can be tens of KB.
@@ -120,10 +130,11 @@ def _rotate_if_large(path: Path) -> None:
         return
     import time as _time
     import uuid
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     # Retention: rotated archives older than 90 days are pruned — they
     # were accumulating forever (completion pack).
     cutoff = _time.time() - 90 * 86400
-    for archive in path.parent.glob(f"{path.stem}-*.jsonl"):
+    for archive in ARCHIVE_DIR.glob(f"{path.stem}-*.jsonl"):
         try:
             if archive.stat().st_mtime < cutoff:
                 archive.unlink()
@@ -133,7 +144,7 @@ def _rotate_if_large(path: Path) -> None:
     try:
         # uuid suffix: two processes rotating in the same second produced
         # colliding archive names (review P2); a lost race is harmless.
-        path.rename(path.with_name(f"{path.stem}-{stamp}-{uuid.uuid4().hex[:6]}.jsonl"))
+        path.rename(ARCHIVE_DIR / f"{path.stem}-{stamp}-{uuid.uuid4().hex[:6]}.jsonl")
     except FileNotFoundError:
         pass  # the other process rotated first
 

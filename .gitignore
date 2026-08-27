@@ -3,8 +3,7 @@ __pycache__/
 .venv/
 venv/
 .env
-logs/*.log
-logs/*.jsonl
+logs/
 memory/pending_review/
 memory/*/
 memory/index.json
