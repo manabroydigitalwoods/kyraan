@@ -109,6 +109,38 @@ def set_extraction(person_id: str, enabled: bool) -> None:
     log_event("person_extraction_set", person=person_id, enabled=enabled)
 
 
+def dnd_window(chat_id: int) -> tuple | None:
+    """(start, end) "HH:MM" strings for the person behind this chat, or
+    None (no person / no window / store trouble — global DND still
+    applies either way)."""
+    try:
+        with pg.connection() as conn:
+            row = conn.execute(
+                "SELECT dnd_start, dnd_end FROM person WHERE chat_id = %s",
+                (chat_id,)).fetchone()
+        if row and row[0] and row[1]:
+            return (row[0], row[1])
+        return None
+    except Exception:
+        return None
+
+
+def daily_budget(person_id: str) -> float:
+    """The person's daily model-spend cap in USD. Unset column → a
+    conservative default; owner is uncapped here (the global budget
+    still applies to everyone)."""
+    try:
+        with pg.connection() as conn:
+            row = conn.execute(
+                "SELECT daily_budget_usd FROM person WHERE id = %s",
+                (person_id,)).fetchone()
+        if row and row[0] is not None:
+            return float(row[0])
+    except Exception:
+        pass
+    return 0.50  # fail-closed-ish: an unconfigured person gets a small cap
+
+
 def list_persons() -> list:
     with pg.connection() as conn:
         return conn.execute(

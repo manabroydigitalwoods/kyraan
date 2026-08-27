@@ -36,7 +36,8 @@ _VALID_TERM = {"long", "short"}
 _VALID_IMPORTANCE = {"critical", "high", "normal"}
 _VALID_FLAGS = {"health", "safety", "emergency", "danger",
                 "fun", "sentimental", "milestone",
-                "emotional", "sensitive"}
+                "emotional", "sensitive",
+                "disputed"}  # P3.5d: cross-person contradiction, unresolved
 _SAFETY_FLAGS = {"health", "safety", "emergency", "danger"}
 # Discretion flags change BEHAVIOR, not just rank: these facts surface
 # only on strong, direct relevance — never volunteered into unrelated
@@ -164,7 +165,9 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
             # Idempotency for promote retries (review P2): the index is
             # the authority — re-registering the same fact is a no-op.
             return entry["id"]
-    changed = []
+    from kyraan.control_plane import kernel as _kernel
+    author = _kernel.viewer_person() or "owner"
+    changed, disputes = [], []
     if supersedes:
         old_words = _words(supersedes)
         for entry in entries:
@@ -172,6 +175,20 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
                 continue
             entry_words = _words(entry["content"])
             if entry_words and (entry_words <= old_words or old_words <= entry_words):
+                if entry.get("author", "owner") != author:
+                    # P3.5d (arch §4): a contradiction ACROSS people never
+                    # supersedes — supersession stays within one
+                    # reviewer's authority. Both facts stand, flagged,
+                    # and the subject-owner's queue gets the dispute.
+                    entry["flags"] = sorted(set(entry.get("flags") or [])
+                                            | {"disputed"})
+                    flags = sorted(set(flags) | {"disputed"})
+                    disputes.append(entry)
+                    changed.append(entry)
+                    log_event("memory_disputed", old=entry["content"][:80],
+                              new=content[:80], old_author=entry.get("author", "owner"),
+                              new_author=author)
+                    continue
                 entry["active"] = False
                 entry["superseded_by"] = new_id
                 changed.append(entry)
@@ -184,14 +201,62 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
         "era": era if era in _VALID_ERA else "current",
         "sphere": sphere if sphere in _VALID_SPHERE else "personal",
         "created": datetime.now(timezone.utc).isoformat(), "source": source,
-        "active": True, "superseded_by": None,
+        "author": author, "active": True, "superseded_by": None,
     })
     _save(entries)
     # The new fact FIRST: superseded links point at it, and sync_entries'
     # two-pass order needs its row in the same batch.
     _mirror([entries[-1]] + changed, all_entries=entries)
+    for old_entry in disputes:
+        _file_dispute_notice(old_entry, entries[-1])
     _extract_triples_async(new_id, entries[-1]["content"])
     return new_id
+
+
+def _subject_owner_for(target: str) -> str:
+    """Whose review queue owns a dispute about this target: people/<n>
+    when a person row exists for n, else the owner. PG trouble → owner."""
+    name = target.split("/", 1)[1].removesuffix(".md") if target.startswith("people/") else ""
+    if not name or name == "owner":
+        return "owner"
+    try:
+        from kyraan.store import pg
+        with pg.connection() as conn:
+            row = conn.execute("SELECT 1 FROM person WHERE id = %s",
+                               (name,)).fetchone()
+        return name if row else "owner"
+    except Exception:
+        return "owner"
+
+
+def _file_dispute_notice(old_entry: dict, new_entry: dict) -> None:
+    """P3.5d: a cross-person contradiction lands in the SUBJECT-OWNER's
+    review queue as a resolvable notice — approve keeps the new claim
+    (superseding the old under the reviewer's own authority), reject
+    forgets the new one. Best-effort: a failure leaves both facts
+    standing flagged, which is already the honest state."""
+    try:
+        from kyraan.memory import store as memory_store
+        memory_store.file_dispute(
+            target=new_entry["target"],
+            reviewer=_subject_owner_for(new_entry["target"]),
+            old_id=old_entry["id"], new_id=new_entry["id"],
+            old_content=old_entry["content"], new_content=new_entry["content"])
+    except Exception as exc:
+        log_event("dispute_notice_failed", reason=str(exc)[:150])
+
+
+def clear_flag(entry_ids: list, flag: str) -> None:
+    with locked(_index_path()):
+        entries = _load()
+        changed = []
+        for entry in entries:
+            if entry["id"] in entry_ids and flag in (entry.get("flags") or []):
+                entry["flags"] = [f for f in entry["flags"] if f != flag]
+                changed.append(entry)
+        if changed:
+            _save(entries)
+            _mirror(changed, all_entries=entries)
 
 
 def _extract_triples_async(fact_id: str, content: str) -> None:

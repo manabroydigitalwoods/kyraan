@@ -85,10 +85,69 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     return proposal_path
 
 
+def file_dispute(target: str, reviewer: str, old_id: str, new_id: str,
+                 old_content: str, new_content: str) -> Path:
+    """P3.5d: a cross-person contradiction as a resolvable queue item."""
+    import uuid
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    path = PENDING_DIR / f"{ts}-{uuid.uuid4().hex[:6]}__dispute.md"
+    meta = json.dumps({"old_id": old_id, "new_id": new_id})
+    body = (f'DISPUTED: "{new_content}" (new) contradicts "{old_content}" '
+            "(existing, from someone else). Approve = the new claim stands "
+            "and supersedes; reject = the new claim is forgotten.")
+    with open(path, "x") as handle:
+        handle.write(f"---\ntarget: {target}\nreviewer: {reviewer}\n"
+                     f"dispute: {meta}\n---\n\n{body}\n")
+    _os.chmod(path, 0o600)
+    return path
+
+
+def dispute_meta(proposal_path: Path) -> dict | None:
+    """The dispute ids when `proposal_path` is a dispute notice, else None."""
+    try:
+        text = proposal_path.read_text()
+    except OSError:
+        return None
+    _, _, rest = text.partition("---\n")
+    frontmatter, _, _ = rest.partition("---\n")
+    line = next((ln for ln in frontmatter.splitlines()
+                 if ln.startswith("dispute:")), None)
+    if line is None:
+        return None
+    try:
+        return json.loads(line.split("dispute:", 1)[1].strip())
+    except json.JSONDecodeError:
+        return None
+
+
+def resolve_dispute(proposal_path: Path, keep_new: bool) -> str:
+    """The reviewer's decision on a dispute notice: approve keeps the new
+    claim (old superseded under THIS reviewer's authority), reject
+    forgets the new claim. Both clear the disputed flags."""
+    meta = dispute_meta(proposal_path)
+    if not meta:
+        raise ValueError("not a dispute notice")
+    from kyraan.memory import engine
+    old_id, new_id = meta["old_id"], meta["new_id"]
+    if keep_new:
+        engine.consolidate(new_id, [old_id])
+        outcome = "the new claim stands"
+    else:
+        engine.forget([new_id])
+        outcome = "the new claim was discarded"
+    engine.clear_flag([old_id, new_id], "disputed")
+    proposal_path.unlink(missing_ok=True)
+    return outcome
+
+
 def promote(proposal_path: Path) -> Path:
     """Human-approved: move a proposal into the live memory tree, appending
     to the target file if it already exists, and register it with the
     engine index (classification + supersession)."""
+    if dispute_meta(proposal_path) is not None:
+        raise ValueError(
+            "this is a DISPUTE notice, not a fact proposal — resolve it via "
+            "the chat review flow (approve/reject), not promote")
     text = proposal_path.read_text()
     _, _, rest = text.partition("---\n")
     frontmatter, _, body = rest.partition("---\n")

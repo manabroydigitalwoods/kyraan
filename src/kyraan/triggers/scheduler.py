@@ -72,7 +72,8 @@ async def fire(reminder_id: str, chat_id: int, text: str) -> None:
         else:
             log_event("reminder_fire_skipped", reminder_id=reminder_id, reason="already sent")
         return
-    if not kernel.can_send_proactively():
+    if not kernel.can_send_proactively(chat_id=chat_id):  # P3.5d: the
+        # recipient's OWN quiet hours gate their reminders too
         store.release_claim(reminder_id)
         assert _schedule_fn is not None
         _schedule_fn(

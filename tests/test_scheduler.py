@@ -29,7 +29,7 @@ def _dnd_gate_open(monkeypatch):
     tests fail whenever the suite runs between 22:00 and 07:00 UTC (found
     live at 04:00 UTC). DND behavior itself is covered in test_dnd.py."""
     from kyraan.control_plane import kernel
-    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
 
 
 @pytest.fixture
@@ -240,7 +240,7 @@ async def test_concurrent_fires_deliver_exactly_once(isolated_store):
 async def test_dnd_reschedule_releases_the_claim(isolated_store, monkeypatch):
     from kyraan.control_plane import kernel
 
-    monkeypatch.setattr(kernel, "can_send_proactively", lambda: False)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: False)
     r = store.add(chat_id=0, text="held", when_iso="2099-01-01T10:00:00+00:00")
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None, send_fn=None)
     await scheduler.fire(r.id, 0, r.text)
@@ -358,13 +358,13 @@ async def test_dnd_release_never_launders_delivery_uncertainty(isolated_store, m
     store._save_all(records)
 
     # ...taken over during DND: released, rescheduled — takeover must survive.
-    monkeypatch.setattr(kernel, "can_send_proactively", lambda: False)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: False)
     await scheduler.fire(r.id, 0, r.text)
     assert sends == []
     assert store.get(r.id).takeover is True     # uncertainty preserved through release
 
     # DND ends; the fresh claim still knows and labels the send.
-    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
     await scheduler.fire(r.id, 0, r.text)
     assert len(sends) == 1 and "may be a repeat" in sends[0]
 
@@ -463,7 +463,7 @@ def test_pings_per_day_math():
 async def test_interval_reminder_fires_and_steps(isolated_store, monkeypatch):
     from kyraan.control_plane import kernel
 
-    monkeypatch.setattr(kernel, "can_send_proactively", lambda: True)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
     sends = []
 
     async def send_fn(chat_id, text):

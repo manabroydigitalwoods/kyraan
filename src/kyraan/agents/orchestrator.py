@@ -555,12 +555,27 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         for i in approved_idx:
                             path, target, fact = proposals[i]
                             if path.exists():
+                                if memory_store.dispute_meta(path) is not None:
+                                    # P3.5d: approving a dispute = the new
+                                    # claim stands, under THIS reviewer's
+                                    # authority
+                                    outcome = memory_store.resolve_dispute(path, keep_new=True)
+                                    saved.append(f"dispute resolved — {outcome}")
+                                    log_event("dispute_resolved_via_chat",
+                                              target=target, keep_new=True)
+                                    continue
                                 memory_store.promote(path)
                                 saved.append(fact)
                                 log_event("memory_promoted_via_chat", target=target, fact=fact[:80])
                         for i in rejected_idx:
                             path, target, fact = proposals[i]
                             if path.exists():
+                                if memory_store.dispute_meta(path) is not None:
+                                    outcome = memory_store.resolve_dispute(path, keep_new=False)
+                                    discarded.append(f"dispute resolved — {outcome}")
+                                    log_event("dispute_resolved_via_chat",
+                                              target=target, keep_new=False)
+                                    continue
                                 memory_store.reject(path)
                                 discarded.append(fact)
                                 log_event("memory_rejected_via_chat", target=target, fact=fact[:80])

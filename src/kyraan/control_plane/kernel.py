@@ -261,13 +261,33 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
     raise ToolFailed(f"{spec.name} failed: {last_exc}")
 
 
-def can_send_proactively(force: bool = False) -> bool:
+def can_send_proactively(force: bool = False, chat_id: int | None = None) -> bool:
     """Gate for reminders/briefs/curiosity questions. `force` bypasses DND
-    only — never the kill switch."""
+    only — never the kill switch. `chat_id` (P3.5d) additionally honors
+    the recipient PERSON's own quiet hours when they have any — the
+    global window always applies on top."""
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", context="proactive_send")
         return False
     if not force and dnd.in_quiet_hours():
         log_event("blocked_dnd", context="proactive_send")
         return False
+    if not force and chat_id is not None:
+        from kyraan.store import persons
+        window = persons.dnd_window(chat_id)
+        if window and _in_person_window(*window):
+            log_event("blocked_dnd", context="proactive_send",
+                      chat_id=chat_id, person_window=True)
+            return False
     return True
+
+
+def _in_person_window(start: str, end: str) -> bool:
+    """Wraparound-safe "HH:MM" window check against the local clock."""
+    try:
+        now = dnd.local_now().strftime("%H:%M")
+        if start <= end:
+            return start <= now < end
+        return now >= start or now < end  # crosses midnight
+    except Exception:
+        return False  # a malformed window never silences sends

@@ -66,6 +66,13 @@ def _record_cost(cost_usd: float) -> None:
         ledger = _read_ledger_file()
         key = local_now().date().isoformat()
         ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
+        # P3.5d: attribute a non-owner viewer's spend to them too, so
+        # their per-person cap has a durable counter.
+        from kyraan.control_plane import kernel as _kernel
+        person = _kernel.viewer_person()
+        if person not in ("owner", "", "none"):
+            pkey = f"person:{person}:{key}"
+            ledger[pkey] = round(float(ledger.get(pkey, 0.0)) + cost_usd, 6)
         _save_ledger(ledger)
 
 
@@ -563,6 +570,21 @@ def call(
             f"daily model budget exhausted (${spent_today:.2f} of ${budget:.2f} spent today) — "
             "raise cost_monitor.daily_budget_usd in config/permissions.yaml or wait for tomorrow"
         )
+    # P3.5d: a non-owner viewer also has their OWN daily cap (person
+    # column; conservative default) on top of the global one.
+    from kyraan.control_plane import kernel as _kernel
+    _person = _kernel.viewer_person()
+    if _person not in ("owner", "", "none"):
+        from kyraan.store import persons as _persons
+        _cap = _persons.daily_budget(_person)
+        _spent = float(_read_ledger().get(
+            f"person:{_person}:{local_now().date().isoformat()}", 0.0))
+        if _cap > 0 and _spent >= _cap:
+            log_event("person_budget_exhausted", person=_person,
+                      spent=_spent, budget=_cap)
+            raise ModelProviderError(
+                f"{_person}'s daily model budget is used up "
+                f"(${_spent:.2f} of ${_cap:.2f}) — more tomorrow")
 
     _token_guard(prompt, system, tier)
 
