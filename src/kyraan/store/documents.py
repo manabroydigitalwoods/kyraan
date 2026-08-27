@@ -164,6 +164,20 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         return None
     subjects = valid_subjects(subjects)
     subjects += [p for p in subjects_from_name(caption) if p not in subjects]
+    file_hash = hashlib.sha256(original[0]).hexdigest() if original else ""
+    if file_hash:
+        # Byte-level dedup (owner, 2026-08-28): the same FILE re-sent
+        # can OCR slightly differently and dodge the text-identity doc
+        # id — identical bytes are the same document, full stop.
+        with pg.connection() as conn:
+            row = conn.execute(
+                """SELECT id FROM document
+                   WHERE chat_id = %s AND file_sha256 = %s""",
+                (chat_id, file_hash)).fetchone()
+        if row:
+            log_event("document_deduped_by_hash", chat_id=chat_id,
+                      doc_id=str(row[0]))
+            return str(row[0])
     if not caption and not filename:
         # Last-resort human name: the first meaningful content line —
         # "show me all docs" listing photo "(untitled)" rows told the
@@ -183,16 +197,20 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         file_path = _store_original(doc_id, original) if original else ""
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
-                                     text, flags, subject_persons, file_path)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     text, flags, subject_persons,
+                                     file_path, file_sha256)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
                    caption = EXCLUDED.caption, flags = EXCLUDED.flags,
                    subject_persons = EXCLUDED.subject_persons,
                    file_path = CASE WHEN EXCLUDED.file_path <> ''
                                     THEN EXCLUDED.file_path
-                                    ELSE document.file_path END""",
+                                    ELSE document.file_path END,
+                   file_sha256 = CASE WHEN EXCLUDED.file_sha256 <> ''
+                                      THEN EXCLUDED.file_sha256
+                                      ELSE document.file_sha256 END""",
             (doc_id, chat_id, kind, caption[:300], filename[:200], text,
-             flags, subjects, file_path))
+             flags, subjects, file_path, file_hash))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):

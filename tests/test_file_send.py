@@ -84,3 +84,40 @@ async def test_original_round_trip_and_delete_cleanup(monkeypatch, tmp_path):
     documents.delete_documents(7, [doc_id])
     assert not Path(path).exists()                          # file went too
     pg.reset_pool_for_tests()
+
+
+async def test_same_bytes_different_ocr_is_one_document(monkeypatch, tmp_path):
+    """Owner (2026-08-28): the same file re-sent can OCR slightly
+    differently and dodge the text-identity doc id — identical BYTES
+    are the same document."""
+    import pytest as _pytest
+    from kyraan.store import documents, pg
+    if not pg.available():
+        _pytest.skip("local Postgres container unreachable")
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import embed, episodes
+    monkeypatch.setattr(episodes, "sensitivity_flags",
+                        lambda text, exposure="cloud_ok": [])
+    monkeypatch.setattr(embed, "embed",
+                        lambda texts: [[0.5] * embed.EMBED_DIM for _ in texts])
+    monkeypatch.setattr(documents, "FILES_DIR", tmp_path / "documents")
+    with pg.connection() as conn:
+        conn.execute("TRUNCATE document CASCADE")
+        conn.commit()
+    photo = (b"\xff\xd8samecardbytes", "jpg")
+    a = documents.ingest(7, "photo", "GAS MEMO Consumer 607795 total 995",
+                         caption="gas memo", original=photo)
+    b = documents.ingest(7, "photo", "GAS MEM0 Consumer 6O7795 total 995.",
+                         caption="resent", original=photo)  # OCR variance
+    assert a == b                                     # one document
+    with pg.connection() as conn:
+        n, = conn.execute("SELECT count(*) FROM document").fetchone()
+    assert n == 1
+    # a different chat's identical bytes are THEIR OWN document
+    c = documents.ingest(8, "photo", "GAS MEMO Consumer 607795 total 995",
+                         caption="other chat", original=photo)
+    assert c != a
+    pg.reset_pool_for_tests()
