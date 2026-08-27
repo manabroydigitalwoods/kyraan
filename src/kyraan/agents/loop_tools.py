@@ -657,6 +657,37 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
             for h in hits]
 
 
+async def _documents_rename(chat_id: int, args: dict, raw_text: str):
+    """The user naming a saved capture in conversation ("this is
+    Kiaan's vaccination card") must stick — found live 2026-08-27: the
+    association evaporated and the card stayed findable only by its
+    generic vision title."""
+    import asyncio as _aio
+
+    from kyraan.store import documents
+    query = str(args.get("query", "")).strip()
+    new_name = str(args.get("new_name", "")).strip()
+    if len(query) < 2 or not 2 <= len(new_name) <= 120:
+        raise kernel.ToolFailed(
+            "need the document to rename (words that find it) and a short new name")
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("documents.rename", dict(args))
+    try:
+        hits = await _aio.to_thread(documents.search, chat_id, query)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"document memory is unavailable right now ({str(exc)[:100]})")
+    if not hits:
+        raise kernel.ToolFailed(f"no saved document matches {query!r}")
+    doc_id = hits[0]["doc_id"]
+    prior = await _aio.to_thread(documents.rename_document,
+                                 chat_id, doc_id, new_name)
+    if prior is None:
+        raise kernel.ToolFailed("that document is gone")
+    return {"renamed": True, "doc_id": doc_id, "prior": prior,
+            "now": new_name}
+
+
 async def _memory_recall(chat_id: int, args: dict, raw_text: str):
     """P3.3c: episodic recall — past conversations beyond the history
     window, retrieved local-only (embedding + Postgres on this machine)."""
@@ -821,6 +852,16 @@ TOOLS = {
                   'To delete one, tell the user to say "forget the document '
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,
+    },
+    "documents.rename": {
+        "params": '{"query": "<words that find it>", "new_name": "<short name>"}',
+        "about": ("Give a saved document a better name. Use when the user "
+                  "NAMES a capture in conversation — \"this is Kiaan's "
+                  "vaccination card\", \"call that the AC invoice\" — so "
+                  "they can find it by that name later. query finds the "
+                  "doc (its current title or contents); new_name is what "
+                  "the user called it."),
+        "run": _documents_rename,
     },
     "documents.search": {
         "params": '{"query": "<words or a number>"}',
@@ -997,6 +1038,9 @@ UNDO_MAP = {
         ("rules.cancel", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
     "rules.cancel": lambda a, r, p: None,  # re-creation needs the full spec
+    "documents.rename": lambda a, r, p: (
+        ("documents.rename", {"query": r["now"], "new_name": r["prior"]})
+        if isinstance(r, dict) and r.get("prior") and r.get("now") else None),
     "reminders.snooze": _undo_reminders_snooze,
     "reminders.reschedule": _undo_reminders_reschedule,
     "calendar.reschedule": lambda a, r, p: (
@@ -1147,6 +1191,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
                 "the photo just sent — biometric data, kept ONLY on this "
                 "machine (never sent anywhere), deletable anytime with "
                 f'"forget the face {args.get("name")}"')
+    if tool == "documents.rename":
+        return (f'About to rename the saved document matching '
+                f'"{args.get("query")}" to "{args.get("new_name")}"')
     return f"Run {tool} with {json.dumps(args)}?"
 
 
@@ -1196,4 +1243,7 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
                     f"switch yet — check it in a moment.")
         name = str(args.get("entity", "")).split(".")[-1].replace("_", " ")
         return f"Done — the {name} is {wanted}."
+    if tool == "documents.rename" and isinstance(outcome, dict):
+        return (f'Renamed the document "{outcome.get("prior")}" → '
+                f'"{outcome.get("now")}" — ask for it by that name anytime.')
     return f"Done: {tool}."

@@ -133,3 +133,30 @@ def test_captionless_ingest_gets_a_first_line_title(doc_db):
                               "Consumer: 607795, Amount 8340")
     rows = documents.list_documents(7)
     assert [r["caption"] for r in rows if r["id"] == doc_id] == ["Cash Memo"]
+
+
+@pytest.mark.pg
+def test_rename_returns_prior_and_scopes_to_chat(doc_db):
+    doc_id = documents.ingest(7, "photo", _CARD, caption="Immunization card")
+    assert documents.rename_document(8, doc_id, "stolen") is None  # not chat 8's
+    prior = documents.rename_document(7, doc_id, "Kiaan's vaccination card")
+    assert prior == "Immunization card"
+    rows = documents.list_documents(7)
+    assert rows[0]["caption"] == "Kiaan's vaccination card"
+
+
+async def test_rename_executor_is_confirm_gated():
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    with pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._documents_rename(
+            7, {"query": "immunization", "new_name": "Kiaan's card"}, "")
+
+
+def test_rename_undo_swaps_names_back():
+    from kyraan.agents.loop_tools import UNDO_MAP
+    assert UNDO_MAP["documents.rename"](
+        {}, {"renamed": True, "doc_id": "x", "prior": "Immunization card",
+             "now": "Kiaan's card"}, None
+    ) == ("documents.rename", {"query": "Kiaan's card",
+                               "new_name": "Immunization card"})

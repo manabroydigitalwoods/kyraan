@@ -889,6 +889,9 @@ def _describe_undo(action) -> str:
     if action.tool in ("home.turn_on", "home.turn_off"):
         back = "on" if action.undo_tool == "home.turn_on" else "off"
         return f'Undo: switch {ua.get("entity", "")} back {back}'
+    if action.tool == "documents.rename":
+        return (f'Undo: rename that document back to '
+                f'"{ua.get("new_name", "")}"')
     return f"Undo the last action ({action.tool})"
 
 
@@ -946,6 +949,14 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
             elif ut == "rules.cancel":
                 from kyraan.triggers import event_rules
                 event_rules.cancel(chat_id, ua["rule_id"])
+            elif ut == "documents.rename":
+                from kyraan.store import documents as _documents
+                hits = await _aio.to_thread(
+                    _documents.search, chat_id, ua["query"])
+                if not hits or await _aio.to_thread(
+                        _documents.rename_document, chat_id,
+                        hits[0]["doc_id"], ua["new_name"]) is None:
+                    raise kernel.ToolFailed("that document is no longer there")
             elif ut == "tasks.cancel":
                 from kyraan.agents import loop_tools
                 await loop_tools._task_cancel(chat_id, ua, "")

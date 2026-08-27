@@ -189,6 +189,25 @@ def list_documents(chat_id: int, limit: int = 15) -> list:
             for i, k, c, f, d, n in rows]
 
 
+def rename_document(chat_id: int, doc_id: str, caption: str) -> str | None:
+    """Set a document's human name; returns the prior name (for undo)
+    or None when the doc isn't this chat's. The owner naming a capture
+    in conversation ("this is Kiaan's vaccination card") must stick —
+    found live 2026-08-27: the association evaporated and the card
+    stayed findable only by its generic title."""
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT coalesce(nullif(caption, ''), filename, '(untitled)')
+               FROM document WHERE chat_id = %s AND id = %s""",
+            (chat_id, doc_id)).fetchone()
+        if not row:
+            return None
+        conn.execute("UPDATE document SET caption = %s WHERE id = %s",
+                     (caption[:300], doc_id))
+    log_event("document_renamed", chat_id=chat_id, caption=caption[:80])
+    return row[0]
+
+
 def delete_documents(chat_id: int, doc_ids: list) -> list:
     """Hard-delete documents by id (captures are the owner's to destroy;
     chunks cascade). Returns the deleted captions."""
