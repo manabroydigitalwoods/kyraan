@@ -702,6 +702,19 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
             await _stage("auto_approvals", _auto_approvals)
 
+            # The nightly doctor: silent when healthy; WARN/FAIL sends
+            # the owner the needs-work list (DND-gated like every
+            # proactive).
+            async def _health_report():
+                from kyraan.control_plane import health as _health
+                from kyraan.control_plane import kernel as _kernel
+                verdict, text = await _aio.to_thread(_health.report)
+                if verdict != "OK" and _kernel.can_send_proactively():
+                    await _send(context, _owner_id(),
+                                f"🩺 Nightly health: {verdict}\n{text}")
+
+            await _stage("health_report", _health_report)
+
             # Semantic dedup scan (owner: "make it automate",
             # 2026-08-27): the model PROPOSES nightly; applying stays
             # behind the owner's yes via the "consolidate memory" chat

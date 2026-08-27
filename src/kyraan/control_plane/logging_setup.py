@@ -207,9 +207,51 @@ def _append(path: Path, record: dict) -> None:
         f.write(json.dumps(record, default=str) + "\n")
 
 
+# Health layer (2026-08-27): event kinds that mean SOMETHING WENT WRONG
+# this turn — not rails doing their job (a stage-scope block or web-taint
+# lock is enforcement, not anomaly), but failures, fallbacks, deferrals,
+# and corrections. The per-turn collector below tags each turn with the
+# set it saw; turn_health events make "was this turn clean?" a query.
+ANOMALY_KINDS = frozenset({
+    "model_call_error", "agent_tier_fallback", "agent_loop_error",
+    "agent_all_tiers_failed", "agent_false_success_corrected",
+    "agent_deflection_corrected", "tool_loop_detected",
+    "agent_tool_error", "handle_message_error",
+    "extraction_skipped_slow", "extraction_error",
+    "fact_sync_deferred", "promise_sync_deferred",
+    "session_backend_fallback", "memory_backend_fallback",
+    "promises_backend_fallback", "memory_visibility_failclosed",
+    "episode_suppress_deferred", "episode_tagging_failed",
+    "episode_tagging_cloud_failed", "triple_extract_deferred",
+    "document_ingest_failed", "episode_rag_skipped",
+    "document_rag_skipped", "confirmation_restore_failed",
+    "action_log_failed", "face_sync_deferred", "person_lookup_failed",
+    "undo_store_unreachable", "consolidation_scan_failed",
+    "photo_vision_unavailable", "provider_cooldown",
+    "budget_exhausted", "person_budget_exhausted",
+    "token_guard_blocked", "pg_mirror_stale", "auto_approve_failed",
+    "nightly_stage_failed", "pending_purge_failed",
+})
+
+_turn_anomalies: contextvars.ContextVar = contextvars.ContextVar(
+    "turn_anomalies", default=None)
+
+
+def start_anomaly_capture():
+    return _turn_anomalies.set([])
+
+
+def collected_anomalies() -> list:
+    return list(_turn_anomalies.get() or [])
+
+
 def log_event(kind: str, **fields) -> None:
     """Append one structured event, e.g. kind='tool_call', kind='routing_decision'."""
     tid = _turn_id.get()
+    if kind in ANOMALY_KINDS:
+        bucket = _turn_anomalies.get()
+        if bucket is not None:
+            bucket.append(kind)
     _append(EVENT_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind,
                         **({"turn_id": tid} if tid else {}), **fields})
 

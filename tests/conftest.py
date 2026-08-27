@@ -83,6 +83,10 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     from kyraan.memory import review_scaling
     monkeypatch.setattr(review_scaling, "STATS_PATH",
                         tmp_path / "review_stats.json")
+    from kyraan.triggers import health_alerts
+    monkeypatch.setattr(health_alerts, "STATE_PATH",
+                        tmp_path / "health_alerts.json")
+    monkeypatch.setattr(health_alerts, "_recent", {})
     monkeypatch.setattr(reminder_store, "REMINDERS_PATH", tmp_path / "reminders.json")
     monkeypatch.setattr(agent_tasks, "TASKS_PATH", tmp_path / "agent_tasks.json")
     monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")

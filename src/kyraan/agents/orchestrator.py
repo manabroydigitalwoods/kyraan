@@ -387,8 +387,10 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
-    from kyraan.control_plane.logging_setup import log_trace, new_turn
+    from kyraan.control_plane.logging_setup import (
+        log_trace, new_turn, start_anomaly_capture)
     new_turn()  # correlates every event/trace of this flow under one id
+    start_anomaly_capture()  # health layer: this turn's anomaly verdict
     turn_started = time.monotonic()
     log_trace("turn_start", chat_id=chat_id, user_text=raw_text)
     redaction_token = _history_redaction.set(None)
@@ -430,6 +432,24 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
                           "was saved; tell me again in a minute.)")
     _skip_extraction.reset(skip_token)
     _degraded_turn.reset(degraded_token)
+    # Health layer (2026-08-27): the turn's verdict — one event with the
+    # anomaly kinds this turn saw and its latency; a crossed threshold
+    # appends ONE in-band warning line (throttled per kind per day).
+    from kyraan.control_plane.logging_setup import collected_anomalies
+    anomalies = collected_anomalies()
+    log_event("turn_health", chat_id=chat_id,
+              anomalies=sorted(set(anomalies)) or None,
+              anomaly_count=len(anomalies),
+              latency_ms=round((time.monotonic() - turn_started) * 1000),
+              degraded=_degraded_turn.get() or None)
+    try:
+        from kyraan.triggers import health_alerts
+        alert = health_alerts.check(anomalies)
+        if alert:
+            reply += alert
+    except Exception as exc:  # the warning light must never break the reply
+        log_event("health_alert_failed", error=str(exc)[:120])
+
     quota_warning = router.quota_alert_due()
     if quota_warning:
         reply += f"\n\n⚠️ {quota_warning}."
@@ -639,6 +659,17 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _gated(
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
+
+        if _re.match(r"^\s*health\s*(?:report|check|status)?\s*[?!.]?\s*$",
+                     raw_text, _re.IGNORECASE) and kernel.viewer_person() == "owner":
+            # Deterministic, owner-only: the doctor's full report in chat.
+            _skip_extraction.set(True)
+            import asyncio as _aio
+
+            from kyraan.control_plane import health
+            verdict, text = await _aio.to_thread(health.report)
+            _history_redaction.set("[showed the health report]")
+            return f"🩺 {verdict}\n{text}"
 
         if _CONSOLIDATE_RE.match(raw_text):
             # Deterministic, like review: the nightly scan invites this
