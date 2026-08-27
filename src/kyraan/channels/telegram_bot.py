@@ -965,6 +965,15 @@ def run() -> None:
     async def _send_document(chat_id: int, filename: str, data: bytes,
                              caption: str) -> None:
         import io
+        if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+            # An image DISPLAYS inline (owner verify 2026-08-28 01:54:
+            # the supplement photo came back as an attachment card, not
+            # a visible picture). Telegram re-compresses photos; the
+            # pristine original stays in data/documents either way.
+            await app.bot.send_photo(chat_id=chat_id,
+                                     photo=io.BytesIO(data),
+                                     caption=caption or filename)
+            return
         await app.bot.send_document(
             chat_id=chat_id, document=io.BytesIO(data), filename=filename,
             caption=caption or None)
