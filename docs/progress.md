@@ -557,6 +557,16 @@ fixed en route: OLLAMA_BASE_URL's /v1 suffix broke the native
 /api/embed path (regression-pinned). Next: P3.3c
 (memory.recall_episodes loop tool).
 
+**P3.3c DONE (2026-08-27):** memory.recall_episodes is live — hybrid
+ANN+FTS with recency bias, chat-scoped, k≤8, "[recalled from <date>]"
+labels, near-duplicate dedup (found live: eval reruns tripled one
+conversation in the top-k), and §3 discretion post-retrieval: sensitive
+episodes surface only on a direct FTS hit. Owner-chat probes pull
+Aug-25/26 conversations (face enrollment, the Kotak/Amazon email
+thread) from beyond the history window; eval 20/20 HARD, soft 10/10
+with the new recall case. Next: P3.3d (forget cascades to episodes) —
+the last Part 3 ticket.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
