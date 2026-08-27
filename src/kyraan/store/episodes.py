@@ -77,14 +77,38 @@ def episode_uuid(chat_id: int, first_ts: str) -> str:
     return str(uuid.uuid5(EPISODE_NS, f"{chat_id}:{first_ts}"))
 
 
+# Pinned by scripts/probe_tagger.py (2026-08-27, 16 labeled probes):
+# llama3.2:3b — 13/16 exact vs the qwen3:8b baseline's 12/16, fewer
+# over-tags (2 vs 4), zero misses on every clear positive, 280ms vs
+# 503ms — AND it keeps the nightly batch off the resident chat model.
+# The sub-2GB candidates (qwen3:1.7b, gemma3:1b) invented flags outside
+# the vocabulary and missed clear positives: disqualified.
+TAG_MODEL = "llama3.2:latest"
+
+
+def _tag_chat(text: str) -> list:
+    """One local tagging call — same local-only endpoint guard as the
+    embedder (episode text never leaves this machine)."""
+    import urllib.request
+    request = urllib.request.Request(
+        f"{embed._endpoint()}/api/chat",
+        data=json.dumps({
+            "model": TAG_MODEL, "stream": False, "format": "json",
+            "options": {"temperature": 0},
+            "messages": [{"role": "system", "content": _TAG_SYSTEM},
+                         {"role": "user", "content": text[:4000]}],
+        }).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=60) as resp:
+        payload = json.loads(resp.read())
+    return json.loads(payload["message"]["content"]).get("flags") or []
+
+
 def sensitivity_flags(text: str) -> list:
-    """LOCAL cheap-tier tagging. Failure = tagged 'sensitive' — the
-    discretion rules (§3) then keep it out of unrelated answers."""
-    from kyraan.model_router import router
+    """LOCAL tagging. Failure = tagged 'sensitive' — the discretion
+    rules (§3) then keep it out of unrelated answers."""
     try:
-        response = router.call(prompt=text[:4000], system=_TAG_SYSTEM,
-                               tier="cheap", force_json=True, max_tokens=128)
-        flags = json.loads(response.text).get("flags") or []
+        flags = _tag_chat(text)
         return sorted(set(f for f in flags if f in _SENSITIVE_FLAGS))
     except Exception as exc:
         log_event("episode_tagging_failed", error=str(exc)[:150])

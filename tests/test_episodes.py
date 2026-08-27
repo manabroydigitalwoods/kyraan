@@ -328,10 +328,16 @@ def test_recall_executor_store_down_is_honest(monkeypatch):
 
 
 def test_tagging_failure_defaults_to_sensitive(monkeypatch):
-    from kyraan.model_router import router
-
-    def boom(**kwargs):
+    def boom(text):
         raise RuntimeError("model down")
 
-    monkeypatch.setattr(router, "call", boom)
+    monkeypatch.setattr(episodes, "_tag_chat", boom)
     assert episodes.sensitivity_flags("anything") == ["sensitive"]
+
+
+def test_tagging_discards_invented_flags(monkeypatch):
+    # the ultralight models invented labels like "_sensitive"/"grief" —
+    # anything outside the fixed vocabulary must be dropped, not stored
+    monkeypatch.setattr(episodes, "_tag_chat",
+                        lambda text: ["_sensitive", "grief", "health"])
+    assert episodes.sensitivity_flags("x") == ["health"]
