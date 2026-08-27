@@ -546,6 +546,21 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
         async def _review_job(context: ContextTypes.DEFAULT_TYPE) -> None:
             await self_review.fire(_owner_id(), lambda c, t: _send(context, c, t))
+            # P3.3b: the nightly episode write rides the same job —
+            # yesterday+today because ingest is idempotent and last
+            # night's run stopped at this hour. Blocking work (local
+            # embed + tagging + pg) stays off the event loop.
+            try:
+                import asyncio as _aio
+                from datetime import timedelta as _td
+
+                from kyraan.control_plane.dnd import local_now as _now
+                from kyraan.store import episodes as _episodes
+                today = _now().date()
+                days = [(today - _td(days=1)).isoformat(), today.isoformat()]
+                await _aio.to_thread(_episodes.ingest_recent, days)
+            except Exception as exc:  # never let episodes break self-review night
+                logger.warning("episode ingest failed: %s", exc)
 
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),

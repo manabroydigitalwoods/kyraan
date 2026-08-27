@@ -35,7 +35,12 @@ def _endpoint() -> str:
             "refusing to embed: the resolved Ollama endpoint is not local "
             "— episode text never leaves this machine")
     provider_cfg = (config.load().get("providers") or {}).get("ollama") or {}
-    return router.resolve_base_url("ollama", provider_cfg).rstrip("/")
+    base = router.resolve_base_url("ollama", provider_cfg).rstrip("/")
+    # The configured base may carry the OpenAI-wire suffix (…/v1) for the
+    # chat client; Ollama's native /api/embed lives at the ORIGIN (found
+    # live: /v1/api/embed 404'd the whole backfill while the same call
+    # worked in any shell that hadn't loaded .env).
+    return base[:-3] if base.endswith("/v1") else base
 
 
 def embed(texts: list) -> list:

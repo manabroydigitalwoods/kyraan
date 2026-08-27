@@ -18,6 +18,15 @@ def test_dimension_pin_matches_the_migration():
     assert int(match.group(1)) == embed.EMBED_DIM
 
 
+def test_openai_wire_suffix_is_stripped(monkeypatch):
+    # OLLAMA_BASE_URL=…/v1 (the chat client's base) must not leak into
+    # the native /api/embed path — the live-404 regression.
+    from kyraan.model_router import router
+    monkeypatch.setattr(router, "provider_is_local", lambda name: True)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    assert embed._endpoint() == "http://localhost:11434"
+
+
 def test_refuses_a_non_local_endpoint(monkeypatch):
     from kyraan.model_router import router
     monkeypatch.setattr(router, "provider_is_local", lambda name: False)
