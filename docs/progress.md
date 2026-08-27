@@ -515,6 +515,23 @@ shared verbatim, parity harness byte-identical on 50/50 probes, eval
 working general engines (google suspended, qwant CAPTCHA) — bing
 enabled as the floor. Next: P3.2d (promises to PG).
 
+**P3.2d DONE — both P3.2 soaks running (2026-08-27):** reminders,
+agent tasks, and the cost ledger dual-write to Postgres (migration 003,
+field-for-field; full-state mirror after every file save; files stay
+authority and mutations never read pg). KYRAAN_PROMISES_BACKEND=pg set
+in .env — reads soak from today alongside the memory soak; cutover for
+each after >=3 days with no promise_sync_deferred /
+promises_backend_fallback / memory_backend_fallback events in
+events.jsonl and green evals. The delivery lease exists as one atomic
+UPDATE on pg (sticky takeover), proven by tests in a dedicated
+kyraan_test database; restart-with-pg-only serves every pending
+reminder. Parity harness scripts/compare_promise_backends.py clean on
+every mutation class and after a full eval (20/20 HARD, soft 9/9 — the
+bing fix cured web.current_fact). Part 2 of the workplan is now fully
+built; P3.2c's default flips are calendar-gated. Next: P3.1d is
+deferred by design, so Part 3 — P3.3a (local embedder probe) — or
+clearing the 14-fact subject review queue (owner action) toward P3.5.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
