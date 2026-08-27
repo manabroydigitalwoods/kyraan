@@ -325,6 +325,19 @@ def _pg_candidates(message: str) -> list | None:
     terms = [w for w in _words(message) if _re.fullmatch(r"[a-z0-9]+", w)]
     tsquery = " | ".join(terms)
     cutoff = datetime.now(timezone.utc) - timedelta(days=_SHORT_TERM_DAYS)
+    # RAG arm (2026-08-27): semantic neighbours of the message join the
+    # candidate pool — "what do I do for stress" reaches "meditates
+    # daily" with zero word overlap. Embedder down ⇒ the arm just
+    # doesn't fire; FTS and flags carry on.
+    qvec = None
+    if message.strip():
+        try:
+            import json as _json
+
+            from kyraan.store import embed as _embed
+            qvec = _json.dumps(_embed.embed([message])[0])
+        except Exception:
+            qvec = None
     from kyraan.store import sync_state as _sync_state
     if _sync_state.is_stale("facts"):
         # A known-behind mirror must not answer: a forgotten fact whose
@@ -356,10 +369,16 @@ def _pg_candidates(message: str) -> list | None:
                               OR importance = 'critical' OR kind = 'identity'
                               OR (%s <> '' AND to_tsvector('english', content)
                                               @@ to_tsquery('english', %s))
+                              OR (%s::vector IS NOT NULL
+                                  AND id IN (SELECT id FROM fact
+                                             WHERE active AND embedding IS NOT NULL
+                                             ORDER BY embedding <=> %s::vector
+                                             LIMIT 12))
                               OR id IN (SELECT id FROM fact WHERE active
                                         ORDER BY created_at DESC LIMIT 100))
                    ORDER BY created_at, legacy_id""",
-                (*vis_params, cutoff, tsquery, tsquery or "x")).fetchall()
+                (*vis_params, cutoff, tsquery, tsquery or "x",
+                 qvec, qvec)).fetchall()
     except Exception as exc:
         log_event("memory_backend_fallback", backend="pg",
                   reason=str(exc)[:200])

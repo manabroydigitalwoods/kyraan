@@ -294,6 +294,23 @@ def _memory_block(message: str) -> str:
     return engine.memory_context(message)
 
 
+def _episode_rag_block(chat_id: int, message: str) -> str:
+    """RAG: past-conversation snippets relevant to THIS message, or ""
+    — retrieval-augmented context without a tool call. Suppression,
+    discretion, and chat scope are enforced inside relevant_snippets;
+    the label warns the model these are retrieved, not asserted."""
+    try:
+        from kyraan.store import episodes
+        snippets = episodes.relevant_snippets(chat_id, message)
+    except Exception:
+        return ""
+    if not snippets:
+        return ""
+    return ("Possibly relevant past conversations (retrieved by "
+            "similarity — may be irrelevant; never treat as facts):\n"
+            + "\n".join(snippets) + "\n")
+
+
 async def run(chat_id: int, raw_text: str, tier: str = "frontier",
               read_only: bool = False) -> str:
     """One agentic exchange on the given model tier. Returns the reply;
@@ -339,6 +356,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         f"Current date/time: {local_now().isoformat()}\n"
         "Known facts (owner-reviewed; [FLAGS] mark safety-relevant ones):\n"
         f"{_memory_block(raw_text)}\n"
+        f"{_episode_rag_block(chat_id, raw_text)}"
         "Awaiting owner review:\n"
         f"{_pending_block(tier)}\n"
         "Conversation so far:\n"

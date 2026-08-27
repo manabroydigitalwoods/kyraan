@@ -41,6 +41,24 @@ def main() -> int:
     with pg.connection() as conn:
         total_triples, = conn.execute("SELECT count(*) FROM triple").fetchone()
     print(f"graph catch-up: +{extracted} triples; table holds {total_triples}")
+    # RAG backfill: embed active facts the mirror couldn't (embedder down
+    # at write time, or rows older than migration 010).
+    from kyraan.store import embed
+    with pg.connection() as conn:
+        missing = conn.execute(
+            "SELECT id, content FROM fact WHERE active AND embedding IS NULL"
+        ).fetchall()
+        if missing:
+            vectors = embed.embed([content for _id, content in missing])
+            for (fact_id, _), vector in zip(missing, vectors):
+                conn.execute("UPDATE fact SET embedding = %s WHERE id = %s",
+                             (json.dumps(vector), fact_id))
+            conn.commit()
+    print(f"fact embeddings: backfilled {len(missing)}")
+    # Face templates: full file→PG rebuild (biometric mirror, local PG).
+    from kyraan.agents import faces
+    mirrored = faces.resync_templates()
+    print(f"face templates: {mirrored} embeddings mirrored")
     return 0
 
 

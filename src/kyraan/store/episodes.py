@@ -248,17 +248,12 @@ _DISCRETION_FLAGS = {"emotional", "sensitive"}
 RECALL_K_MAX = 8
 
 
-def recall(chat_id: int, query: str, k: int = 5) -> list:
-    """Hybrid ANN+FTS recall over this chat's episodes, recency-biased,
-    top-k. Discretion is applied POST-retrieval (arch §3): an episode
-    flagged emotional/sensitive surfaces only on a direct FTS hit —
-    semantic adjacency alone never volunteers it. Suppressed episodes
-    (forget cascade, P3.3d) are excluded at the source."""
-    try:
-        k = int(k)
-    except (TypeError, ValueError):
-        k = 5
-    k = max(1, min(k, RECALL_K_MAX))
+def _search(chat_id: int, query: str) -> list:
+    """The shared retrieval core: this chat's unsuppressed episodes by
+    ANN, with FTS hit and raw similarity exposed, discretion applied
+    (arch §3: an emotional/sensitive episode surfaces only on a direct
+    FTS hit — semantic adjacency alone never volunteers it). Returns
+    [(score, sim, day, text)] best-first."""
     qvec = json.dumps(embed.embed([query])[0])
     import re as _re
     from kyraan.memory.engine import _words
@@ -282,8 +277,22 @@ def recall(chat_id: int, query: str, k: int = 5) -> list:
             continue  # absence discipline, not a lower rank
         age_days = max((today - day).days, 0)
         score = float(sim) + (0.15 if fts else 0.0) + 0.1 / (1 + age_days / 30)
-        scored.append((score, day, text))
+        scored.append((score, float(sim), day, text))
     scored.sort(key=lambda item: -item[0])
+    return scored
+
+
+def recall(chat_id: int, query: str, k: int = 5) -> list:
+    """Hybrid ANN+FTS recall over this chat's episodes, recency-biased,
+    top-k. Suppressed episodes (forget cascade, P3.3d) are excluded at
+    the source; discretion applies in the shared core."""
+    try:
+        k = int(k)
+    except (TypeError, ValueError):
+        k = 5
+    k = max(1, min(k, RECALL_K_MAX))
+    scored = [(score, day, text) for score, _sim, day, text
+              in _search(chat_id, query)]
     lines, seen = [], set()
     for _score, day, text in scored:
         head = text[:120]  # repeated sequences (eval reruns, retries)
@@ -294,6 +303,38 @@ def recall(chat_id: int, query: str, k: int = 5) -> list:
         if len(lines) >= k:
             break
     return lines
+
+
+RAG_MIN_SIM = 0.45   # below this the "relevant" episode is noise
+RAG_MAX_SNIPPETS = 2
+RAG_CLIP = 280
+
+
+def relevant_snippets(chat_id: int, message: str) -> list:
+    """True RAG (owner directive 2026-08-27): the top past-conversation
+    snippets for THIS message, auto-injected into the loop's context —
+    no tool call needed. Same core as recall (suppression, discretion,
+    chat scope) plus a similarity floor so unrelated history never
+    pollutes the prompt. Empty on any failure — context degrades to
+    exactly the pre-RAG prompt."""
+    try:
+        picked, seen = [], set()
+        for _score, sim, day, text in _search(chat_id, message):
+            if sim < RAG_MIN_SIM:
+                break  # best-first: everything after is weaker
+            head = text[:120]
+            if head in seen:
+                continue
+            seen.add(head)
+            clipped = text[:RAG_CLIP] + ("…" if len(text) > RAG_CLIP else "")
+            picked.append(f"[from an earlier conversation, {day.isoformat()}] "
+                          + clipped.replace("\n", " ⏎ "))
+            if len(picked) >= RAG_MAX_SNIPPETS:
+                break
+        return picked
+    except Exception as exc:
+        log_event("episode_rag_skipped", reason=str(exc)[:120])
+        return []
 
 
 def records_for_day(day: str, lines: list) -> list:

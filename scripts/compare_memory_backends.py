@@ -50,15 +50,20 @@ def main() -> int:
         os.environ["KYRAAN_MEMORY_BACKEND"] = "pg"
         via_pg = engine.memory_context(probe)
         os.environ.pop("KYRAAN_MEMORY_BACKEND", None)
-        if via_files != via_pg:
+        # Post-cutover + RAG (2026-08-27) pg is a deliberate SUPERSET:
+        # the semantic arm adds candidates files can't see. The invariant
+        # that must hold is that pg never LOSES a fact file-mode serves.
+        missing = [line for line in via_files.splitlines()
+                   if line.startswith("- ") and line not in via_pg]
+        if missing:
             mismatches += 1
-            print(f"❌ DIFF on probe: {probe[:70]!r}")
-            for line in difflib.unified_diff(via_files.splitlines(),
-                                             via_pg.splitlines(),
-                                             "files", "pg", lineterm=""):
+            print(f"❌ pg LOST file-mode facts on {probe[:60]!r}:")
+            for line in missing:
                 print(f"   {line}")
         else:
-            print(f"✅ identical ({len(via_files):4d} chars): {probe[:60]!r}")
+            extra = sum(1 for line in via_pg.splitlines()
+                        if line.startswith("- ") and line not in via_files)
+            print(f"✅ pg ⊇ files (+{extra} semantic): {probe[:60]!r}")
     print(f"\n{len(probes)} probes, {mismatches} mismatches")
     return 1 if mismatches else 0
 

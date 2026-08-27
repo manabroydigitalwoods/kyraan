@@ -56,6 +56,18 @@ def seed_owner(conn) -> None:
         "ON CONFLICT (id) DO NOTHING", (OWNER,))
 
 
+def _embed_or_none(content: str):
+    """Local embedding for the RAG arm — None when the embedder is down
+    (the mirror must never fail on it; resync backfills NULLs)."""
+    try:
+        import json as _json
+
+        from kyraan.store import embed
+        return _json.dumps(embed.embed([content])[0])
+    except Exception:
+        return None
+
+
 def _upsert(conn, entry: dict, persons: set) -> None:
     subject, reviewed = subject_for(entry, persons)
     try:
@@ -66,9 +78,9 @@ def _upsert(conn, entry: dict, persons: set) -> None:
         """INSERT INTO fact (id, legacy_id, subject, subject_reviewed, owner,
                              content, kind, flags, era, sphere, visibility,
                              exposure, active, created_at, source_msg,
-                             importance, term, target)
+                             importance, term, target, embedding)
            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                   'owner', 'cloud_ok', %s, %s, %s, %s, %s, %s)
+                   'owner', 'cloud_ok', %s, %s, %s, %s, %s, %s, %s)
            ON CONFLICT (id) DO UPDATE SET
                content = EXCLUDED.content,
                kind = EXCLUDED.kind,
@@ -79,6 +91,8 @@ def _upsert(conn, entry: dict, persons: set) -> None:
                importance = EXCLUDED.importance,
                term = EXCLUDED.term,
                target = EXCLUDED.target,
+               -- keep an existing embedding when the embedder was down
+               embedding = COALESCE(EXCLUDED.embedding, fact.embedding),
                -- an owner-reviewed subject is never clobbered by a resync
                subject = CASE WHEN fact.subject_reviewed THEN fact.subject
                               ELSE EXCLUDED.subject END,
@@ -90,7 +104,7 @@ def _upsert(conn, entry: dict, persons: set) -> None:
          entry.get("era"), entry.get("sphere"), bool(entry.get("active")),
          created, str(entry.get("source", ""))[:500],
          entry.get("importance", "normal"), entry.get("term", "long"),
-         entry.get("target")))
+         entry.get("target"), _embed_or_none(entry["content"])))
 
 
 def sync_entries(conn, entries: list) -> None:

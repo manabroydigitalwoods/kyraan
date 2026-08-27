@@ -219,6 +219,7 @@ def enroll(name: str, image_bytes: bytes) -> str:
     # NEW enrollments 0644 — readable by any local user (Bugbot P1); the
     # atomic writer chmods before the rename, so no window exists.
     atomic_write_text(path, json.dumps(record))
+    _mirror_templates(name, _slug(name), record["embeddings"])
     log_event("face_enrolled", name=name, samples=len(record["embeddings"]))
     return (f'Face saved as "{name}" ({len(record["embeddings"])} sample'
             f'{"s" if len(record["embeddings"]) != 1 else ""} now) — stored '
@@ -231,8 +232,76 @@ def forget(name: str) -> bool:
     if not path.exists():
         return False
     path.unlink()
+    try:  # the file unlink is the authoritative delete; the mirror row
+        from kyraan.store import facts as _facts  # must not outlive it
+        from kyraan.store import pg as _pg
+        if _facts.MIRROR_ENABLED:
+            with _pg.connection() as conn:
+                conn.execute("DELETE FROM face_template WHERE slug = %s",
+                             (_slug(name),))
+                conn.commit()
+    except Exception as exc:
+        log_event("face_sync_deferred", name=name, reason=str(exc)[:120])
     log_event("face_forgotten", name=name)
     return True
+
+
+def _template_uuid(slug: str, embedding: list) -> str:
+    import hashlib
+    import uuid as _uuid
+    digest = hashlib.sha1(json.dumps(embedding).encode()).hexdigest()[:16]
+    return str(_uuid.uuid5(_uuid.NAMESPACE_DNS,
+                           f"face.kyraan.local:{slug}:{digest}"))
+
+
+def _mirror_templates(name: str, slug: str, embeddings: list) -> bool:
+    """Best-effort FULL mirror of one person's templates into the local
+    Postgres (deterministic ids ⇒ idempotent). Gated on the store
+    mirroring switch so tests never touch the live container; failure
+    logs and never blocks the file write — files stay the authority."""
+    try:
+        from kyraan.store import facts as _facts
+        from kyraan.store import pg as _pg
+        if not _facts.MIRROR_ENABLED:
+            return False
+        with _pg.connection() as conn:
+            conn.execute("DELETE FROM face_template WHERE slug = %s", (slug,))
+            for emb in embeddings:
+                conn.execute(
+                    """INSERT INTO face_template (id, slug, name, embedding)
+                       VALUES (%s, %s, %s, %s)
+                       ON CONFLICT (id) DO NOTHING""",
+                    (_template_uuid(slug, emb), slug, name, json.dumps(emb)))
+            conn.commit()
+        return True
+    except Exception as exc:
+        log_event("face_sync_deferred", name=name, reason=str(exc)[:120])
+        return False
+
+
+def resync_templates() -> int:
+    """Full rebuild of face_template from data/faces/ — rows for slugs
+    whose file is gone are removed. Idempotent; called by resync_facts."""
+    from kyraan.store import pg as _pg
+    slugs, mirrored = [], 0
+    for path in sorted(FACES_DIR.glob("*.json")) if FACES_DIR.exists() else []:
+        try:
+            record = json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        slug = path.stem
+        slugs.append(slug)
+        if _mirror_templates(record.get("name", slug), slug,
+                             record.get("embeddings") or []):
+            mirrored += len(record.get("embeddings") or [])
+    with _pg.connection() as conn:
+        if slugs:
+            conn.execute("DELETE FROM face_template WHERE slug != ALL(%s)",
+                         (slugs,))
+        else:
+            conn.execute("DELETE FROM face_template")
+        conn.commit()
+    return mirrored
 
 
 def enrolled_names() -> list:
