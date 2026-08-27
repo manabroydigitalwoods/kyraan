@@ -150,3 +150,50 @@ def test_forget_purges_matching_pending_proposals():
     bodies = [p.read_text() for p in memory_store.PENDING_DIR.glob("*.md")]
     assert not any("dragonfruit" in b for b in bodies)   # purged with the fact
     assert any("Morning walk" in b for b in bodies)      # unrelated survives
+
+
+async def test_has_been_set_claim_is_corrected(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "reply", "consider": "…",
+         "text": "Reminder to call mom at 9:00 PM has been set."},
+        {"action": "reply", "consider": "honest", "text": "Nothing was set yet."},
+    ])
+    reply = await agent_loop.run(5, "set a reminder", tier="cheap")
+    assert reply == "Nothing was set yet."
+
+
+async def test_fabricated_listing_is_corrected(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "reply", "consider": "…",
+         "text": "Here are your pending reminders: 1. Drink water. 2. Check calendar."},
+        {"action": "call", "tool": "reminders.list", "consider": "corrected",
+         "args": {}},
+        {"action": "reply", "consider": "real data",
+         "text": "You have one reminder: call mom at 9:00 PM."},
+    ])
+
+    async def fake_list(chat_id, args, raw_text):
+        return [{"id": "r1", "text": "call mom", "when": "9:00 PM"}]
+
+    monkeypatch.setitem(agent_loop.TOOLS["reminders.list"], "run", fake_list)
+    reply = await agent_loop.run(5, "any reminders?", tier="cheap")
+    assert "call mom" in reply
+
+
+async def test_real_listing_after_the_read_is_untouched(monkeypatch):
+    _scripted(monkeypatch, [
+        {"action": "call", "tool": "reminders.list", "consider": "…", "args": {}},
+        {"action": "reply", "consider": "real",
+         "text": "Here are your pending reminders: 1. call mom at 9:00 PM."},
+    ])
+
+    async def fake_list(chat_id, args, raw_text):
+        return [{"id": "r1", "text": "call mom", "when": "9:00 PM"}]
+
+    monkeypatch.setitem(agent_loop.TOOLS["reminders.list"], "run", fake_list)
+    events = []
+    monkeypatch.setattr(agent_loop, "log_event",
+                        lambda name, **kw: events.append(name))
+    reply = await agent_loop.run(5, "any reminders?", tier="cheap")
+    assert "call mom" in reply
+    assert "agent_false_success_corrected" not in events

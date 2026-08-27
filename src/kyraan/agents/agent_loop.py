@@ -74,7 +74,9 @@ _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 # against the draft only when nothing was written; one forced re-decide.
 _FALSE_SUCCESS_RE = re.compile(
     r"\b(?:i(?:'|’)?ve (?:set|created|added|scheduled|cancell?ed|noted|saved|remembered)"
+    r"|reminder\b[^.?!\n]{0,60}\bhas been (?:set|created|scheduled)"
     r"|reminder (?:is |has been )?(?:set|created|scheduled)"
+    r"|\bhas been (?:set|created|scheduled|added|cancell?ed)\b"
     r"|(?:event|task) (?:is |has been |was )?(?:created|scheduled|added|cancell?ed)"
     r"|i (?:have |just )?(?:set|created|scheduled|added|cancell?ed|noted|saved) (?:a|the|your|that))\b",
     re.IGNORECASE)
@@ -88,6 +90,16 @@ _FALSE_PROMISE_RE = re.compile(
 _NARRATION_RE = re.compile(
     r"\A(?:sure\W{0,3}|ok(?:ay)?\W{0,3})?let me (?:check|look|see|get|fetch|pull)\b",
     re.IGNORECASE)
+# Reciting a store listing WITHOUT the read that backs it (degraded run
+# 3: "Here are your pending reminders: 1. Drink water..." fabricated
+# from memory-block facts, reminders.list never called).
+_LISTING_CLAIM_RE = re.compile(
+    r"\b(?:here (?:are|'s|’s) your|these are your|your pending)"
+    r"[^.?!\n]{0,30}\b(reminder|task|event)s?\b"
+    r"|\b(reminder|task|event)s?:\s*\n\s*(?:[-•]|1[.)])",
+    re.IGNORECASE)
+_LISTING_TOOL = {"reminder": "reminders.list", "task": "tasks.list",
+                 "event": "calendar.list_events"}
 
 
 class AgentUnavailable(Exception):
@@ -339,6 +351,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     # draft was seen swapping a pin-ask for a do-you-mean echo (both
     # homework); the third answer stands either way
     executed_tool = False
+    executed_names: set = set()  # which tools actually ran this turn
     wrote_this_turn = False  # a WRITE tool ran and did not error
     false_success_corrections = 0  # up to two forced re-decides
     web_tainted = False  # web text entered this turn — no more write tools
@@ -411,6 +424,14 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             if (violation is None and not executed_tool
                     and _NARRATION_RE.search(reply)):
                 violation = "NARRATES checking instead of calling the tool"
+            if violation is None and not read_only:
+                listing = _LISTING_CLAIM_RE.search(reply)
+                if listing:
+                    kind = (listing.group(1) or listing.group(2) or "").lower()
+                    needed = _LISTING_TOOL.get(kind)
+                    if needed and needed not in executed_names:
+                        violation = (f"PRESENTS a {kind} listing without "
+                                     f"calling {needed}")
             if violation and false_success_corrections < 2:
                 # P3.7a false-success rail: no write ran, yet the draft
                 # claims/promises/narrates one. The honest exits are
@@ -524,6 +545,7 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             # (seen live: days="few days", three blind retries).
             result = {"error": f"{tool}: {str(exc)[:200]}"}
 
+        executed_names.add(tool)
         if (tool not in _READ_ONLY_TOOLS
                 and not (isinstance(result, dict) and result.get("error"))):
             wrote_this_turn = True
