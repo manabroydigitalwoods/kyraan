@@ -90,6 +90,9 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     from kyraan.triggers import event_rules
     monkeypatch.setattr(event_rules, "RULES_PATH",
                         tmp_path / "event_rules.json")
+    from kyraan.triggers import curiosity
+    monkeypatch.setattr(curiosity, "STATE_PATH",
+                        tmp_path / "curiosity.json")
     monkeypatch.setattr(reminder_store, "REMINDERS_PATH", tmp_path / "reminders.json")
     monkeypatch.setattr(agent_tasks, "TASKS_PATH", tmp_path / "agent_tasks.json")
     monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "cost_ledger.json")

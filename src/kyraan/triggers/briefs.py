@@ -91,6 +91,18 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.extend(home)
 
+    # Curiosity (Phase 4, 2026-08-28): at most one deterministic
+    # knowledge-gap question a day, riding the brief — batched and
+    # DND-safe by construction. Best-effort like the home lines.
+    try:
+        from kyraan.triggers import curiosity
+        question = curiosity.daily_line(chat_id)
+        if question:
+            lines.append("")
+            lines.append(question)
+    except Exception:
+        pass
+
     return "\n".join(lines)
 
 
