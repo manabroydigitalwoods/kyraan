@@ -911,3 +911,20 @@ def test_migration_backfills_already_extracted_facts():
     # a separate file, because the runner never re-applies 005
     applied_once = Path("migrations/005_triple_bookkeeping.sql").read_text()
     assert "UPDATE fact" not in applied_once
+
+
+def test_restore_refuses_a_dataless_restore():
+    """The 2026-08-28 drill restored 5 tables and ZERO rows from a dump
+    taken before the data existed — and the script printed success. A
+    schema-only restore is not a usable backup; tables alone can't be the
+    success criterion."""
+    from pathlib import Path
+
+    src = Path("scripts/restore.py").read_text()
+    assert "n_live_tup" in src                    # rows are counted
+    assert "NO CONTENT ROWS" in src               # and a dataless restore
+    assert src.count("return 1") >= 3             # is a FAILURE, not a warning
+    # schema_version must be EXCLUDED: it holds a row per migration even
+    # in a database that never held a fact, so counting it let the stale
+    # dump report "~1 rows, exit 0"
+    assert "relname <> 'schema_version'" in src

@@ -67,7 +67,29 @@ def main() -> int:
         print(f"restore produced NO tables in {target!r} — treating as failure",
               file=sys.stderr)
         return 1
-    print(f"restored into {target!r}: {tables} tables")
+    # Tables alone prove nothing: the 2026-08-28 drill restored 5 tables
+    # and ZERO rows from a dump taken before the data existed, and this
+    # script called it success. A backup you cannot restore DATA from is
+    # the thing the drill exists to catch, so count rows too.
+    rows = subprocess.run(
+        ["docker", "exec", "kyraan-postgres", "psql", "-U", "kyraan", "-d", target,
+         # schema_version is BOOKKEEPING: it holds a row per applied
+        # migration even in a database that never held a single fact, so
+        # counting it made a dataless dump look alive ("~1 rows", exit 0
+        # — caught while testing this very check).
+        "-tAc", """SELECT coalesce(sum(n_live_tup), 0)
+                     FROM pg_stat_user_tables
+                    WHERE relname <> 'schema_version'"""],
+        capture_output=True, text=True).stdout.strip()
+    total_rows = rows.split("|")[0].strip() if "|" in rows else rows
+    print(f"restored into {target!r}: {tables} tables, ~{total_rows} content rows")
+    if total_rows.isdigit() and int(total_rows) == 0:
+        print("  FAILED: schema restored but NO CONTENT ROWS — the dump "
+              "predates the data, or the backup ran against an empty "
+              "database. This is not a usable backup.", file=sys.stderr)
+        return 1
+    print(f"  verify: docker exec kyraan-postgres psql -U kyraan -d {target} "
+          "-c 'SELECT relname, n_live_tup FROM pg_stat_user_tables ORDER BY 1'")
     return 0
 
 
