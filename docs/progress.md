@@ -567,6 +567,19 @@ thread) from beyond the history window; eval 20/20 HARD, soft 10/10
 with the new recall case. Next: P3.3d (forget cascades to episodes) —
 the last Part 3 ticket.
 
+**P3.3d DONE — Part 3 complete (2026-08-27):** forgetting a fact now
+sweeps episodes (fact_refs hits + the fixed overlap>=2 word rule) into
+suppressed_by — auditable per row, idempotent, excluded by recall at
+the source; failures defer and resync_facts re-sweeps every forgotten
+fact (supersessions and short-term expiries are NOT forgets).
+delete_person_episodes hard-deletes by participant for §1 delete-me
+(P3.5 wires the trigger). The eval gained a HARD resurrection gate: a
+rig seeds fact+episode, proves the episode findable, forgets through
+the real cascade, then the probe must not resurface it — 21/21 HARD,
+soft 10/10. Parts 0-3 of the Phase 3 workplan are now built; next is
+Part 4 (Redis takeover, gated on the Part-2 soak) or P3.5/P3.6 (the
+subject-review queue still gates P3.5a).
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
