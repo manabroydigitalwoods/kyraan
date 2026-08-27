@@ -93,6 +93,15 @@ _EXTRACTION_MIN_CHARS = 8
 # resolution: work email metadata stays off third-party models).
 _history_redaction: contextvars.ContextVar = contextvars.ContextVar("history_redaction", default=None)
 _skip_extraction: contextvars.ContextVar = contextvars.ContextVar("skip_extraction", default=False)
+# P3.7a: this turn fell to the cheap tier — the SAME local model then
+# serves extraction, so its cutoff must absorb the loop's tail.
+_degraded_turn: contextvars.ContextVar = contextvars.ContextVar("degraded_turn", default=False)
+
+
+def _extraction_timeout(explicit_save: bool) -> int:
+    if explicit_save:
+        return 45
+    return 30 if _degraded_turn.get() else 6
 
 
 # In-chat memory review: chat_id -> (proposals, stashed_at). Born live
@@ -401,6 +410,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     log_trace("turn_start", chat_id=chat_id, user_text=raw_text)
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
+    degraded_token = _degraded_turn.set(False)
     reply = await _dispatch(chat_id, raw_text)
     if kernel.viewer_person() != "owner":
         # P3.5c first-month rule: extraction from a non-owner's messages
@@ -427,7 +437,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
             with _stage("extraction"):
                 reply += await _aio.wait_for(
                     _extraction_note(chat_id, raw_text),
-                    timeout=45 if explicit_save else 6)
+                    timeout=_extraction_timeout(explicit_save))
         except _aio.TimeoutError:
             log_event("extraction_skipped_slow", chat_id=chat_id,
                       explicit_save=explicit_save)
@@ -436,6 +446,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
                           "the local model is too slow to respond. Nothing "
                           "was saved; tell me again in a minute.)")
     _skip_extraction.reset(skip_token)
+    _degraded_turn.reset(degraded_token)
     quota_warning = router.quota_alert_due()
     if quota_warning:
         reply += f"\n\n⚠️ {quota_warning}."
@@ -678,6 +689,12 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             # decision JSON.
             from kyraan.agents import agent_loop
             for tier in ("frontier", "cheap"):
+                if tier == "cheap":
+                    # P3.7a: the local model now holds BOTH the loop and
+                    # extraction — the extraction cutoff widens for this
+                    # turn or contention silently eats every "Noted for
+                    # review" (9× in one degraded eval run).
+                    _degraded_turn.set(True)
                 try:
                     return await agent_loop.run(chat_id, raw_text, tier=tier)
                 except KillSwitchEngaged:

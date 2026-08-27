@@ -67,6 +67,19 @@ _DEFLECTION_RE = re.compile(
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 
+# P3.7a: a reply CLAIMING a write happened when no write tool ran this
+# turn — the false-success class (first seen as the faces hallucination;
+# in degraded mode qwen3 said "I've set a reminder to call your mom"
+# with no tool call, and reminder.list honestly showed nothing). Matched
+# against the draft only when nothing was written; one forced re-decide.
+_FALSE_SUCCESS_RE = re.compile(
+    r"\b(?:i(?:'|’)?ve (?:set|created|added|scheduled|cancell?ed)"
+    r"|i(?:'|’)?ll remind you"
+    r"|reminder (?:is |has been )?(?:set|created|scheduled)"
+    r"|(?:event|task) (?:is |has been |was )?(?:created|scheduled|added|cancell?ed)"
+    r"|i (?:have |just )?(?:set|created|scheduled|added|cancell?ed) (?:a|the|your))\b",
+    re.IGNORECASE)
+
 
 class AgentUnavailable(Exception):
     """The loop can't run (provider down, or the model can't produce a
@@ -317,6 +330,8 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
     # draft was seen swapping a pin-ask for a do-you-mean echo (both
     # homework); the third answer stands either way
     executed_tool = False
+    wrote_this_turn = False  # a WRITE tool ran and did not error
+    false_success_corrected = False
     web_tainted = False  # web text entered this turn — no more write tools
 
     for step in range(_MAX_STEPS):
@@ -377,6 +392,22 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
                     "message was a STATEMENT or correction with nothing to "
                     "do, a brief acknowledgment IS the right reply — never "
                     "answer a question they didn't ask instead. Decide again.")
+                continue
+            if (not false_success_corrected and not wrote_this_turn
+                    and not read_only and _FALSE_SUCCESS_RE.search(reply)):
+                # P3.7a false-success rail: the draft claims a write that
+                # never ran. One forced re-decide — the honest paths out
+                # are CALLING the tool or admitting nothing happened.
+                false_success_corrected = True
+                log_event("agent_false_success_corrected", chat_id=chat_id,
+                          tier=tier, draft=reply[:150])
+                transcript += (
+                    "\nSYSTEM: STOP — your draft says an action was done "
+                    f"(\"{reply[:120]}\") but NO write tool ran this turn. "
+                    "Claiming an action you did not perform is the worst "
+                    "failure this assistant can make. Either CALL the tool "
+                    "that actually does it NOW, or reply honestly that it "
+                    "has not been done. Decide again.")
                 continue
             if executed_tool:
                 # This turn was a command (a tool ran) — commands are
@@ -470,6 +501,9 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
             # (seen live: days="few days", three blind retries).
             result = {"error": f"{tool}: {str(exc)[:200]}"}
 
+        if (tool not in _READ_ONLY_TOOLS
+                and not (isinstance(result, dict) and result.get("error"))):
+            wrote_this_turn = True
         if tool == "web.search":
             web_tainted = True
         if isinstance(result, dict) and "__direct_reply__" in result:
