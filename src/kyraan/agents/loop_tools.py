@@ -525,6 +525,28 @@ async def _memory_relations(chat_id: int, args: dict, raw_text: str):
             f'(from: "{r["sources"][0][:90]}")' for r in rows[:12]]
 
 
+async def _documents_search(chat_id: int, args: dict, raw_text: str):
+    """Document memory: text captured from photos and PDFs (cards,
+    brochures) — hybrid search so exact strings and NUMBERS hit via FTS
+    while paraphrases hit via meaning."""
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("give words or a number to search saved documents for")
+    import asyncio as _aio
+
+    from kyraan.store import documents
+    try:
+        hits = await _aio.to_thread(documents.search, chat_id, query)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"document memory is unavailable right now ({str(exc)[:100]})")
+    if not hits:
+        return {"found": 0, "note": ("no saved document matches — say so "
+                                     "honestly, never invent contents")}
+    return [f'[document "{h["caption"]}", {h["date"]}] {h["text"][:400]}'
+            for h in hits]
+
+
 async def _memory_recall(chat_id: int, args: dict, raw_text: str):
     """P3.3c: episodic recall — past conversations beyond the history
     window, retrieved local-only (embedding + Postgres on this machine)."""
@@ -637,6 +659,17 @@ TOOLS = {
                   "'owner' is the user). Empty result = say no saved "
                   "relation mentions them, never guess one."),
         "run": _memory_relations,
+    },
+    "documents.search": {
+        "params": '{"query": "<words or a number>"}',
+        "about": ("Search SAVED DOCUMENTS — text captured from photos "
+                  "(visiting cards, brochures, labels) and PDFs the user "
+                  "sent. Use for \"what was the number on that card\", "
+                  "\"the AC service brochure\", \"that PDF I sent\" — "
+                  "numbers and exact strings match directly. Cite the "
+                  "document caption and date in your answer. Empty result "
+                  "= say no saved document matches, never invent one."),
+        "run": _documents_search,
     },
     "memory.recall_episodes": {
         "params": '{"query": "<topic words>", "k": 5}',
@@ -917,8 +950,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
-                    "memory.relations", "web.search", "weather.get",
-                    "places.nearby", "routes.eta", "email.read"}
+                    "memory.relations", "documents.search", "web.search",
+                    "weather.get", "places.nearby", "routes.eta",
+                    "email.read"}
 
 
 

@@ -21,6 +21,7 @@ dependencies = [
     "opencv-python>=4.10",  # local face recognition (agents/faces.py)
     "psycopg[binary,pool]>=3.2",  # Phase 3 stores (store/pg.py)
     "redis>=5.0",                 # Phase 3 session backend
+    "pypdf>=4.0",                 # document memory: PDF text extraction
 ]
 
 [project.optional-dependencies]

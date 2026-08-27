@@ -470,6 +470,7 @@ stage_toolsets:
     - places
     - routes
     - web.search
+    - documents.search   # chat-scoped: their own captured documents
   # full (stage 3) adds the person's OWN memory loop: extraction from
   # their messages (still behind their per-person extraction_enabled
   # flag) and their own review queue (P3.5c) — never the owner's.
@@ -482,6 +483,7 @@ stage_toolsets:
     - places
     - routes
     - web.search
+    - documents.search
     - memory.propose
     - memory.review
     - memory.pending_list

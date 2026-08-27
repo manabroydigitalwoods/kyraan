@@ -1,0 +1,190 @@
+"""Document memory (owner directive 2026-08-27): text captured from
+photos (visiting cards, brochures) and PDFs, transcribed at ingestion,
+chunked, embedded locally, and retrievable forever.
+
+Retrieval is HYBRID on purpose: embeddings are bad at digits, so a
+phone number is found by the FTS arm ("98300" matches exactly) while
+"that AC repair guy from the brochure" is found by the semantic arm.
+
+Privacy plumbing mirrors episodes: a sensitivity pass tags each
+document; `exposure` gates which prompts a chunk may enter (local_only
+chunks NEVER ride into a cloud-tier prompt); `suppressed_by` lets the
+forget cascade cover documents; retrieval is chat-scoped.
+"""
+import hashlib
+import json
+import uuid
+
+from kyraan.control_plane.logging_setup import log_event
+from kyraan.store import embed, pg
+
+DOC_NS = uuid.uuid5(uuid.NAMESPACE_DNS, "documents.kyraan.local")
+CHUNK_CHARS = 800
+SEARCH_MIN_SIM = 0.28  # calibrated 2026-08-27 on the probe card: true
+                       # paraphrases ("who fixes water pipes",
+                       # "plumber's visiting card") measure 0.34-0.35,
+                       # the noise ceiling 0.19 — documents sit in a
+                       # lower sim regime than episodes (0.35 there)
+_MIN_TEXT_CHARS = 20
+
+
+def _doc_uuid(chat_id: int, text: str) -> str:
+    digest = hashlib.sha1(text.strip().encode()).hexdigest()[:20]
+    return str(uuid.uuid5(DOC_NS, f"{chat_id}:{digest}"))
+
+
+def _chunks(text: str) -> list:
+    """Paragraph-respecting chunks ≤ CHUNK_CHARS. A visiting card is one
+    chunk; a 20-page PDF becomes dozens, each separately findable."""
+    pieces, current = [], ""
+    for para in text.split("\n\n"):
+        candidate = (current + "\n\n" + para).strip() if current else para.strip()
+        if len(candidate) <= CHUNK_CHARS:
+            current = candidate
+            continue
+        if current:
+            pieces.append(current)
+        while len(para) > CHUNK_CHARS:  # a single huge paragraph
+            pieces.append(para[:CHUNK_CHARS])
+            para = para[CHUNK_CHARS:]
+        current = para.strip()
+    if current:
+        pieces.append(current)
+    return pieces or [text.strip()]
+
+
+def ingest(chat_id: int, kind: str, text: str, caption: str = "",
+           filename: str = "") -> str | None:
+    """Store one captured document. Returns the doc id, or None when the
+    text is too thin to be a document. Idempotent: the same text in the
+    same chat is one document (re-sending a card doesn't duplicate)."""
+    text = text.strip()
+    if len(text) < _MIN_TEXT_CHARS:
+        return None
+    doc_id = _doc_uuid(chat_id, text)
+    from kyraan.store.episodes import sensitivity_flags
+    flags = sensitivity_flags(text)
+    try:
+        vectors = embed.embed(_chunks(text))
+    except Exception:
+        vectors = [None] * len(_chunks(text))  # FTS still finds them
+    with pg.connection() as conn:
+        conn.execute(
+            """INSERT INTO document (id, chat_id, kind, caption, filename,
+                                     text, flags)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (id) DO UPDATE SET
+                   caption = EXCLUDED.caption, flags = EXCLUDED.flags""",
+            (doc_id, chat_id, kind, caption[:300], filename[:200], text, flags))
+        conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
+                     (doc_id,))
+        for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):
+            conn.execute(
+                """INSERT INTO document_chunk (id, document_id, seq, text,
+                                               embedding)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (str(uuid.uuid4()), doc_id, seq, chunk,
+                 json.dumps(vector) if vector else None))
+        conn.commit()
+    log_event("document_ingested", chat_id=chat_id, doc_kind=kind,
+              chars=len(text), chunks=len(_chunks(text)), flags=flags)
+    return doc_id
+
+
+def _allowed_exposures() -> tuple:
+    """Which exposures may enter the CURRENT prompt: local_only chunks
+    only when the tier answering right now resolves to a local endpoint."""
+    try:
+        from kyraan.agents import agent_loop
+        from kyraan.model_router import router
+        tier = agent_loop.current_tier()
+        from kyraan.control_plane import config
+        provider = (config.load().get("model_tiers", {}).get(tier) or {}).get("provider", "")
+        if provider and router.provider_is_local(provider):
+            return ("cloud_ok", "local_only")
+    except Exception:
+        pass
+    return ("cloud_ok",)
+
+
+def search(chat_id: int, query: str, k: int = 3) -> list:
+    """Hybrid chunk retrieval: FTS (exact strings, DIGITS) + ANN
+    (meaning), chat-scoped, suppression- and exposure-filtered. Returns
+    [{'caption','date','text','sim','fts'}] best-first."""
+    import re as _re
+
+    from kyraan.memory.engine import _words
+    terms = [w for w in _words(query) if _re.fullmatch(r"[a-z0-9]+", w)]
+    # digits ride as raw tokens too — "98300" must match even though
+    # _words lowercases wording; numbers in the query are the whole point
+    terms += [t for t in _re.findall(r"\d{4,}", query) if t not in terms]
+    tsquery = " | ".join(terms)
+    try:
+        qvec = json.dumps(embed.embed([query])[0])
+    except Exception:
+        qvec = None
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """SELECT d.caption, d.filename, d.created_at::date, c.text,
+                      CASE WHEN %s::vector IS NOT NULL AND c.embedding IS NOT NULL
+                           THEN 1 - (c.embedding <=> %s::vector) END AS sim,
+                      (%s <> '' AND to_tsvector('english', c.text)
+                                    @@ to_tsquery('english', %s)) AS fts
+               FROM document_chunk c JOIN document d ON d.id = c.document_id
+               WHERE d.chat_id = %s AND d.suppressed_by = '{}'
+                     AND d.exposure = ANY(%s)
+               ORDER BY fts DESC, sim DESC NULLS LAST
+               LIMIT 30""",
+            (qvec, qvec, tsquery, tsquery or "x", chat_id,
+             list(_allowed_exposures()))).fetchall()
+    results = []
+    for caption, filename, day, text, sim, fts in rows:
+        if not fts and (sim is None or sim < SEARCH_MIN_SIM):
+            continue  # neither arm actually matched
+        results.append({"caption": caption or filename or "(untitled)",
+                        "date": day.isoformat(), "text": text,
+                        "sim": float(sim) if sim is not None else None,
+                        "fts": bool(fts)})
+        if len(results) >= k:
+            break
+    return results
+
+
+def relevant_snippet(chat_id: int, message: str) -> str | None:
+    """The auto-injection arm: the single best document chunk for this
+    message, or None. FTS hits (exact strings/numbers) always qualify;
+    semantic hits need the calibrated floor."""
+    try:
+        hits = search(chat_id, message, k=1)
+    except Exception as exc:
+        log_event("document_rag_skipped", reason=str(exc)[:120])
+        return None
+    if not hits:
+        return None
+    hit = hits[0]
+    clipped = hit["text"][:400] + ("…" if len(hit["text"]) > 400 else "")
+    return (f'[from a saved document "{hit["caption"]}", {hit["date"]}] '
+            + clipped.replace("\n", " ⏎ "))
+
+
+def suppress_for_fact(fact_id: str, fact_content: str) -> int:
+    """The forget cascade, extended to documents (same overlap>=2 rule
+    as episodes): a forgotten fact's documents stop being served."""
+    from kyraan.memory.engine import _words
+    words = _words(fact_content)
+    need = 2 if len(words) >= 2 else 1
+    swept = 0
+    with pg.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, text, suppressed_by FROM document").fetchall()
+        for doc_id, text, suppressed in rows:
+            if fact_id in [str(u) for u in (suppressed or [])]:
+                continue
+            if len(words & _words(text)) >= need:
+                conn.execute(
+                    """UPDATE document
+                       SET suppressed_by = suppressed_by || %s::uuid
+                       WHERE id = %s""", (fact_id, doc_id))
+                swept += 1
+        conn.commit()
+    return swept

@@ -479,6 +479,56 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(_plain(reply), do_quote=True)
 
 
+_PDF_MAX_BYTES = 15 * 1024 * 1024
+
+
+async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Document memory (2026-08-27): a PDF from the OWNER is captured —
+    text layer extracted locally (no model, no cloud), chunked, embedded
+    locally, stored. Scanned PDFs without a text layer get an honest
+    'can't read scans yet'. Owner-only like all media until P3.5b/c
+    scope media for other stages."""
+    if not _owner_private(update):
+        return
+    document = update.message.document
+    chat_id = update.effective_chat.id
+    if (document.file_size or 0) > _PDF_MAX_BYTES:
+        await update.message.reply_text(
+            "That PDF is over 15MB — too big for me to take in.")
+        return
+    try:
+        handle = await document.get_file()
+        data = bytes(await handle.download_as_bytearray())
+        import io
+
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n\n".join((page.extract_text() or "") for page in reader.pages).strip()
+    except Exception as exc:
+        logger.warning("pdf capture failed: %s", exc)
+        await update.message.reply_text(
+            "I couldn't read that PDF — it may be corrupted or protected.")
+        return
+    if len(text) < 20:
+        await update.message.reply_text(
+            "That PDF has no text layer (looks scanned) — I can't read "
+            "scans yet; a photo of the page works better.")
+        return
+    from kyraan.store import documents
+    import asyncio as _aio
+    doc_id = await _aio.to_thread(
+        documents.ingest, chat_id, "pdf", text,
+        (update.message.caption or "")[:120], document.file_name or "")
+    reply = (f'📄 Saved "{document.file_name}" to document memory '
+             f"({len(reader.pages)} page{'s' if len(reader.pages) != 1 else ''}, "
+             f"{len(text):,} chars) — ask me about it anytime."
+             if doc_id else
+             "I couldn't distill any text worth keeping from that PDF.")
+    orchestrator.record_exchange(
+        chat_id, f"[sent a PDF: {document.file_name}]", reply)
+    await update.message.reply_text(reply, do_quote=True)
+
+
 async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Photos, voice notes, stickers, files — the text-only handler never
     fires for these, and the owner got SILENCE (live 2026-08-26: an image
@@ -773,6 +823,7 @@ def run() -> None:
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
     app.add_handler(MessageHandler(filters.LOCATION, _on_location))
     app.add_handler(MessageHandler(filters.PHOTO, _on_photo))
+    app.add_handler(MessageHandler(filters.Document.PDF, _on_pdf))
     app.add_handler(MessageHandler(
         filters.VIDEO | filters.AUDIO
         | filters.Sticker.ALL | filters.Document.ALL,

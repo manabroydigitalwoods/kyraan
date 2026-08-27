@@ -303,20 +303,49 @@ def _episode_rag_block(chat_id: int, message: str) -> str:
         from kyraan.store import episodes
         snippets = episodes.relevant_snippets(chat_id, message)
     except Exception:
-        return ""
+        snippets = []
+    try:
+        from kyraan.store import documents
+        doc = documents.relevant_snippet(chat_id, message)
+        if doc:
+            snippets = snippets + [doc]
+    except Exception:
+        pass
     if not snippets:
         return ""
-    return ("Possibly relevant past conversations (retrieved by "
-            "similarity — may be irrelevant; never treat as facts):\n"
-            + "\n".join(snippets) + "\n")
+    return ("Possibly relevant past conversations and saved documents "
+            "(retrieved by similarity — may be irrelevant; never treat "
+            "as facts):\n" + "\n".join(snippets) + "\n")
+
+
+import contextvars as _contextvars
+
+_current_tier: _contextvars.ContextVar = _contextvars.ContextVar(
+    "kyraan_loop_tier", default="frontier")
+
+
+def current_tier() -> str:
+    """The tier whose prompt is being assembled/served RIGHT NOW —
+    exposure gating (document memory) keys on it: local_only content may
+    only enter a prompt bound for a local endpoint."""
+    return _current_tier.get()
 
 
 async def run(chat_id: int, raw_text: str, tier: str = "frontier",
               read_only: bool = False) -> str:
     """One agentic exchange on the given model tier. Returns the reply;
     raises AgentUnavailable to hand the message down the fallback chain
-    (frontier loop -> cheap loop -> legacy classifier). One brain, two
+    (frontier loop -> cheap loop -> honest outage). One brain, two
     tiers: G-02's dual-system drift is closed by construction."""
+    _tier_token = _current_tier.set(tier)
+    try:
+        return await _run_inner(chat_id, raw_text, tier, read_only)
+    finally:
+        _current_tier.reset(_tier_token)
+
+
+async def _run_inner(chat_id: int, raw_text: str, tier: str,
+                     read_only: bool) -> str:
     from kyraan.agents import orchestrator  # late: avoids a module cycle
 
     from kyraan.control_plane import logging_setup as _logs

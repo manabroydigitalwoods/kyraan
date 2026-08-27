@@ -610,13 +610,14 @@ def resweep_forgotten() -> int:
     every FORGOTTEN fact — inactive, no supersessor (an update is not a
     forget), long-term (an expired short is not a forget either).
     Idempotent; catches sweeps deferred by a PG outage."""
-    from kyraan.store import episodes, facts
+    from kyraan.store import documents, episodes, facts
     swept = 0
     for entry in _load():
         if (not entry.get("active") and not entry.get("superseded_by")
                 and entry.get("term") != "short"):
-            swept += episodes.suppress_for_fact(
-                facts.fact_uuid(entry["id"]), entry["content"])
+            fact_id = facts.fact_uuid(entry["id"])
+            swept += episodes.suppress_for_fact(fact_id, entry["content"])
+            swept += documents.suppress_for_fact(fact_id, entry["content"])
     return swept
 
 
@@ -628,11 +629,14 @@ def _sweep_episodes(changed: list) -> None:
         from kyraan.store import episodes, facts
         if not facts.MIRROR_ENABLED:  # tests: no PG side-effects at all
             return
-        total = 0
+        from kyraan.store import documents
+        total = docs = 0
         for entry in changed:
-            total += episodes.suppress_for_fact(
-                facts.fact_uuid(entry["id"]), entry["content"])
-        log_event("episodes_suppressed", facts=len(changed), episodes=total)
+            fact_id = facts.fact_uuid(entry["id"])
+            total += episodes.suppress_for_fact(fact_id, entry["content"])
+            docs += documents.suppress_for_fact(fact_id, entry["content"])
+        log_event("episodes_suppressed", facts=len(changed),
+                  episodes=total, documents=docs)
     except Exception as exc:
         log_event("episode_suppress_deferred", reason=str(exc)[:200])
 

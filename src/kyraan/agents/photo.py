@@ -51,7 +51,13 @@ photo", "Yep, I can see it" are filler): just answer about the photo,
 the way a person looking at it would.
 
 OUTPUT exactly one JSON object:
-  {"reply": "<your reply>", "remember_face_as": null}
+  {"reply": "<your reply>", "remember_face_as": null, "document_text": ""}
+Set "document_text" to a FULL transcription when the photo is a
+document — a visiting card, brochure, sign, label, letter, screen, or
+anything with readable text worth keeping: every name, phone number,
+address, price, date, exactly as printed, plain text. A photo of people
+or scenery with no meaningful text keeps "" — never describe the scene
+there.
 Set "remember_face_as" to a NAME string instead of null ONLY when the
 caption asks — in any wording or language — to remember/save/enroll this
 face for future recognition ("remember this face as Maan", "save him as
@@ -103,10 +109,24 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
         reply = str(decision.get("reply", "")).strip()
         name = decision.get("remember_face_as")
         enroll_name = str(name).strip() if name else None
+        document_text = str(decision.get("document_text") or "").strip()
     except (json.JSONDecodeError, AttributeError, TypeError):
         # Robustness: an unparseable response is still a reply — losing
         # the intent field beats losing the answer.
-        reply, enroll_name = response.text.strip(), None
+        reply, enroll_name, document_text = response.text.strip(), None, ""
     if enroll_name and (len(enroll_name) < 2 or len(enroll_name) > 40):
         enroll_name = None
+    if document_text:
+        # Document memory (2026-08-27): the transcription rode the SAME
+        # vision call — ingest is free. Best-effort; the photo answer
+        # never fails on it.
+        try:
+            from kyraan.store import documents
+            doc_id = documents.ingest(chat_id, "photo", document_text,
+                                      caption=caption[:120])
+            if doc_id:
+                reply += ("\n\n📄 Saved to document memory — ask me about "
+                          "it anytime.")
+        except Exception as exc:
+            log_event("document_ingest_failed", reason=str(exc)[:120])
     return reply or "(couldn't read that photo — try sending it again)", enroll_name

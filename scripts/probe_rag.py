@@ -55,6 +55,28 @@ NEGATIVE_PROBES = [
 ]
 
 
+_FIXTURE_CARD = ("KYRAAN PROBE FIXTURES\nPlumbing by Harilal\n"
+                 "Phone: 90070 55221\nHill Cart Road, Siliguri")
+
+
+def _document_probes() -> int:
+    """Seeded fixture card (idempotent id) — the DIGITS case is the one
+    embeddings cannot carry; FTS must."""
+    from kyraan.store import documents
+    documents.ingest(OWNER_CHAT, "photo", _FIXTURE_CARD,
+                     caption="probe fixture card")
+    failures = 0
+    print("\nDOCUMENT retrieval:")
+    for query, expected, arm in (
+            ("90070 55221", "Harilal", "digits/FTS"),
+            ("the plumber's visiting card", "90070 55221", "semantic")):
+        hits = documents.search(OWNER_CHAT, query)
+        ok = any(expected in h["text"] for h in hits)
+        failures += not ok
+        print(f"  {'✅' if ok else '❌'} [{arm}] {query!r} -> {expected!r}")
+    return failures
+
+
 def main() -> int:
     failures = 0
     print("FACT retrieval (zero-overlap phrasings):")
@@ -78,6 +100,7 @@ def main() -> int:
         ok = not snippets
         failures += not ok
         print(f"  {'✅' if ok else '❌'} {query!r} injected {len(snippets)}")
+    failures += _document_probes()
     print(f"\n{failures} failure(s)")
     return 1 if failures else 0
 
