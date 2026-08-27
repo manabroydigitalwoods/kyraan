@@ -594,6 +594,25 @@ cited. Live: 13 correctly-directed triples from the real tree; eval
 Part-2 soaks (~2026-08-30); P3.5 waits on the subject-review queue;
 then the ENGINEERING-DONE gate (arch §7).
 
+**P3.2c+d CUTOVER + Part 4 DONE (2026-08-27):** owner waived the
+remaining soak days — pg is now the DEFAULT read path for memory and
+promises (=files is the rollback lever; writes stay dual, files remain
+authority; evidence at flip: parity 53/53 + clean, sync green, eval
+21/21). En route: a pg-down TEST had written a real stale mark
+(data/pg_sync_state.json wasn't test-isolated — 73 fallback events of
+pure pollution); isolated, cleared per contract. Part 4 shipped same
+day: the conversation window + summary backlogs live in Redis behind
+KYRAAN_SESSION_BACKEND=redis (deque-shaped proxies, module API
+unchanged, one-event dead-mode fallback to memory); loop-tool confirm
+asks persist with TTL and REBUILD after a restart — the owner's yes
+executes the stashed call byte-identically, nonces keep the Yes/No
+buttons valid, and the calendar-listing proof survives too; P3.4c
+proven as a property (FLUSHALL loses no spend — the ledger never
+lived in Redis). Live check passed: a marker planted in the owner's
+Redis window survived a real bot restart; 17 chats seeded. Eval 21/21
+HARD, soft 11/11 on the final build. Remaining in Phase 3: P3.5
+(gated on the 8-fact subject review queue), then the gate + Part 7.
+
 ## Next steps
 
 1. Phase 3 build, from the architecture draft — governance.md is the
