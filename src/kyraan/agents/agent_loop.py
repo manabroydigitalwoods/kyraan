@@ -73,6 +73,21 @@ class AgentUnavailable(Exception):
     usable decision) — the caller falls back to the classifier path."""
 
 
+def build_confirmed_handler(chat_id: int, tool: str, args: dict, raw_text: str):
+    """The confirmed-replay handler for one stashed tool call — a module
+    function (not an inline closure) because P3.4b REBUILDS it from a
+    Redis-persisted stash after a restart: the owner's yes then executes
+    the same call byte-identically in the new process."""
+    async def confirmed_handler(_a, _t=tool, _ar=dict(args)):
+        _prior = (await loop_tools.capture_prior(chat_id, _t, _ar)
+                  if _t in loop_tools.UNDO_MAP else None)
+        outcome = await TOOLS[_t]["run"](chat_id, _ar, raw_text)
+        await loop_tools.record_action(chat_id, _t, _ar, outcome, _prior)
+        return _confirmed_reply(_t, _ar, outcome)
+
+    return confirmed_handler
+
+
 
 # The tool surface lives in loop_tools.py; these names are re-exported so
 # callers and tests keep addressing them through agent_loop (the split is
@@ -421,19 +436,12 @@ async def run(chat_id: int, raw_text: str, tier: str = "frontier",
         except kernel.ConfirmationRequired:
             # The standard confirm flow, verbatim: stash the EXACT call;
             # the owner's yes replays it byte-identical through the kernel.
-            captured_tool, captured_args = tool, dict(args)
-
-            async def confirmed_handler(_a, _t=captured_tool, _ar=captured_args):
-                _prior = (await loop_tools.capture_prior(chat_id, _t, _ar)
-                          if _t in loop_tools.UNDO_MAP else None)
-                outcome = await TOOLS[_t]["run"](chat_id, _ar, raw_text)
-                await loop_tools.record_action(chat_id, _t, _ar, outcome, _prior)
-                return _confirmed_reply(_t, _ar, outcome)
-
             call = kernel.SkillCall("agent.action", {"tool": tool}, )
             return await orchestrator._gated(
-                chat_id, call, confirmed_handler,
-                describe=_describe_call(tool, args, raw_text, chat_id))
+                chat_id, call,
+                build_confirmed_handler(chat_id, tool, dict(args), raw_text),
+                describe=_describe_call(tool, args, raw_text, chat_id),
+                replay={"tool": tool, "args": dict(args), "raw_text": raw_text})
         except kernel.KillSwitchEngaged:
             raise
         except kernel.ToolFailed as exc:

@@ -479,8 +479,13 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             _skip_extraction.set(True)
             return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)
+        if pending is None:
+            pending = _load_persisted_confirmation(chat_id)  # P3.4b: the
+            # ask survived a restart — rebuild the byte-identical replay
         if pending:
             _confirmation_nonce.pop(chat_id, None)
+            from kyraan.store import redis_kv as _rkv
+            _rkv.delete(_rkv.key("confirm", chat_id))  # resolved either way
             call, handler, stashed_at = pending
             word = raw_text.strip().lower().rstrip(".!")
             if time.monotonic() - stashed_at > _CONFIRMATION_TTL_S:
@@ -939,11 +944,54 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
                         _run_undo, describe=_describe_undo(action))
 
 
-async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> str:
+def _load_persisted_confirmation(chat_id: int):
+    """P3.4b: a loop-tool ask persisted in Redis (restart survivor).
+    Returns (call, handler, stashed_at) shaped exactly like the
+    in-process stash, or None. Redis TTL is the expiry — a record that
+    still exists is within the confirmation window."""
+    from kyraan.store import redis_kv
+    record = redis_kv.get_json(redis_kv.key("confirm", chat_id))
+    if not record:
+        return None
+    try:
+        from kyraan.agents import agent_loop
+        call = SkillCall(record["skill"], dict(record.get("skill_args") or {}))
+        handler = agent_loop.build_confirmed_handler(
+            chat_id, record["tool"], dict(record.get("args") or {}),
+            str(record.get("raw_text") or ""))
+        log_event("confirmation_restored", chat_id=chat_id,
+                  skill=record["skill"], tool=record["tool"])
+        return (call, handler, time.monotonic())
+    except Exception as exc:
+        log_event("confirmation_restore_failed", error=str(exc)[:150])
+        return None
+
+
+def current_confirmation_nonce(chat_id: int) -> str:
+    """The nonce for this chat's pending ask — in-process first, then
+    the Redis survivor (so the ask's Yes/No BUTTONS also work across a
+    restart, not just a typed yes)."""
+    nonce = _confirmation_nonce.get(chat_id, "")
+    if nonce:
+        return nonce
+    from kyraan.store import redis_kv
+    record = redis_kv.get_json(redis_kv.key("confirm", chat_id))
+    return str(record.get("nonce", "")) if record else ""
+
+
+async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "",
+                 replay: dict | None = None) -> str:
     """Run a skill through the kernel; if it (or a confirm-gated tool
     inside it) needs approval, stash it and ask — `describe` names the
     concrete action so the user confirms a specific thing, not a vague
-    intent."""
+    intent.
+
+    `replay` (P3.4b): the loop-tool asks are REBUILDABLE from
+    (tool, args, raw_text), so they also persist to Redis with the
+    confirmation TTL — the ask now survives a restart, and the owner's
+    yes in the NEW process replays the same call byte-identically.
+    Closure-bound asks (faces, review, undo, consolidate) stay
+    process-local and keep the honest orphan reply."""
     try:
         return str(await kernel.run_skill(call, handler))
     except ConfirmationRequired:
@@ -953,8 +1001,20 @@ async def _gated(chat_id: int, call: SkillCall, handler, describe: str = "") -> 
         # review queue (live: scheduling a task filed "you want to check
         # tomorrow's calendar every evening" as a durable fact).
         _skip_extraction.set(True)
-        _confirmation_nonce[chat_id] = _uuid.uuid4().hex[:12]
+        nonce = _uuid.uuid4().hex[:12]
+        _confirmation_nonce[chat_id] = nonce
         _pending_confirmations[chat_id] = (call, handler, time.monotonic())
+        from kyraan.store import redis_kv
+        if replay is not None:
+            redis_kv.set_json(
+                redis_kv.key("confirm", chat_id),
+                {"skill": call.skill_name, "skill_args": dict(call.args),
+                 "nonce": nonce, "describe": describe, **replay},
+                ttl_s=int(_CONFIRMATION_TTL_S))
+        else:
+            # A closure-bound ask REPLACES any persisted one — a stale
+            # Redis stash must never outlive the newer in-process ask.
+            redis_kv.delete(redis_kv.key("confirm", chat_id))
         what = describe or f"'{call.skill_name}' needs your confirmation first"
         return f"{what} — reply \"yes\" to confirm or \"no\" to cancel."
 

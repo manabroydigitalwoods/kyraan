@@ -28,18 +28,44 @@ _listing_cache: dict = {}
 _LISTING_TTL_S = 600
 
 
-async def _calendar_list(chat_id: int, args: dict, raw_text: str):
+def _listing_put(chat_id: int, items: dict, recurring: set) -> None:
     import time as _time
+    _listing_cache[chat_id] = {"at": _time.monotonic(), "items": items,
+                               "recurring": set(recurring)}
+    # P3.4b: the listing proof also survives a restart — Redis TTL is the
+    # freshness rule there (a record that exists is a current listing).
+    from kyraan.store import redis_kv
+    redis_kv.set_json(redis_kv.key("listing", chat_id),
+                      {"items": items, "recurring": sorted(recurring)},
+                      ttl_s=_LISTING_TTL_S)
+
+
+def _listing_lookup(chat_id: int) -> dict:
+    """The CURRENT listing for this chat: {'items': {id: title},
+    'recurring': set} — or {} when none is fresh."""
+    import time as _time
+    listing = _listing_cache.get(chat_id) or {}
+    if listing and (_time.monotonic() - listing.get("at", 0)) < _LISTING_TTL_S:
+        return {"items": listing.get("items") or {},
+                "recurring": set(listing.get("recurring") or ())}
+    from kyraan.store import redis_kv
+    record = redis_kv.get_json(redis_kv.key("listing", chat_id))
+    if record:
+        return {"items": record.get("items") or {},
+                "recurring": set(record.get("recurring") or ())}
+    return {}
+
+
+async def _calendar_list(chat_id: int, args: dict, raw_text: str):
     events = await kernel.run_tool(kernel.ToolCall(
         "calendar.list_events", {"start": args["start"], "end": args["end"]}))
-    _listing_cache[chat_id] = {
-        "at": _time.monotonic(),
-        "items": {e["id"]: str(e.get("title", "")) for e in events if e.get("id")},
-        # Deleting one occurrence of a recurring event removes the WHOLE
-        # series in Google Calendar — the confirm ask has to say so, and
-        # the flag only survives here (Bugbot P1).
-        "recurring": {e["id"] for e in events if e.get("id") and e.get("recurring")},
-    }
+    # Deleting one occurrence of a recurring event removes the WHOLE
+    # series in Google Calendar — the confirm ask has to say so, and
+    # the flag only survives in this cache (Bugbot P1).
+    _listing_put(
+        chat_id,
+        {e["id"]: str(e.get("title", "")) for e in events if e.get("id")},
+        {e["id"] for e in events if e.get("id") and e.get("recurring")})
     return events[:20]
 
 
@@ -60,10 +86,8 @@ async def _calendar_create(chat_id: int, args: dict, raw_text: str):
 
 
 async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
-    import time as _time
-    listing = _listing_cache.get(chat_id) or {}
-    fresh = listing and (_time.monotonic() - listing.get("at", 0)) < _LISTING_TTL_S
-    known_title = (listing.get("items") or {}).get(str(args["event_id"])) if fresh else None
+    listing = _listing_lookup(chat_id)
+    known_title = (listing.get("items") or {}).get(str(args["event_id"]))
     if known_title is None:
         raise kernel.ToolFailed(
             "that event id is not from a CURRENT listing — call "
@@ -849,7 +873,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
                 f"{humanize(start_iso)} → {humanize(end_iso)}")
     if tool == "calendar.delete_event":
         what = args.get("title") or args.get("event_id")
-        listing = _listing_cache.get(chat_id) or {}
+        listing = _listing_lookup(chat_id)
         if str(args.get("event_id")) in (listing.get("recurring") or set()):
             # An owner confirming "delete the 3pm standup" must know the
             # whole SERIES goes, not one occurrence (Bugbot P1).
