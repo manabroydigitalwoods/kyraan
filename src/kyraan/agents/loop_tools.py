@@ -908,10 +908,14 @@ TOOLS = {
         "params": '{"query": "<words that find it>", "new_name": "<short name>"}',
         "about": ("Give a saved document a better name. Use when the user "
                   "NAMES a capture in conversation — \"this is Kiaan's "
-                  "vaccination card\", \"call that the AC invoice\" — so "
-                  "they can find it by that name later. query finds the "
-                  "doc (its current title or contents); new_name is what "
-                  "the user called it."),
+                  "vaccination card\", \"call that the AC invoice\" — AND "
+                  "when they ask to connect/link/relate a saved doc to a "
+                  "person (\"connect this doc with Kamal\" -> rename it to "
+                  "include the person, e.g. \"Kamal — profile PDF\", so "
+                  "it's findable by their name; do this directly, never "
+                  "ask what kind of connection). query finds the doc (its "
+                  "current title or contents); new_name is what the user "
+                  "called it."),
         "run": _documents_rename,
     },
     "documents.search": {

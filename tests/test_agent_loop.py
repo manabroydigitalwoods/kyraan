@@ -1022,3 +1022,55 @@ async def test_cancel_returns_a_deterministic_receipt(scripted_model, monkeypatc
     assert reply.startswith('Cancelled: "Call mom"')
     assert "won't fire again" in reply
     assert rstore.list_pending(90) == []
+
+
+async def test_referent_dodge_forces_one_re_decide(scripted_model, monkeypatch):
+    """Third live appearance of the pronoun disease (2026-08-27 23:41):
+    "connect this doc with him" -> "who is 'him'?" although Kamal was
+    the whole conversation. The prompt rule lost three times; the rail
+    is deterministic — one person in the recent window means the
+    pronoun is them."""
+    from kyraan.agents import orchestrator
+    chat_id = 91_001
+    orchestrator._history[chat_id].append(
+        ("user", "did you related it with kamal?"))
+    orchestrator._history[chat_id].append(
+        ("assistant", "Not automatically. There isn't a confirmation that "
+                      "it's related to Kamal unless you tell me the "
+                      "connection."))
+    prompts = scripted_model([
+        '{"action": "reply", "text": "Sure—who is \\"him\\" here (what exact person)?"}',
+        '{"action": "reply", "text": "Linked the PDF to Kamal."}',
+    ])
+    reply = await agent_loop.run(chat_id, "connect this doc with him")
+    assert reply == "Linked the PDF to Kamal."
+    assert "exactly ONE person: Kamal" in prompts[1]
+
+
+async def test_referent_question_stands_when_genuinely_ambiguous(
+        scripted_model, monkeypatch):
+    """Two people in the window = real ambiguity; the question stands."""
+    from kyraan.agents import orchestrator
+    chat_id = 91_002
+    orchestrator._history[chat_id].append(
+        ("user", "kamal and suman came over"))
+    orchestrator._history[chat_id].append(
+        ("assistant", "Nice — Kamal and Suman."))
+    prompts = scripted_model([
+        '{"action": "reply", "text": "Who do you mean by \\"him\\" — Kamal or Suman?"}',
+    ])
+    reply = await agent_loop.run(chat_id, "anything about him?")
+    assert "Kamal or Suman" in reply
+    assert len(prompts) == 1
+
+
+def test_sole_recent_person_ignores_capitalized_noise():
+    from kyraan.agents import orchestrator
+    chat_id = 91_003
+    orchestrator._history[chat_id].append(
+        ("user", "did you know about kamal? yes you did"))
+    orchestrator._history[chat_id].append(
+        ("assistant", "Sure—Got it. When you sent it, Kamal was noted. "
+                      "You can ask anytime."))
+    assert agent_loop._sole_recent_person(chat_id, "connect it with him") \
+        == "Kamal"

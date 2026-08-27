@@ -215,7 +215,8 @@ def _append(path: Path, record: dict) -> None:
 ANOMALY_KINDS = frozenset({
     "model_call_error", "agent_tier_fallback", "agent_loop_error",
     "agent_all_tiers_failed", "agent_false_success_corrected",
-    "agent_deflection_corrected", "tool_loop_detected",
+    "agent_deflection_corrected", "agent_referent_corrected",
+    "tool_loop_detected",
     "agent_tool_error", "handle_message_error",
     "extraction_skipped_slow", "extraction_error",
     "fact_sync_deferred", "promise_sync_deferred",

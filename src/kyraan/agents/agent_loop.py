@@ -70,6 +70,44 @@ _DEFLECTION_RE = re.compile(
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 
+# Referent dodge (the pronoun disease, third live appearance 2026-08-27
+# 23:41 — the prompt rule lost three times, so this is the rail): a
+# draft asking WHO a pronoun means while the conversation names exactly
+# one person is a dodge, not a real ambiguity.
+_REFERENT_DODGE_RE = re.compile(
+    r"who (?:do you mean|exactly)"
+    r"|which person (?:do you mean|are you referring|should i)"
+    r"|who is [\"'“‘]?(?:him|her|it|that|this)\b",
+    re.IGNORECASE)
+
+_REFERENT_STOP = {
+    "you", "your", "yes", "the", "and", "him", "her", "his", "she", "who",
+    "what", "when", "where", "which", "this", "that", "did", "does", "can",
+    "not", "with", "for", "was", "are", "has", "have", "had", "its", "they",
+    "them", "then", "than", "also", "just", "here", "there", "how", "why",
+    "will", "would", "could", "should", "doc", "pdf", "photo", "kyraan",
+    "sure", "got", "okay", "noted", "please", "send", "about", "connect",
+}
+
+
+def _sole_recent_person(chat_id: int, raw_text: str) -> str | None:
+    """Exactly one person named in the recent window, or None. Candidates
+    are capitalized words from the ASSISTANT's recent replies whose
+    lowercase form the USER also typed (the user names the person, the
+    assistant capitalizes it — 'kamal' -> 'Kamal'); junk survivors mean
+    2+ candidates and the guard stays silent, so failure is fail-safe."""
+    from kyraan.agents import orchestrator
+    entries = list(orchestrator._history[chat_id])[-8:]
+    user_text = " ".join(t for role, t in entries if role == "user")
+    user_text = f"{user_text} {raw_text}".lower()
+    user_words = {w.strip(".,!?—:;\"'()”“’‘") for w in user_text.split()}
+    assistant_text = " ".join(t for role, t in entries if role == "assistant")
+    candidates = set()
+    for word in re.findall(r"\b[A-Z][a-z]{2,}\b", assistant_text):
+        if word.lower() in user_words and word.lower() not in _REFERENT_STOP:
+            candidates.add(word)
+    return candidates.pop() if len(candidates) == 1 else None
+
 # P3.7a: a reply CLAIMING a write happened when no write tool ran this
 # turn — the false-success class (first seen as the faces hallucination;
 # in degraded mode qwen3 said "I've set a reminder to call your mom"
@@ -440,6 +478,8 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
     executed_names: set = set()  # which tools actually ran this turn
     last_listing: list | None = None  # reminders.list's ACTUAL texts
     wrote_this_turn = False  # a WRITE tool ran and did not error
+    referent_corrections = 0  # one forced re-decide when a draft asks who
+    # a pronoun means while the conversation names exactly one person
     false_success_corrections = 0  # up to three forced re-decides — a
     # stubborn fabricator then exhausts the step cap and falls to the
     # deterministic classifier path, which lists correctly
@@ -468,6 +508,20 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             reply = str(decision.get("text", "")).strip()
             if not reply:
                 raise AgentUnavailable("empty reply")
+            if (referent_corrections < 1
+                    and _REFERENT_DODGE_RE.search(reply)):
+                person = _sole_recent_person(chat_id, raw_text)
+                if person:
+                    referent_corrections += 1
+                    log_event("agent_referent_corrected", chat_id=chat_id,
+                              tier=tier, person=person, draft=reply[:150])
+                    transcript += (
+                        "\nSYSTEM: STOP — your draft asked who a pronoun "
+                        "refers to, but the recent conversation names "
+                        f"exactly ONE person: {person}. The pronoun means "
+                        f"{person}. Do not ask again — answer or act for "
+                        f"{person} directly now.")
+                    continue
             if (deflection_corrections < 2 and not read_only
                     and _DEFLECTION_RE.search(reply)):
                 # Deflection guard. The prompt-level "stated request IS the

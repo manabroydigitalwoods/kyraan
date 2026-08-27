@@ -88,7 +88,8 @@ def subjects_from_name(title: str) -> list:
         if pid == "owner":
             continue
         name = re.escape(pid.replace("_", " "))
-        if re.search(rf"\b{name}(?:[’']s\b|\s+and\b)|\bfor {name}\b", low):
+        if re.search(rf"\b{name}(?:[’']s\b|\s+and\b)"
+                     rf"|\b(?:for|about) {name}\b", low):
             out.append(pid)
     return out
 
