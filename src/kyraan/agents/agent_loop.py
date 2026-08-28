@@ -256,8 +256,19 @@ doctrine, in order:
    act now or say what to ask for.
 
 DECIDE with ONE JSON object, nothing else:
-  {{"action": "reply", "consider": "<one short line: WANT/HAVE/NEED verdict>", "text": "<your reply>"}}
+  {{"action": "reply", "consider": "<one short line: WANT/HAVE/NEED verdict>", "answers_request": true, "text": "<your reply>"}}
   {{"action": "call", "consider": "<one short line: why this tool now>", "tool": "<tool name>", "args": {{...}}}}
+
+THE REPLY CONTRACT: "answers_request" declares whether your reply
+FULFILLS the user's message (an answer, a completed action's receipt,
+a normal conversational response = true). Set false ONLY when it does
+not — asking something back, refusing, deferring — and then you MUST
+also set "reason" to exactly one of:
+  "ambiguous_referent"  — you cannot tell who/what they mean
+  "missing_user_fact"   — a detail only the user knows is missing
+  "capability_missing"  — no listed tool covers the request
+A false without a valid reason is rejected. The runtime checks each
+reason and will push back when the conversation already resolves it.
 
 Style rules:
 - The USER message may contain several lines sent as a rapid burst — read
@@ -571,6 +582,8 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
     executed_names: set = set()  # which tools actually ran this turn
     last_listing: list | None = None  # reminders.list's ACTUAL texts
     wrote_this_turn = False  # a WRITE tool ran and did not error
+    contract_corrections = 0  # reply-contract adjudications (≤2/turn)
+    challenged_reasons: set = set()  # a stood-by declaration is accepted
     referent_corrections = 0  # one forced re-decide when a draft asks who
     # a pronoun means while the conversation names exactly one person
     false_success_corrections = 0  # up to three forced re-decides — a
@@ -601,6 +614,49 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             reply = str(decision.get("text", "")).strip()
             if not reply:
                 raise AgentUnavailable("empty reply")
+            # THE REPLY CONTRACT (2026-08-28, the concrete resolver):
+            # the model DECLARES whether this reply fulfills the message;
+            # a non-answer must name its category from a closed enum, and
+            # each category is adjudicated deterministically. New dodge
+            # shapes must declare themselves to escape — caught by
+            # category, not by pattern; the regex rails below remain as
+            # the backstop for undeclared dodges, and stop growing.
+            answers = decision.get("answers_request")
+            reason = str(decision.get("reason", "") or "")
+            if (answers is False and contract_corrections < 2
+                    and reason not in challenged_reasons):
+                challenge = None
+                if reason == "ambiguous_referent":
+                    person = _sole_recent_person(chat_id, raw_text)
+                    if person:
+                        challenge = (
+                            "you declared ambiguous_referent, but the "
+                            f"conversation names exactly ONE person: {person}. "
+                            f"The referent is {person} — answer or act for "
+                            "them now.")
+                elif reason == "capability_missing":
+                    challenge = (
+                        "you declared capability_missing. Re-read the TOOLS "
+                        "list above — if ANY listed tool covers this request, "
+                        "call it NOW. Only if truly none does, keep your "
+                        "reply (and never re-declare this for the same ask).")
+                elif reason == "missing_user_fact":
+                    pass  # the one legitimate question — allowed
+                else:
+                    challenge = (
+                        "answers_request=false requires a valid reason "
+                        "(ambiguous_referent | missing_user_fact | "
+                        "capability_missing). Re-decide: answer the request, "
+                        "or declare the true reason.")
+                if challenge:
+                    contract_corrections += 1
+                    if reason:  # a re-declared same reason stands next time
+                        challenged_reasons.add(reason)
+                    log_event("agent_contract_corrected", chat_id=chat_id,
+                              tier=tier, reason=reason or "undeclared",
+                              draft=reply[:150])
+                    transcript += f"\nSYSTEM: STOP — {challenge}"
+                    continue
             if (referent_corrections < 1
                     and _REFERENT_DODGE_RE.search(reply)):
                 # "Which Kamal do you mean" NAMES the person it claims is

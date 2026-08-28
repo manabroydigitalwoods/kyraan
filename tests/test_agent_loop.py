@@ -1140,3 +1140,60 @@ def test_persona_block_renders_from_config(monkeypatch):
     assert "You are Kyraan" in block
     assert "Address the owner as Maan" in block
     assert "Warm and direct." in block
+
+
+# --- the reply contract (the concrete resolver, 2026-08-28) --------------
+
+async def test_contract_ambiguous_referent_with_sole_person_is_challenged(
+        scripted_model, monkeypatch):
+    from kyraan.agents import orchestrator as _orch
+    chat_id = 91_010
+    _orch._history[chat_id].append(("user", "did you relate it with kamal?"))
+    _orch._history[chat_id].append(("assistant", "Not yet — Kamal's PDF is saved."))
+    prompts = scripted_model([
+        '{"action": "reply", "answers_request": false, "reason": "ambiguous_referent", '
+        '"text": "Who do you mean?"}',
+        '{"action": "reply", "answers_request": true, "text": "Linked it to Kamal."}',
+    ])
+    reply = await agent_loop.run(chat_id, "connect this doc with him")
+    assert reply == "Linked it to Kamal."
+    assert "The referent is Kamal" in prompts[1]
+
+
+async def test_contract_capability_claim_is_challenged_once(scripted_model):
+    prompts = scripted_model([
+        '{"action": "reply", "answers_request": false, "reason": "capability_missing", '
+        '"text": "I cannot read email bodies."}',
+        '{"action": "reply", "answers_request": false, "reason": "capability_missing", '
+        '"text": "Truly no tool covers this."}',
+    ])
+    reply = await agent_loop.run(90, "make me a pizza")
+    assert reply == "Truly no tool covers this."   # challenged, then stood by
+    assert "Re-read the TOOLS list" in prompts[1]
+
+
+async def test_contract_false_without_reason_is_rejected(scripted_model):
+    prompts = scripted_model([
+        '{"action": "reply", "answers_request": false, "text": "Hmm, what?"}',
+        '{"action": "reply", "answers_request": true, "text": "Here is the answer."}',
+    ])
+    reply = await agent_loop.run(90, "what is 2+2")
+    assert reply == "Here is the answer."
+    assert "requires a valid reason" in prompts[1]
+
+
+async def test_contract_missing_user_fact_question_stands(scripted_model):
+    scripted_model([
+        '{"action": "reply", "answers_request": false, "reason": "missing_user_fact", '
+        '"text": "What time should the reminder be?"}',
+    ])
+    reply = await agent_loop.run(90, "remind me to call suman")
+    assert "What time" in reply                    # the one legitimate question
+
+
+async def test_contract_absent_field_passes_through(scripted_model):
+    """Degraded-tier qwen may omit the field — treated as fulfilled; the
+    regex rails stay as backstop."""
+    scripted_model(['{"action": "reply", "text": "The AC is off."}'])
+    reply = await agent_loop.run(90, "is the ac off?")
+    assert reply == "The AC is off."
