@@ -242,3 +242,32 @@ async def test_boot_rearms_redelivery_for_stashed_results(monkeypatch):
         run_fn=noop, send_fn=noop)
     redeliveries = [p for n, p in scheduled if p.get("redeliver_only")]
     assert len(redeliveries) == 1 and redeliveries[0]["task_id"] == task.id
+
+
+async def test_stale_redelivery_job_is_inert(monkeypatch):
+    """Bugbot round-5 P2: a redeliver-only fire whose stash was already
+    flushed fell through into a FRESH off-schedule run. Redeliver-only
+    with nothing to flush does nothing."""
+    from datetime import timedelta
+
+    from kyraan.control_plane import kernel
+    from kyraan.control_plane.dnd import local_now
+    from kyraan.triggers import agent_tasks
+
+    runs = []
+
+    async def run_fn(chat_id, instruction):
+        runs.append(instruction)
+        return "fresh work"
+
+    async def send_fn(chat_id, text):
+        pass
+
+    agent_tasks.init(schedule_fn=lambda *a, **k: None,
+                     run_fn=run_fn, send_fn=send_fn)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+    when = (local_now() + timedelta(days=7)).isoformat()
+    task = agent_tasks.create(1, "weekly check", when, repeat="weekly")
+    # no pending_result: the stash was already flushed
+    await agent_tasks.fire(task.id, redeliver_only=True)
+    assert runs == []                     # no off-schedule fresh work

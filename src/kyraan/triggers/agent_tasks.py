@@ -216,6 +216,14 @@ async def fire(task_id: str, redeliver_only: bool = False) -> None:
         elif task.repeat and task.pending_result:
             _schedule_redelivery(task.id, 30)  # survives the DND hold
         return
+    if redeliver_only and not task.pending_result:
+        # A stale redelivery job (Bugbot round-5 P2): its stash was
+        # already flushed by an earlier attempt or a boot re-arm —
+        # falling through would run FRESH work off-schedule and send
+        # duplicates. Redeliver-only means exactly that: nothing to
+        # flush, nothing to do.
+        log_event("agent_task_redelivery_stale", task_id=task_id)
+        return
     if task.pending_result:
         # A produced result awaits delivery — resend it, NEVER re-run the
         # model. The label carries the ambiguity, exactly like reminders'
