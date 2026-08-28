@@ -308,3 +308,25 @@ def test_orphan_sweep_deletes_only_old_rowless_files(doc_db, monkeypatch, tmp_pa
     assert documents.sweep_orphaned_files() == 1
     assert live_path.exists() and young.exists()
     assert not orphan.exists()
+
+
+@pytest.mark.pg
+def test_orphan_sweep_catches_superseded_extensions(doc_db, monkeypatch, tmp_path):
+    """Bugbot round-4 P2: stem-only matching protected {id}.jpg forever
+    once the row's file_path moved to {id}.png. The live set is the
+    EXACT basename each row points at."""
+    import os
+    import time as _time
+    files = tmp_path / "documents"
+    monkeypatch.setattr(documents, "FILES_DIR", files)
+    doc_id = documents.ingest(7, "photo", _CARD, caption="card",
+                              original=(b"png-bytes", "png"))
+    old = _time.time() - 7200
+    current = files / f"{doc_id}.png"
+    os.utime(current, (old, old))
+    superseded = files / f"{doc_id}.jpg"     # same stem, dead extension
+    superseded.write_bytes(b"old jpeg")
+    os.utime(superseded, (old, old))
+    assert documents.sweep_orphaned_files() == 1
+    assert current.exists()
+    assert not superseded.exists()

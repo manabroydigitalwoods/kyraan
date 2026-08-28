@@ -181,6 +181,13 @@ def init(schedule_fn, run_fn, send_fn, only_chat: int | None = None) -> None:
             _schedule(task)
         except ValueError as exc:
             log_event("agent_task_schedule_failed", task_id=task.id, error=str(exc))
+        if task.repeat and task.pending_result:
+            # Redelivery survives restarts (Bugbot round-4 P2): the
+            # redeliver-only job lives in the job queue's memory, but
+            # the STASH lives in the store — a boot with a stashed
+            # recurring result re-arms its redelivery instead of
+            # waiting for next week's occurrence.
+            _schedule_redelivery(task.id, 2)
 
 
 async def fire(task_id: str, redeliver_only: bool = False) -> None:

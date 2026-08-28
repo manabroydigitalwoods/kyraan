@@ -211,3 +211,34 @@ async def test_redelivery_survives_dnd_and_repeat_failures(monkeypatch):
     assert len(redeliveries()) == 3
     stored = next(t for t in agent_tasks.list_active() if t.id == task.id)
     assert stored.pending_result == ""
+
+
+async def test_boot_rearms_redelivery_for_stashed_results(monkeypatch):
+    """Bugbot round-4 P2: the redeliver-only job lived only in the job
+    queue's memory — a restart during backoff postponed the result to
+    next week. init() now re-arms redelivery for any recurring task
+    with a stashed result."""
+    from datetime import timedelta
+
+    from kyraan.control_plane.dnd import local_now
+    from kyraan.triggers import agent_tasks
+
+    scheduled = []
+
+    async def noop(*a, **k):
+        return ""
+
+    agent_tasks.init(
+        schedule_fn=lambda name, when, payload: scheduled.append((name, payload)),
+        run_fn=noop, send_fn=noop)
+    when = (local_now() + timedelta(days=7)).isoformat()
+    task = agent_tasks.create(1, "weekly check", when, repeat="weekly")
+    agent_tasks._set_pending_result(task.id, "stashed result")
+    scheduled.clear()
+
+    # simulate the restart: init() runs again over the persisted store
+    agent_tasks.init(
+        schedule_fn=lambda name, when, payload: scheduled.append((name, payload)),
+        run_fn=noop, send_fn=noop)
+    redeliveries = [p for n, p in scheduled if p.get("redeliver_only")]
+    assert len(redeliveries) == 1 and redeliveries[0]["task_id"] == task.id

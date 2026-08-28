@@ -354,22 +354,30 @@ def sweep_orphaned_files(min_age_s: int = 3600) -> int:
     if not FILES_DIR.exists():
         return 0
     cutoff = time.time() - min_age_s
-    candidates = {}
+    candidates = []
     for path in FILES_DIR.iterdir():
         try:
             if path.is_file() and path.stat().st_mtime < cutoff:
-                candidates[path.stem] = path
+                candidates.append(path)
         except OSError:
             continue
     if not candidates:
         return 0
+    stems = sorted({p.stem for p in candidates})
     with pg.connection() as conn:
-        rows = conn.execute("SELECT id::text FROM document WHERE id = ANY(%s)",
-                            (list(candidates),)).fetchall()
-    live = {r[0] for r in rows}
+        # id::text = ANY(text[]) — the cast is on OUR side, explicit
+        # (round-4 P2: uuid vs text[] comparison portability). file_path
+        # rides along so the check is the EXACT basename the row points
+        # at — a superseded extension ({id}.jpg after a {id}.png
+        # re-ingest) is an orphan too, not protected by its stem.
+        rows = conn.execute(
+            "SELECT file_path FROM document WHERE id::text = ANY(%s)",
+            (stems,)).fetchall()
+    live_basenames = {r[0].replace("\\", "/").split("/")[-1]
+                      for r in rows if r[0]}
     swept = 0
-    for stem, path in candidates.items():
-        if stem in live:
+    for path in candidates:
+        if path.name in live_basenames:
             continue
         try:
             path.unlink(missing_ok=True)
