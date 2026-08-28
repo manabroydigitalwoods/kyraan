@@ -175,6 +175,107 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
     return {"__direct_reply__": "\n".join(lines)}
 
 
+def _email_direct_reply(lines: list, empty_note: str) -> dict:
+    """§3a boundary for every metadata listing (mirrors _email_unread):
+    sender/subject text is composed into the FINAL reply in Python and
+    short-circuited — it reaches the owner, never a cloud model prompt."""
+    if not lines:
+        return {"__direct_reply__": empty_note}
+    return {"__direct_reply__": "\n".join(lines)}
+
+
+async def _email_important(chat_id: int, args: dict, raw_text: str):
+    """Deterministic priority digest — Gmail's own IMPORTANT label ∪ the
+    owner's VIP senders ∪ subject keywords (config/permissions.yaml
+    email:), no model judgment, unread mail only. §3a boundary exactly
+    like email.unread: with a cloud tier active the reply is composed
+    in Python and short-circuited (sender/subject never reach that
+    prompt); an all-local loop can see the raw result — nothing new
+    leaves the machine either way."""
+    result = await kernel.run_tool(kernel.ToolCall(
+        "email.important", {"limit": min(int(args.get("limit", 5) or 5), 15)}))
+    from kyraan.agents import orchestrator
+    if not orchestrator._cloud_tier_in_use():
+        return result
+    items = result.get("messages", [])
+    lines = [f"{len(items)} important unread (of "
+             f"{result.get('scanned', 0)} scanned):"] if items else []
+    for m in items:
+        sender = str(m.get("from", "?")).split("<")[0].strip().strip('"') or "?"
+        lines.append(f"- {sender}: {m.get('subject', '(no subject)')} "
+                     f"[{', '.join(m.get('why', []))}]")
+    return _email_direct_reply(
+        lines, "Nothing flagged important in your unread mail right now.")
+
+
+async def _email_search(chat_id: int, args: dict, raw_text: str):
+    """Filter mail by sender/subject words (the user's own) and an
+    optional Gmail label — INBOX/UNREAD/IMPORTANT/STARRED/SENT/
+    CATEGORY_PERSONAL/CATEGORY_UPDATES/CATEGORY_PROMOTIONS/
+    CATEGORY_SOCIAL/CATEGORY_FORUMS. Same §3a boundary as email.
+    important: direct-reply short-circuit only when a cloud tier is
+    live; an all-local loop gets the raw result."""
+    sender = str(args.get("sender", "") or "")
+    subject = str(args.get("subject", "") or "")
+    if not sender and not subject and not args.get("label"):
+        raise kernel.ToolFailed(
+            "give a sender, a subject word, or a label to filter by")
+    result = await kernel.run_tool(kernel.ToolCall("email.search", {
+        "sender": sender, "subject": subject,
+        "label": str(args.get("label", "") or "INBOX"),
+        "limit": min(int(args.get("limit", 10) or 10), 20)}))
+    from kyraan.agents import orchestrator
+    if not orchestrator._cloud_tier_in_use():
+        return result
+    items = result.get("messages", [])
+    lines = [f"{len(items)} match(es):"] if items else []
+    for m in items:
+        s = str(m.get("from", "?")).split("<")[0].strip().strip('"') or "?"
+        lines.append(f"- {s}: {m.get('subject', '(no subject)')} "
+                     f"({m.get('date', '')})")
+    return _email_direct_reply(lines, "No emails match that filter.")
+
+
+async def _email_mark_read(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.tools import gmail as _gmail
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("say which email — a sender or subject word")
+    try:
+        match = await _aio.to_thread(_gmail.find_message, query)
+    except _gmail.ToolError as exc:
+        raise kernel.ToolFailed(str(exc))
+    if "UNREAD" not in (match.get("labelIds") or []):
+        return {"changed": False, "note": "that email is already read"}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("email.mark_read", dict(args))
+    await _aio.to_thread(_gmail.set_labels, match["id"], [], ["UNREAD"])
+    return {"changed": True, "id": match["id"],
+            "from": match["from"], "subject": match["subject"]}
+
+
+async def _email_archive(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.tools import gmail as _gmail
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("say which email — a sender or subject word")
+    try:
+        match = await _aio.to_thread(_gmail.find_message, query)
+    except _gmail.ToolError as exc:
+        raise kernel.ToolFailed(str(exc))
+    if "INBOX" not in (match.get("labelIds") or []):
+        return {"changed": False, "note": "that email is already archived"}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("email.archive", dict(args))
+    await _aio.to_thread(_gmail.set_labels, match["id"], [], ["INBOX"])
+    return {"changed": True, "id": match["id"],
+            "from": match["from"], "subject": match["subject"]}
+
+
 _EMAIL_SUMMARY_SYSTEM = (
     "Summarize this one email for its busy owner in 2-3 plain sentences: "
     "who it's from, what they want or say, any deadline/amount/action "
@@ -1291,6 +1392,26 @@ TOOLS = {
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,
     },
+    "email.important": {
+        "params": '{"limit": 5}',
+        "about": ("A PRIORITY digest of unread mail — deterministic: "
+                  "Gmail's own IMPORTANT label, the owner's VIP senders, "
+                  "and subject keywords (config email:), each result "
+                  "says WHY. For \"anything important?\", \"what needs my "
+                  "attention\". No model judgment, no bodies."),
+        "run": _email_important,
+    },
+    "email.search": {
+        "params": ('{"sender": "<words>", "subject": "<words>", '
+                   '"label": "INBOX|UNREAD|IMPORTANT|STARRED|SENT|'
+                   'CATEGORY_PERSONAL|CATEGORY_UPDATES|CATEGORY_PROMOTIONS|'
+                   'CATEGORY_SOCIAL|CATEGORY_FORUMS", "limit": 10}'),
+        "about": ("Filter mail by sender/subject words and/or a Gmail "
+                  "label — \"emails from the bank\", \"any promo mail\", "
+                  "\"starred emails\", \"what did I send Kamal\". At "
+                  "least one of sender/subject/label is required."),
+        "run": _email_search,
+    },
     "email.draft": {
         "params": ('{"reply_to_query": "<sender/subject words of the email '
                    'to reply to, or empty>", "to": "<address, for a fresh '
@@ -1302,6 +1423,21 @@ TOOLS = {
                   "from the user's words — you have never seen any email "
                   "body, so never invent quotes from one."),
         "run": _email_draft,
+    },
+    "email.mark_read": {
+        "params": '{"query": "<sender or subject words>"}',
+        "about": ("Mark ONE unread email read — \"mark the Amazon Pay "
+                  "email as read\". Owner opt-in feature (may not be "
+                  "listed). Already-read answers directly, no ask."),
+        "run": _email_mark_read,
+    },
+    "email.archive": {
+        "params": '{"query": "<sender or subject words>"}',
+        "about": ("Archive ONE email out of the inbox (reversible — "
+                  "\"undo\" restores it) — \"archive that newsletter\". "
+                  "Owner opt-in feature (may not be listed). "
+                  "Already-archived answers directly, no ask."),
+        "run": _email_archive,
     },
     "documents.rename": {
         "params": '{"query": "<words that find it>", "new_name": "<short name>"}',
@@ -1591,6 +1727,12 @@ UNDO_MAP = {
         if isinstance(r, dict) and r.get("changed") else None),
     "files.send": lambda a, r, p: None,   # a delivered file can't be unsent
     "documents.show": lambda a, r, p: None,  # ditto — it re-sends the owner's own upload
+    "email.mark_read": lambda a, r, p: (
+        ("email.mark_unread", {"message_id": r["id"]})
+        if isinstance(r, dict) and r.get("changed") else None),
+    "email.archive": lambda a, r, p: (
+        ("email.unarchive", {"message_id": r["id"]})
+        if isinstance(r, dict) and r.get("changed") else None),
     "email.draft": lambda a, r, p: (
         ("email.draft_delete", {"draft_id": r["draft_id"]})
         if isinstance(r, dict) and r.get("draft_id") else None),
@@ -1832,6 +1974,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
         # Gmail under their name, so no summary stands in for it.
         return (f"About to save {target} as a Gmail DRAFT (never sent — "
                 f"you send it from Gmail):{subject}\n---\n{args.get('body')}\n---")
+    if tool == "email.mark_read":
+        return f'About to mark the email matching "{args.get("query")}" as read'
+    if tool == "email.archive":
+        return (f'About to archive the email matching "{args.get("query")}" '
+                "out of the inbox (reversible — say \"undo\" to restore it)")
     return f"Run {tool} with {json.dumps(args)}?"
 
 
@@ -1845,7 +1992,8 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "faces.check_photo", "persons.profile", "persons.list",
                     "my.abilities",
                     "web.search", "weather.get", "places.nearby",
-                    "routes.eta", "email.read"}
+                    "routes.eta", "email.read", "email.important",
+                    "email.search"}
 
 
 
@@ -1916,4 +2064,13 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         return (f'Draft saved in your Gmail (to {outcome.get("to")}, '
                 f'subject "{outcome.get("subject")}") — open Gmail to '
                 'review and send it. Say "undo" to delete the draft.')
+    if tool == "email.mark_read" and isinstance(outcome, dict):
+        if not outcome.get("changed"):
+            return outcome.get("note", "No change.")
+        return f'Marked read: "{outcome.get("subject")}".'
+    if tool == "email.archive" and isinstance(outcome, dict):
+        if not outcome.get("changed"):
+            return outcome.get("note", "No change.")
+        return (f'Archived: "{outcome.get("subject")}" — say "undo" to '
+                "restore it to the inbox.")
     return f"Done: {tool}."

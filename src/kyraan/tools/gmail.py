@@ -173,6 +173,123 @@ def _unread(limit: int) -> dict:
     return {"unread_estimate": total, "messages": items}
 
 
+# Gmail label ids a filter/search may name — fixed vocabulary (no q=
+# under gmail.metadata scope; labelIds is the only filter Google allows).
+LABELS = ("INBOX", "UNREAD", "IMPORTANT", "STARRED", "SENT",
+          "CATEGORY_PERSONAL", "CATEGORY_UPDATES", "CATEGORY_PROMOTIONS",
+          "CATEGORY_SOCIAL", "CATEGORY_FORUMS")
+
+
+def _list_metadata(label_ids: list, max_results: int) -> list:
+    """One metadata listing call, label-filtered — the shared primitive
+    behind unread/important/search (2026-08-28, email enhancement)."""
+    q = "&".join(f"labelIds={lid}" for lid in label_ids)
+    listing = _api(f"/messages?{q}&maxResults={int(max_results)}")
+    out = []
+    for ref in listing.get("messages", []):
+        msg = _api(
+            f"/messages/{ref['id']}?format=metadata"
+            "&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date")
+        out.append({
+            "id": ref["id"],
+            "from": _header(msg, "From"),
+            "subject": _header(msg, "Subject") or "(no subject)",
+            "date": _header(msg, "Date"),
+            "labelIds": msg.get("labelIds") or [],
+        })
+    return out
+
+
+def _vip_and_keywords() -> tuple:
+    try:
+        from kyraan.control_plane import config
+        cfg = config.load().get("email") or {}
+        return ([s.lower() for s in cfg.get("vip_senders") or []],
+                [k.lower() for k in cfg.get("important_keywords") or []])
+    except Exception:
+        return [], []
+
+
+def _important(limit: int) -> dict:
+    """Deterministic priority digest over UNREAD mail — no model
+    judgment, no body access. A message qualifies for ANY of: Gmail's
+    own IMPORTANT label (its account-level ML, already computed),
+    a VIP sender match, or a subject keyword match — each reason is
+    named so the owner sees WHY, not just a bare list."""
+    vip, keywords = _vip_and_keywords()
+    scanned = _list_metadata(["UNREAD"], max(int(limit) * 4, 20))
+    items = []
+    for m in scanned:
+        why = []
+        if "IMPORTANT" in m["labelIds"]:
+            why.append("Gmail marked important")
+        sender = m["from"].lower()
+        if any(v in sender for v in vip):
+            why.append("VIP sender")
+        subject = m["subject"].lower()
+        hit_kw = next((k for k in keywords if k in subject), None)
+        if hit_kw:
+            why.append(f"keyword: {hit_kw}")
+        if why:
+            items.append({**m, "why": why})
+        if len(items) >= int(limit):
+            break
+    return {"messages": items, "scanned": len(scanned)}
+
+
+def _search(sender: str, subject: str, label: str, limit: int) -> dict:
+    """Filter mail by sender/subject substrings (typed by the user —
+    never derived from email content) and an optional Gmail label.
+    Metadata only; the same boundary as every other listing here."""
+    label = (label or "INBOX").strip().upper()
+    if label not in LABELS:
+        raise ToolError(f"label must be one of {LABELS}")
+    scanned = _list_metadata([label], max(int(limit) * 5, 25))
+    sender_w = sender.strip().lower()
+    subject_w = subject.strip().lower()
+    out = []
+    for m in scanned:
+        if sender_w and sender_w not in m["from"].lower():
+            continue
+        if subject_w and subject_w not in m["subject"].lower():
+            continue
+        out.append(m)
+        if len(out) >= int(limit):
+            break
+    return {"messages": out, "scanned": len(scanned)}
+
+
+def modify_enabled() -> bool:
+    """Owner opt-in (2026-08-28, email enhancement): mark-read/archive
+    need gmail.modify — real write access to labels, but Google's own
+    scope description EXCLUDES Send, so this can never open a path to
+    sending mail (that boundary stays enforced by code absence, as
+    with drafts)."""
+    import os
+    return os.environ.get("KYRAAN_EMAIL_MODIFY", "").strip() == "on"
+
+
+def find_message(query: str) -> dict:
+    """Resolve the user's own words to ONE inbox message — metadata
+    including labelIds, so the caller can tell current state (read?
+    archived?) BEFORE deciding to ask for a write (the no-op-guard
+    pattern: a rename to the same name never asks; neither should
+    marking an already-read email read)."""
+    query_w = [w for w in query.strip().lower().split() if w]
+    if not query_w:
+        raise ToolError("say which email — a sender or subject word")
+    for m in _list_metadata(["INBOX"], 40):
+        haystack = f"{m['from']} {m['subject']}".lower()
+        if all(w in haystack for w in query_w):
+            return m
+    raise ToolError(f"no email matches {query!r} in the inbox")
+
+
+def set_labels(message_id: str, add: list, remove: list) -> None:
+    _api_post(f"/messages/{message_id}/modify",
+             {"addLabelIds": add, "removeLabelIds": remove})
+
+
 _BODY_CHAR_CAP = 6000  # per message, before local summarization
 
 
@@ -247,4 +364,13 @@ async def call(tool_name: str, args: dict) -> object:
         return await asyncio.to_thread(
             _read, str(args.get("query", "") or ""),
             max(1, min(int(args.get("limit", 2) or 2), 3)))
+    if tool_name == "email.important":
+        return await asyncio.to_thread(
+            _important, max(1, min(int(args.get("limit", 5) or 5), 15)))
+    if tool_name == "email.search":
+        return await asyncio.to_thread(
+            _search, str(args.get("sender", "") or ""),
+            str(args.get("subject", "") or ""),
+            str(args.get("label", "") or "INBOX"),
+            max(1, min(int(args.get("limit", 10) or 10), 20)))
     raise ToolError(f"gmail adapter does not provide {tool_name!r}")

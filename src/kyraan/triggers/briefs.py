@@ -91,6 +91,25 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.extend(home)
 
+    # Important-email digest (email tools enhancement, 2026-08-28) —
+    # deterministic, unread-only, composed in Python: sender/subject
+    # NEVER touches a model prompt on the way into this line, same §3a
+    # boundary as every other email surface. Best-effort like home.
+    try:
+        result = await kernel.run_tool(kernel.ToolCall(
+            "email.important", {"limit": 3}))
+        items = result.get("messages", [])
+        if items:
+            lines.append("")
+            lines.append(f"📬 {len(items)} important unread:")
+            for m in items:
+                sender = str(m.get("from", "?")).split("<")[0].strip().strip('"')
+                lines.append(f"- {sender}: {m.get('subject', '(no subject)')}")
+    except kernel.ToolFailed:
+        pass
+    except Exception:
+        pass
+
     # Curiosity (Phase 4, 2026-08-28): at most one deterministic
     # knowledge-gap question a day, riding the brief — batched and
     # DND-safe by construction. Best-effort like the home lines.

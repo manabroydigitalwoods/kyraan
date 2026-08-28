@@ -936,6 +936,11 @@ def _describe_undo(action) -> str:
     if action.tool == "email.draft":
         return (f'Undo: delete the Gmail draft "{a.get("subject") or ""}" '
                 "I just saved")
+    if action.tool == "email.mark_read":
+        return "Undo: mark that email unread again" + _age_note(action)
+    if action.tool == "email.archive":
+        return ("Undo: restore that email to the inbox"
+                + _age_note(action))
     if action.tool == "calendar.delete_event":
         return (f'Undo: re-create the event '
                 f'"{ua.get("title") or "(restored event)"}" I deleted'
@@ -1038,6 +1043,14 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
                 if not await _aio.to_thread(
                         _gmail._delete_draft, str(ua.get("draft_id", ""))):
                     raise kernel.ToolFailed("that draft is already gone")
+            elif ut == "email.mark_unread":
+                from kyraan.tools import gmail as _gmail
+                await _aio.to_thread(_gmail.set_labels,
+                                     ua["message_id"], ["UNREAD"], [])
+            elif ut == "email.unarchive":
+                from kyraan.tools import gmail as _gmail
+                await _aio.to_thread(_gmail.set_labels,
+                                     ua["message_id"], ["INBOX"], [])
             elif ut == "persons.set_tools":
                 from kyraan.store import persons as _persons
                 pid = _persons.resolve(ua["name"]) or ua["name"]

@@ -349,6 +349,33 @@ tools:
       retries: 1
       timeout_s: 25
       on_failure: surface
+  email.important:
+    description: Deterministic priority digest over UNREAD mail — Gmail's own IMPORTANT label, the owner's VIP senders, and subject keywords (config email:), each with a "why". Metadata only, no model judgment.
+    server: gmail
+    permission: auto
+    side_effects: read
+    params:
+      limit: {type: number}
+    returns: "{messages: [{from, subject, date, why}], scanned}"
+    failure:
+      retries: 2
+      timeout_s: 20
+      on_failure: surface
+  email.search:
+    description: Filter mail by sender/subject substrings and an optional Gmail label (INBOX/UNREAD/IMPORTANT/STARRED/SENT/CATEGORY_*). Metadata only — the gmail.metadata scope forbids q=, so labelIds is the filter.
+    server: gmail
+    permission: auto
+    side_effects: read
+    params:
+      sender: {type: string}
+      subject: {type: string}
+      label: {type: string}
+      limit: {type: number}
+    returns: "{messages: [{from, subject, date}], scanned}"
+    failure:
+      retries: 2
+      timeout_s: 20
+      on_failure: surface
   home.get_state:
     description: Read one allowlisted Home Assistant entity's state (AC switch, power/energy sensors).
     server: home_assistant
@@ -536,3 +563,25 @@ persona:
     - "One emoji where it genuinely fits; none in serious moments."
     - "Family-aware: festivals, the baby's rhythms, respect for elders — notice them naturally."
     - "When health worries come up: calm first, one checklist at most, then talk like a person."
+
+# Email priority signals (email tools enhancement, 2026-08-28) —
+# owner-editable, like persona. Feeds email.important: a message
+# qualifies for the digest when its sender/subject matches here, OR
+# when Gmail's own account-level ML already applied the IMPORTANT
+# label. Substring match, case-insensitive; matched against the From
+# and Subject headers only — metadata, never bodies.
+email:
+  vip_senders:
+    - "ruma"
+    - "digitalwoods.io"
+    - "kotak"
+    - "hdfcbank"
+  important_keywords:
+    - "otp"
+    - "verification code"
+    - "invoice"
+    - "payment due"
+    - "payment reminder"
+    - "urgent"
+    - "deadline"
+    - "action required"

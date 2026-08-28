@@ -51,6 +51,13 @@ SCOPES = [
     # the enforced boundary is the codebase: NO send code path exists.
     *(["https://www.googleapis.com/auth/gmail.compose"]
       if os.environ.get("KYRAAN_EMAIL_DRAFTS", "").strip() == "on" else []),
+    # KYRAAN_EMAIL_MODIFY=on (owner, 2026-08-28: email tools enhancement)
+    # — mark-read/archive need real label writes. Google's own scope
+    # description for gmail.modify explicitly EXCLUDES Send, so this
+    # can never open a path to sending mail; the no-send boundary stays
+    # enforced by code absence exactly as with drafts.
+    *(["https://www.googleapis.com/auth/gmail.modify"]
+      if os.environ.get("KYRAAN_EMAIL_MODIFY", "").strip() == "on" else []),
 ]
 
 
