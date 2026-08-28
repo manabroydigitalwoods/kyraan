@@ -127,6 +127,15 @@ def _advance(task_id: str, next_iso: str) -> None:
         _save(records)
 
 
+def _schedule_redelivery(task_id: str, minutes: int) -> None:
+    """Keep a stashed recurring result alive across DND holds and repeat
+    failures (Bugbot round-3 P2: the redeliver-only job consumed itself
+    without rescheduling, leaving the result stale until next week)."""
+    when = local_now() + timedelta(minutes=minutes)
+    _schedule_fn(f"task-redeliver-{task_id}", when,
+                 {"task_id": task_id, "redeliver_only": True})
+
+
 def _retry_later(task: "AgentTask", minutes: int) -> None:
     """Reschedule AND persist the retry time — an in-memory-only backoff
     ran immediately after a restart (audit round 3, P2). Only for
@@ -197,6 +206,8 @@ async def fire(task_id: str, redeliver_only: bool = False) -> None:
         log_event("agent_task_skipped_dnd", task_id=task_id)
         if not task.repeat and not redeliver_only:
             _retry_later(task, 30)  # held through quiet hours, not lost
+        elif task.repeat and task.pending_result:
+            _schedule_redelivery(task.id, 30)  # survives the DND hold
         return
     if task.pending_result:
         # A produced result awaits delivery — resend it, NEVER re-run the
@@ -212,6 +223,8 @@ async def fire(task_id: str, redeliver_only: bool = False) -> None:
             log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
             if not task.repeat:
                 _retry_later(task, 5)
+            else:
+                _schedule_redelivery(task.id, 5)  # keeps retrying, never stale
             return
         log_event("agent_task_ran", task_id=task_id, redelivered=True)
         _set_pending_result(task.id, "")
@@ -252,9 +265,7 @@ async def fire(task_id: str, redeliver_only: bool = False) -> None:
         else:
             # a recurring task's result is redelivered in minutes via a
             # redeliver-only fire, not at next week's occurrence
-            when = local_now() + timedelta(minutes=5)
-            _schedule_fn(f"task-redeliver-{task.id}", when,
-                         {"task_id": task.id, "redeliver_only": True})
+            _schedule_redelivery(task.id, 5)
         return
     log_event("agent_task_ran", task_id=task_id)
     if not task.repeat:

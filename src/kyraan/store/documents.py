@@ -343,6 +343,45 @@ def list_documents(chat_id: int, limit: int = 15, person: str = "") -> list:
             for i, k, c, f, d, n, s in rows]
 
 
+def sweep_orphaned_files(min_age_s: int = 3600) -> int:
+    """Delete stored originals whose document row no longer exists —
+    the terminal cleanup for unlink failures and crash-in-the-gap
+    leftovers (Bugbot round-3 P2: a deleted sensitive document's bytes
+    could otherwise linger indefinitely). Age-guarded: ingest writes
+    the file BEFORE its row commits, so only files older than
+    min_age_s are candidates; runs nightly."""
+    import time
+    if not FILES_DIR.exists():
+        return 0
+    cutoff = time.time() - min_age_s
+    candidates = {}
+    for path in FILES_DIR.iterdir():
+        try:
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                candidates[path.stem] = path
+        except OSError:
+            continue
+    if not candidates:
+        return 0
+    with pg.connection() as conn:
+        rows = conn.execute("SELECT id::text FROM document WHERE id = ANY(%s)",
+                            (list(candidates),)).fetchall()
+    live = {r[0] for r in rows}
+    swept = 0
+    for stem, path in candidates.items():
+        if stem in live:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+            swept += 1
+        except OSError as exc:
+            log_event("document_orphan_sweep_failed", file=path.name,
+                      error=str(exc)[:120])
+    if swept:
+        log_event("document_orphans_swept", count=swept)
+    return swept
+
+
 def rename_document(chat_id: int, doc_id: str, caption: str) -> str | None:
     """Set a document's human name; returns the prior name (for undo)
     or None when the doc isn't this chat's. The owner naming a capture

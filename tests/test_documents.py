@@ -283,3 +283,28 @@ def test_delete_unlinks_files_only_after_commit(doc_db, monkeypatch, tmp_path):
     # at commit time the file still existed; it is gone only afterwards
     assert order == [("commit", True)]
     assert not Path(path).exists()
+
+
+@pytest.mark.pg
+def test_orphan_sweep_deletes_only_old_rowless_files(doc_db, monkeypatch, tmp_path):
+    """Bugbot round-3 P2: a failed unlink left sensitive bytes on disk
+    forever. The nightly sweep deletes originals whose row is gone —
+    but never young files (ingest writes bytes BEFORE the row commits)
+    and never files whose document still exists."""
+    import os
+    import time as _time
+    files = tmp_path / "documents"
+    monkeypatch.setattr(documents, "FILES_DIR", files)
+    doc_id = documents.ingest(7, "photo", _CARD, caption="kept",
+                              original=(b"live", "jpg"))
+    old = _time.time() - 7200
+    live_path = files / f"{doc_id}.jpg"
+    os.utime(live_path, (old, old))                   # old but row exists
+    orphan = files / "aaaaaaaa-1111-2222-3333-444444444444.jpg"
+    orphan.write_bytes(b"orphan")
+    os.utime(orphan, (old, old))                      # old, no row
+    young = files / "bbbbbbbb-1111-2222-3333-444444444444.jpg"
+    young.write_bytes(b"in-flight ingest")            # young, no row yet
+    assert documents.sweep_orphaned_files() == 1
+    assert live_path.exists() and young.exists()
+    assert not orphan.exists()

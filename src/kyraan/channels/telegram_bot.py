@@ -958,6 +958,14 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                 await _aio.to_thread(_triples.catch_up)
 
             await _stage("forget_resweep", _resweep)
+
+            # Orphaned originals (Bugbot round-3 P2): files whose doc
+            # row is gone — failed unlinks, crash-in-the-gap leftovers.
+            async def _orphan_sweep():
+                from kyraan.store import documents as _documents
+                await _aio.to_thread(_documents.sweep_orphaned_files)
+
+            await _stage("document_orphan_sweep", _orphan_sweep)
             await _stage("graph_catch_up", _graph_catch_up)
 
             # P3.5e: expired 24h objection windows promote nightly.
