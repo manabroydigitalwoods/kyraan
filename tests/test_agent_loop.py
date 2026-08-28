@@ -1103,3 +1103,40 @@ async def test_which_name_dodge_binds_to_the_named_person(
     reply = await agent_loop.run(91_004, "What happened to Kamal's health?")
     assert reply == "From the saved PDF: Kamal recovered slowly."
     assert "exactly ONE person: Kamal" in prompts[1]
+
+
+def test_identity_header_comes_from_the_registry_not_facts(monkeypatch):
+    """2026-08-28: a poisoned, bulk-approved fact ("User goes by the
+    name Ruma") made Kyraan call the owner by his wife's name. Identity
+    is now a registry-derived header that SAYS it outranks facts."""
+    from kyraan.control_plane import kernel as _kernel
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "name_map",
+                        lambda: {"owner": "owner", "maan": "owner",
+                                 "manab roy": "owner", "ruma": "ruma",
+                                 "kamal": "kamal", "habu": "kamal"})
+    block = agent_loop._identity_block(6755024720)
+    assert "SPEAKER:" in block and "OWNER" in block
+    assert "Ruma" in block and "NEVER the speaker" in block
+    assert "OUTRANKS any saved fact" in block
+
+    token = _kernel.set_viewer("ruma", "none")
+    try:
+        block = agent_loop._identity_block(8918323401)
+        assert "NOT the owner" in block
+        assert "person id ruma" in block
+    finally:
+        _kernel.reset_viewer_stage(token) if hasattr(
+            _kernel, "reset_viewer_stage") else None
+
+
+def test_persona_block_renders_from_config(monkeypatch):
+    from kyraan.control_plane import config
+    base = config.load()
+    monkeypatch.setattr(config, "load", lambda: {
+        **base, "persona": {"name": "Kyraan", "address_owner_as": "Maan",
+                            "voice": ["Warm and direct."]}})
+    block = agent_loop._persona_block()
+    assert "You are Kyraan" in block
+    assert "Address the owner as Maan" in block
+    assert "Warm and direct." in block
