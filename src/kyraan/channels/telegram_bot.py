@@ -119,7 +119,7 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                      "active — reply to the latest confirmation instead.")
             return
         from kyraan.control_plane import kernel as _kernel
-        stage_token = _kernel.set_viewer_stage(_viewer_stage_for(update))
+        stage_token = _kernel.set_viewer(*_viewer_for(update))
         try:
             reply = await orchestrator.handle_message(chat_id, word)
         finally:
@@ -245,11 +245,24 @@ def _viewer_stage_for(update: Update) -> str:
     return row[1] if row else "none"
 
 
+def _viewer_for(update: Update) -> tuple:
+    """(person_id, stage) — BOTH, always (2026-08-28: setting stage only
+    left the viewer person empty, a fail-open default turned empty into
+    'owner', and Ruma's first enrolled chat called HER Maan and told her
+    she was the owner). Identity is resolved for any registered chat
+    regardless of stage; an unregistered chat is ('', 'none')."""
+    if _owner_private(update):
+        return ("owner", "owner")
+    from kyraan.store import persons
+    person = persons.person_id_any_stage(update.effective_chat.id) or ""
+    return (person, _viewer_stage_for(update))
+
+
 async def _ingest(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     """Everything after the ownership gate — shared by typed messages and
     transcribed voice notes (which ARE text by the time they get here)."""
     from kyraan.control_plane import kernel
-    stage_token = kernel.set_viewer_stage(_viewer_stage_for(update))
+    stage_token = kernel.set_viewer(*_viewer_for(update))
     try:
         await _ingest_inner(update, context, text)
     finally:

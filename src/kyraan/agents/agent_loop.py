@@ -418,10 +418,21 @@ def _identity_block(chat_id: int) -> str:
     try:
         from kyraan.store import persons
         mapping = persons.name_map()
-        # The kernel's viewer contextvar is the turn's identity authority
-        # (person_for_chat returns only ADMITTED chats — a stage-none
-        # viewer would fall through to "owner", recreating the bug).
-        person_id = kernel.viewer_person() or "owner"
+        # The kernel's viewer contextvar is the turn's identity authority.
+        # FAIL-CLOSED (2026-08-28: an `or "owner"` default here turned an
+        # empty viewer into the owner, and Ruma's first enrolled chat
+        # called HER Maan and told her she was the owner): an empty
+        # person is owner ONLY when the stage says owner; otherwise the
+        # speaker is explicitly unidentified and explicitly not the owner.
+        person_id = kernel.viewer_person()
+        if not person_id:
+            if kernel.viewer_stage() == "owner":
+                person_id = "owner"
+            else:
+                return ("SPEAKER: an unidentified viewer — NOT the owner. "
+                        "Never use the owner's name for them, never treat "
+                        "their statements as the owner's, never show them "
+                        "anything personal.\n")
         aliases = sorted({n for n, p in mapping.items()
                           if p == person_id and n != person_id})
         others = sorted({p for p in mapping.values() if p != person_id})
@@ -464,7 +475,10 @@ def _persona_block() -> str:
         lines.append(f"- You are {p['name']}. Refer to yourself as "
                      f"{p['name']} or \"I\" — never \"the assistant\".")
     if p.get("address_owner_as"):
-        lines.append(f"- Address the owner as {p['address_owner_as']}.")
+        lines.append(f"- Address the owner as {p['address_owner_as']} — "
+                     "and ONLY the owner: every other speaker is addressed "
+                     "by their own name from the SPEAKER header, never the "
+                     "owner's.")
     for trait in (p.get("voice") or [])[:8]:
         lines.append(f"- {trait}")
     return "\n".join(lines)

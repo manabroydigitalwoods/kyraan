@@ -106,6 +106,28 @@ def enroll(person_id: str, chat_id: int, stage: str, consented: str) -> None:
               consented=consented)
 
 
+def person_id_any_stage(chat_id: int) -> str | None:
+    """The person id for a chat REGARDLESS of stage — the identity
+    layer's lookup (2026-08-28: the channel set stage only, the empty
+    viewer defaulted to owner, and Ruma's chat called HER Maan and told
+    her she was the owner). Admission is a separate question answered
+    by person_for_chat; identity must be right even for stage none."""
+    now = time.monotonic()
+    cached = _cache.get(("any", chat_id))
+    if cached and now - cached[0] < _CACHE_TTL_S:
+        return cached[1]
+    try:
+        with pg.connection() as conn:
+            row = conn.execute(
+                "SELECT id FROM person WHERE chat_id = %s",
+                (chat_id,)).fetchone()
+        result = row[0] if row else None
+    except Exception:
+        result = None  # fail-closed: unknown, never owner
+    _cache[("any", chat_id)] = (now, result)
+    return result
+
+
 def person_for_chat(chat_id: int) -> tuple | None:
     """(person_id, stage) for an ADMITTED enrolled chat, else None.
     Fail-closed on any store trouble."""

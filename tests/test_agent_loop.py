@@ -1197,3 +1197,29 @@ async def test_contract_absent_field_passes_through(scripted_model):
     scripted_model(['{"action": "reply", "text": "The AC is off."}'])
     reply = await agent_loop.run(90, "is the ac off?")
     assert reply == "The AC is off."
+
+
+def test_identity_block_never_defaults_an_empty_viewer_to_owner(monkeypatch):
+    """Live 2026-08-28 15:38 — the conflict: the channel set stage only,
+    the empty viewer fell open to "owner", and Ruma's enrolled chat
+    called HER Maan and told her she was the owner. Empty viewer at a
+    non-owner stage is now explicitly unidentified and NOT the owner."""
+    from kyraan.control_plane import kernel as _kernel
+    token = _kernel.set_viewer("", "full")
+    try:
+        block = agent_loop._identity_block(8918323401)
+        assert "NOT the owner" in block
+        assert "Maan" not in block and "OWNER;" not in block
+    finally:
+        _kernel.reset_viewer_stage(token)
+    # a NAMED non-owner viewer gets their own name
+    token = _kernel.set_viewer("ruma", "full")
+    try:
+        from kyraan.store import persons
+        monkeypatch.setattr(persons, "name_map",
+                            lambda: {"owner": "owner", "maan": "owner",
+                                     "ruma": "ruma"})
+        block = agent_loop._identity_block(8918323401)
+        assert "Ruma" in block and "NOT the owner" in block
+    finally:
+        _kernel.reset_viewer_stage(token)
