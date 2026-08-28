@@ -685,6 +685,17 @@ def call(
             last_exc = exc
             log_event("model_call_error", tier=tier, provider=provider, model=model, attempt=attempt, error=str(exc))
             text = str(exc)
+            if "insufficient_quota" in text or "credit_balance_exhausted" in text:
+                # Billing outage (live 2026-08-28: the account's credits
+                # hit zero and every call burned 3 retries while the
+                # degradation stayed SILENT for ~40 min). Never retried —
+                # money doesn't appear between attempts — and logged as
+                # its own kind so the health layer alerts the owner
+                # immediately with the actual fix.
+                log_event("provider_credits_exhausted", provider=provider,
+                          model=model)
+                _cooldown_until[provider] = time.monotonic() + _COOLDOWN_S
+                break
             if ("is not set in this process" in text  # missing api key
                     # Auth failures are permanent for this process: a 401
                     # got 3 full attempts live (2026-08-27, bad key at

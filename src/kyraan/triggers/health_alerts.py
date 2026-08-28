@@ -23,6 +23,10 @@ STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "health_alerts.json"
 CRITICAL = {
     "agent_all_tiers_failed": "both reasoning models were unreachable",
     "budget_exhausted": "the daily model budget is exhausted",
+    "provider_credits_exhausted": (
+        "the AI provider's account balance is EMPTY — every reply is "
+        "degraded to the slow local model until you add credits "
+        "(platform.openai.com → Billing)"),
     "handle_message_error": "a message handler crashed (see events.jsonl)",
     "memory_visibility_failclosed": "a non-owner viewer got no facts (pg trouble)",
     "pg_mirror_stale": "a Postgres mirror is behind the files",

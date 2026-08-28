@@ -137,3 +137,36 @@ def test_auth_errors_never_retry(monkeypatch):
     with pytest.raises(router.ModelProviderError):
         router.call(prompt="x", tier="frontier")
     assert len(attempts) == 1
+
+
+def test_credit_exhaustion_never_retries_and_cools_down(monkeypatch):
+    """Live 2026-08-28: the account balance hit zero and every call
+    burned 3 retries while the degradation stayed silent for ~40 min.
+    insufficient_quota fails FAST (money doesn't appear between
+    attempts), cools the provider, and logs its own kind so the health
+    layer alerts the owner with the actual fix."""
+    import json as _json
+
+    import pytest
+    from kyraan.control_plane import logging_setup
+
+    monkeypatch.setattr(router, "_cooldown_until", {})
+    monkeypatch.setattr(router, "_RETRY_BACKOFF_SECONDS", [0, 0])
+    attempts = []
+
+    def broke(provider, model, prompt, system, max_tokens, force_json=False):
+        attempts.append(1)
+        raise RuntimeError(
+            "Error code: 429 - {'error': {'code': 'credit_balance_exhausted',"
+            " 'type': 'insufficient_quota'}}")
+
+    monkeypatch.setattr(router, "_dispatch", broke)
+    with pytest.raises(router.ModelProviderError):
+        router.call(prompt="x", tier="frontier")
+    assert len(attempts) == 1                      # zero retries
+    assert router._cooldown_until                  # provider cooling down
+    events = [_json.loads(l) for l in
+              logging_setup.EVENT_LOG.read_text().splitlines()]
+    assert any(e["kind"] == "provider_credits_exhausted" for e in events)
+    from kyraan.triggers import health_alerts
+    assert "provider_credits_exhausted" in health_alerts.CRITICAL
