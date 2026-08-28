@@ -229,12 +229,12 @@ def test_non_owner_tool_surface_is_frozen():
                         "reminders.snooze", "reminders.reschedule",
                         "reminders.cancel", "calendar.list_events",
                         "weather.get", "places.nearby", "routes.eta",
-                        "web.search", "documents.search"},
+                        "web.search", "documents.search", "my.abilities"},
         "full": {"agent.action", "reminders.create", "reminders.list",
                  "reminders.snooze", "reminders.reschedule",
                  "reminders.cancel", "calendar.list_events", "weather.get",
                  "places.nearby", "routes.eta", "web.search",
-                 "documents.search", "memory.propose", "memory.review",
+                 "documents.search", "my.abilities", "memory.propose", "memory.review",
                  "memory.pending_list"},
     }
     for stage, allowed_set in expected.items():

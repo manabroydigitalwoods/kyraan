@@ -22,7 +22,60 @@ def _friendly_entity(entity: str) -> str:
     return entity.split(".", 1)[1].replace("_", " ")
 
 
+_FRIENDLY = {
+    "qa": "answer questions, write, and chat",
+    "agent.action": None,  # plumbing, not a user-facing ability
+    "reminders": "their reminders: create, list, snooze, cancel",
+    "calendar.list_events": "read the household calendar",
+    "weather": "live weather and forecasts",
+    "places": "find nearby places",
+    "routes": "travel times with live traffic",
+    "web.search": "search the web",
+    "documents.search": "search documents THEY have captured",
+    "memory.propose": "have their stated facts remembered (their own review)",
+    "memory.review": "review their own pending facts",
+    "memory.pending_list": "see their own pending facts",
+    "media.photo": "send photos (described and captured as THEIR documents)",
+    "media.file": "send PDFs and files into THEIR document memory",
+    "media.voice": "send voice notes (transcribed on this machine)",
+    "media.location": "share location pins",
+}
+
+
+def viewer_brief(person: str, stage: str) -> str:
+    """The capability brief for a NON-OWNER viewer: only what THEY can
+    do (2026-08-28: the owner-shaped brief rode into Ruma's prompts,
+    advertising email/home/files she doesn't have — her "What access i
+    have?" got a confused answer). Built from their effective access:
+    stage toolset ∪ the owner's grants."""
+    allowed = list((config.load().get("stage_toolsets") or {}).get(stage) or [])
+    try:
+        from kyraan.store import persons
+        allowed += persons.extra_tools(person)
+    except Exception:
+        pass
+    lines = [f"THINGS THIS USER CAN DO here (access stage {stage!r}; "
+             "nothing else — never claim or offer an ability outside "
+             "this list):"]
+    seen = set()
+    for entry in allowed:
+        friendly = _FRIENDLY.get(entry, _FRIENDLY.get(entry.split(".")[0]))
+        if friendly and friendly not in seen:
+            seen.add(friendly)
+            lines.append(f"- {friendly}")
+    lines.append("- ask what they can do here (answer from THIS list)")
+    lines.append("They are NOT the owner: no access to the owner's memory, "
+                 "email, home control, faces, or files — and access "
+                 "changes are the owner's alone.")
+    return "\n".join(lines)
+
+
 def capability_brief() -> str:
+    from kyraan.control_plane import kernel as _kernel
+    stage = _kernel.viewer_stage()
+    if stage not in ("owner",):
+        person = _kernel.effective_reviewer() or "unknown"
+        return viewer_brief(person, stage)
     lines = ["THINGS YOU CAN DO (live right now):"]
     lines.append("- Reminders: create/list/cancel/snooze — one-shot or recurring incl. intervals with a daily window (details in the tool menu).")
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")

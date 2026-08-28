@@ -832,6 +832,26 @@ _MEDIA_CAPABILITIES = ("media.photo", "media.file", "media.voice",
 _NEVER_GRANTABLE = ("persons.set_access", "persons.set_tools")
 
 
+async def _my_abilities(chat_id: int, args: dict, raw_text: str):
+    """Self-service access check for ANY speaker (owner: "as owner or
+    user can they check their abilities?", 2026-08-28)."""
+    from kyraan.store import persons
+    stage = kernel.viewer_stage()
+    if stage == "owner":
+        return {"who": "the owner", "access": "everything",
+                "note": ("all tools, all media, all grants; persons.list "
+                         "shows what everyone ELSE can do")}
+    person = kernel.effective_reviewer() or "unknown"
+    allowed = list((kernel.config.load().get("stage_toolsets") or {}
+                    ).get(stage) or [])
+    extras = persons.extra_tools(person) if person != "unknown" else []
+    return {"who": person, "access_stage": stage,
+            "stage_abilities": sorted(allowed),
+            "owner_granted": sorted(extras),
+            "note": ("this is COMPLETE — never claim or offer anything "
+                     "beyond it; access changes are the owner's alone")}
+
+
 async def _persons_set_tools(chat_id: int, args: dict, raw_text: str):
     """OWNER AUTHORITY: individual capability grants on top of a
     person's stage (owner, 2026-08-28: "owner will have all access but
@@ -1311,6 +1331,14 @@ TOOLS = {
                   "Compose complete well-formed content (real CSV rows). "
                   "Text formats only; ~200KB cap."),
         "run": _files_send,
+    },
+    "my.abilities": {
+        "params": "{}",
+        "about": ("What the CURRENT speaker can do here — their access "
+                  "stage, tools, and any abilities the owner granted. THE "
+                  "answer for \"what access do I have\", \"what can you do "
+                  "for me\" from any user."),
+        "run": _my_abilities,
     },
     "persons.set_tools": {
         "params": ('{"name": "<registered person>", "grant": ["media.photo"], '
@@ -1815,6 +1843,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
                     "faces.check_photo", "persons.profile", "persons.list",
+                    "my.abilities",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 
