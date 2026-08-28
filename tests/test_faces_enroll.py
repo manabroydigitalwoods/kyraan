@@ -215,3 +215,31 @@ async def test_persons_list_is_the_bulk_roster(monkeypatch):
     assert rows["kamal"]["kind"] == "contact"
     assert rows["ruma"]["kind"] == "household"
     assert rows["owner"]["kind"] == "the user"
+
+
+def test_non_owner_tool_surface_is_frozen():
+    """Security audit 2026-08-28: ~15 tools were added after the last
+    external audit — NONE may be reachable below owner stage without a
+    deliberate edit to this list AND permissions.yaml. If this test
+    fails, a stage's reach changed: prove it was intended."""
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    expected = {
+        "read_mostly": {"agent.action", "reminders.create", "reminders.list",
+                        "reminders.snooze", "reminders.reschedule",
+                        "reminders.cancel", "calendar.list_events",
+                        "weather.get", "places.nearby", "routes.eta",
+                        "web.search", "documents.search"},
+        "full": {"agent.action", "reminders.create", "reminders.list",
+                 "reminders.snooze", "reminders.reschedule",
+                 "reminders.cancel", "calendar.list_events", "weather.get",
+                 "places.nearby", "routes.eta", "web.search",
+                 "documents.search", "memory.propose", "memory.review",
+                 "memory.pending_list"},
+    }
+    for stage, allowed_set in expected.items():
+        reachable = {name for name in loop_tools.TOOLS
+                     if kernel.stage_allows(name, stage=stage)}
+        assert reachable == allowed_set & set(loop_tools.TOOLS), (
+            f"stage {stage!r} reach changed: "
+            f"+{reachable - allowed_set} -{allowed_set - reachable}")
