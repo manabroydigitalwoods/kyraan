@@ -772,6 +772,45 @@ async def _persons_alias(chat_id: int, args: dict, raw_text: str):
     return {"aliased": True, "person_id": person_id, "alias": alias}
 
 
+async def _persons_list(chat_id: int, args: dict, raw_text: str):
+    """The whole person roster in one call — live 2026-08-28 13:04:
+    "list my all relatives" was answered with "there isn't a bulk-list
+    tool here". Now there is."""
+    import asyncio as _aio
+
+    from kyraan.store import persons
+
+    def _roster():
+        from kyraan.agents import faces
+        enrolled = set()
+        if faces.available():
+            for n in faces.enrolled_names():
+                enrolled.add(persons.resolve(n)
+                             or n.lower().replace(" ", "_").replace("-", "_"))
+        rows = []
+        mapping = persons.name_map()
+        for pid, chat, stage, _ in persons.list_persons():
+            aka = sorted({n for n, p in mapping.items()
+                          if p == pid and n not in (pid, pid.replace("_", " "))})
+            rows.append({
+                "person": pid,
+                "aka": aka,
+                "face": pid in enrolled,
+                "kind": ("the user" if pid == "owner"
+                         else "household" if chat or stage != "none"
+                         else "contact")})
+        return rows
+
+    try:
+        rows = await _aio.to_thread(_roster)
+    except Exception as exc:
+        raise kernel.ToolFailed(f"registry unavailable ({str(exc)[:100]})")
+    return {"people": rows,
+            "note": ("the complete registry; for HOW someone is related "
+                     "use memory.relations, for everything about one "
+                     "person use persons.profile")}
+
+
 async def _persons_profile(chat_id: int, args: dict, raw_text: str):
     """ONE deterministic aggregation of everything known about a person
     (undo-matrix batch, 2026-08-28): registry row, aliases, facts naming
@@ -1117,8 +1156,10 @@ TOOLS = {
                   "\"how is X related to Y\", \"whose son is Kiaan\". One "
                   "lookup per name; head —relation→ tail (kiaan —son_of→ "
                   "owner = Kiaan IS the son OF the owner; 'owner' is the "
-                  "user). Empty = say no saved relation mentions them, "
-                  "never guess one."),
+                  "user). \"List my relatives/family\" = look up 'owner': "
+                  "every edge touching the user IS that list — one call, "
+                  "never say no bulk tool exists. Empty = say no saved "
+                  "relation mentions them, never guess one."),
         "run": _memory_relations,
     },
     "documents.list": {
@@ -1170,6 +1211,14 @@ TOOLS = {
                   "Compose complete well-formed content (real CSV rows). "
                   "Text formats only; ~200KB cap."),
         "run": _files_send,
+    },
+    "persons.list": {
+        "params": "{}",
+        "about": ("Every person Kyraan tracks — ids, other names, face "
+                  "status. For \"who do you know\", \"list the people/"
+                  "relatives/contacts you track\". Pair with "
+                  "memory.relations('owner') for the family edges."),
+        "run": _persons_list,
     },
     "persons.profile": {
         "params": '{"name": "<person name or alias>"}',
@@ -1616,7 +1665,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "memory.pending_list", "memory.recall_episodes",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
-                    "faces.check_photo", "persons.profile",
+                    "faces.check_photo", "persons.profile", "persons.list",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read"}
 

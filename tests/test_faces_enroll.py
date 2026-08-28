@@ -189,3 +189,29 @@ async def test_profile_face_status_resolves_display_aliases(monkeypatch):
     monkeypatch.setattr(faces, "enrolled_names", lambda: ["Habu"])
     out = await loop_tools._persons_profile(7, {"name": "habu"}, "")
     assert out["face_recognition"] == "enrolled"
+
+
+async def test_persons_list_is_the_bulk_roster(monkeypatch):
+    """Live 2026-08-28 13:04: "list my all relatives" got "there isn't
+    a bulk-list tool here". Now there is — resolver-joined."""
+    from kyraan.agents import faces, loop_tools
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "list_persons",
+                        lambda: [("owner", None, "owner", None),
+                                 ("kamal", None, "none", None),
+                                 ("ruma", 891, "none", "2026-08-27")])
+    monkeypatch.setattr(persons, "name_map",
+                        lambda: {"owner": "owner", "maan": "owner",
+                                 "kamal": "kamal", "habu": "kamal",
+                                 "ruma": "ruma"})
+    monkeypatch.setattr(persons, "resolve",
+                        lambda n: {"habu": "kamal"}.get(n.lower()))
+    monkeypatch.setattr(faces, "available", lambda: True)
+    monkeypatch.setattr(faces, "enrolled_names", lambda: ["Habu"])
+    out = await loop_tools._persons_list(7, {}, "")
+    rows = {r["person"]: r for r in out["people"]}
+    assert rows["kamal"]["face"] is True          # Habu resolves to kamal
+    assert rows["kamal"]["aka"] == ["habu"]
+    assert rows["kamal"]["kind"] == "contact"
+    assert rows["ruma"]["kind"] == "household"
+    assert rows["owner"]["kind"] == "the user"
