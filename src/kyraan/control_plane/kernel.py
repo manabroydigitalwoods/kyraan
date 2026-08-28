@@ -103,13 +103,30 @@ def reset_viewer_stage(token) -> None:
 
 
 def stage_allows(name: str, stage: str | None = None) -> bool:
-    stage = stage if stage is not None else viewer_stage()
+    """Effective access = the stage's toolset ∪ the OWNER'S individual
+    grants for this viewer (person.extra_tools — "give ruma photo
+    upload" without inventing a role; owner directive 2026-08-28).
+    Grants apply only when checking the CURRENT viewer (an explicit
+    `stage=` probe, as the frozen-surface test uses, stays pure-role)."""
+    explicit = stage is not None
+    stage = stage if explicit else viewer_stage()
     if stage == "owner":
         return True
     allowed = (config.load().get("stage_toolsets") or {}).get(stage) or []
     # entries are exact names or prefixes ("reminders" covers reminders.*)
-    return any(name == entry or name.startswith(entry + ".")
-               for entry in allowed)
+    if any(name == entry or name.startswith(entry + ".")
+           for entry in allowed):
+        return True
+    person = effective_reviewer()
+    if not person or person == "owner":
+        return False
+    if explicit and stage != viewer_stage():
+        return False  # pure-role probe (the frozen-surface test's mode)
+    try:
+        from kyraan.store import persons
+        return name in persons.extra_tools(person)
+    except Exception:
+        return False  # fail-closed
 
 
 def _stage_gate(kind: str, name: str, args) -> None:

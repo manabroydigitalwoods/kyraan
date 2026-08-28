@@ -106,6 +106,35 @@ def enroll(person_id: str, chat_id: int, stage: str, consented: str) -> None:
               consented=consented)
 
 
+def extra_tools(person_id: str) -> list:
+    """The owner's individual capability grants for one person — on top
+    of their stage's toolset. TTL-cached like every hot lookup;
+    fail-closed to none."""
+    now = time.monotonic()
+    cached = _cache.get(("extras", person_id))
+    if cached and now - cached[0] < _CACHE_TTL_S:
+        return cached[1]
+    try:
+        with pg.connection() as conn:
+            row = conn.execute(
+                "SELECT extra_tools FROM person WHERE id = %s",
+                (person_id,)).fetchone()
+        result = list(row[0]) if row and row[0] else []
+    except Exception:
+        result = []
+    _cache[("extras", person_id)] = (now, result)
+    return result
+
+
+def set_extra_tools(person_id: str, tools: list) -> None:
+    with pg.connection() as conn:
+        conn.execute("UPDATE person SET extra_tools = %s WHERE id = %s",
+                     (sorted(set(tools)), person_id))
+        conn.commit()
+    _cache.pop(("extras", person_id), None)
+    log_event("person_tools_set", person=person_id, tools=sorted(set(tools)))
+
+
 def person_id_any_stage(chat_id: int) -> str | None:
     """The person id for a chat REGARDLESS of stage — the identity
     layer's lookup (2026-08-28: the channel set stage only, the empty

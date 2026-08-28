@@ -826,6 +826,49 @@ async def _persons_set_access(chat_id: int, args: dict, raw_text: str):
             "stage": stage, "prior_stage": current_stage}
 
 
+_MEDIA_CAPABILITIES = ("media.photo", "media.file", "media.voice",
+                       "media.location")
+# Owner-authority tools can NEVER be granted — no escalation path exists.
+_NEVER_GRANTABLE = ("persons.set_access", "persons.set_tools")
+
+
+async def _persons_set_tools(chat_id: int, args: dict, raw_text: str):
+    """OWNER AUTHORITY: individual capability grants on top of a
+    person's stage (owner, 2026-08-28: "owner will have all access but
+    he can give any specific access"). grant/revoke lists of tool or
+    media capability names; effective access = stage toolset ∪ grants."""
+    import asyncio as _aio
+
+    from kyraan.store import persons
+    name = str(args.get("name", "")).strip()
+    person_id = persons.resolve(name)
+    if not person_id or person_id == "owner":
+        raise kernel.ToolFailed(
+            f"{name!r} is not a registered person (the owner already has "
+            "everything)")
+    valid = set(TOOLS) | set(_MEDIA_CAPABILITIES)
+    grant = [str(t).strip() for t in (args.get("grant") or [])]
+    revoke = [str(t).strip() for t in (args.get("revoke") or [])]
+    for t in grant + revoke:
+        if t in _NEVER_GRANTABLE:
+            raise kernel.ToolFailed(f"{t} is owner authority — never grantable")
+        if t not in valid:
+            raise kernel.ToolFailed(
+                f"unknown capability {t!r} — tool names or one of "
+                f"{', '.join(_MEDIA_CAPABILITIES)}")
+    if not grant and not revoke:
+        current = await _aio.to_thread(persons.extra_tools, person_id)
+        return {"person": person_id, "extra_tools": current}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("persons.set_tools", dict(args))
+    current = set(await _aio.to_thread(persons.extra_tools, person_id))
+    updated = sorted((current | set(grant)) - set(revoke))
+    await _aio.to_thread(persons.set_extra_tools, person_id, updated)
+    return {"changed": True, "person": person_id,
+            "extra_tools": updated,
+            "prior": sorted(current)}
+
+
 async def _persons_list(chat_id: int, args: dict, raw_text: str):
     """The whole person roster in one call — live 2026-08-28 13:04:
     "list my all relatives" was answered with "there isn't a bulk-list
@@ -1266,6 +1309,17 @@ TOOLS = {
                   "Text formats only; ~200KB cap."),
         "run": _files_send,
     },
+    "persons.set_tools": {
+        "params": ('{"name": "<registered person>", "grant": ["media.photo"], '
+                   '"revoke": []}'),
+        "about": ("OWNER ONLY: grant or revoke SPECIFIC abilities for a "
+                  "person, on top of their stage — \"let ruma upload "
+                  "photos\" -> grant media.photo; media.file / media.voice "
+                  "/ media.location cover uploads; any tool name works "
+                  "too. Empty grant+revoke just shows their current "
+                  "grants. Authority tools are never grantable."),
+        "run": _persons_set_tools,
+    },
     "persons.set_access": {
         "params": '{"name": "<registered person>", "stage": "none|read_mostly|full"}',
         "about": ("OWNER ONLY: grant or revoke a person's CHAT access. "
@@ -1495,6 +1549,11 @@ UNDO_MAP = {
         if isinstance(r, dict) and r.get("id") else None),
     "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
     "persons.alias": lambda a, r, p: None,  # alias removal likewise
+    "persons.set_tools": lambda a, r, p: (
+        ("persons.set_tools",
+         {"name": r["person"], "grant": r["prior"], "revoke":
+          [t for t in r["extra_tools"] if t not in r["prior"]]})
+        if isinstance(r, dict) and r.get("changed") else None),
     "persons.set_access": lambda a, r, p: (
         ("persons.set_access", {"name": r["person_id"],
                                 "stage": r["prior_stage"]})
@@ -1706,6 +1765,12 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "documents.rename":
         return (f'About to rename the saved document matching '
                 f'"{args.get("query")}" to "{args.get("new_name")}"')
+    if tool == "persons.set_tools":
+        grant = ", ".join(args.get("grant") or []) or "nothing"
+        revoke = ", ".join(args.get("revoke") or []) or "nothing"
+        return (f"OWNER AUTHORITY — about to change {args.get('name')}'s "
+                f"individual abilities: grant {grant}; revoke {revoke}. "
+                "These stack on top of their access stage")
     if tool == "persons.set_access":
         stage = str(args.get("stage", ""))
         what = {"none": "REVOKE their chat access entirely (instant)",
@@ -1789,6 +1854,11 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "documents.rename" and isinstance(outcome, dict):
         return (f'Renamed the document "{outcome.get("prior")}" → '
                 f'"{outcome.get("now")}" — ask for it by that name anytime.')
+    if tool == "persons.set_tools" and isinstance(outcome, dict):
+        extras = ", ".join(outcome.get("extra_tools") or []) or "none"
+        return (f'{outcome.get("person")}\'s individual abilities are now: '
+                f'{extras} (on top of their stage). "undo" restores the '
+                "previous set.")
     if tool == "persons.set_access" and isinstance(outcome, dict):
         if not outcome.get("changed"):
             return outcome.get("note", "No change.")

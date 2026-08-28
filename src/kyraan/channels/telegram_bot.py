@@ -245,6 +245,32 @@ def _viewer_stage_for(update: Update) -> str:
     return row[1] if row else "none"
 
 
+async def _media_admitted(update: Update, capability: str) -> bool:
+    """Media joined the capability system (owner, 2026-08-28: "ruma
+    trying to upload images but unable" — media was a silent hardcoded
+    owner-only wall outside every access model). Owner: always. An
+    enrolled viewer: their stage toolset ∪ the owner's individual
+    grants ("give ruma media.photo"). Denied enrolled viewers get an
+    honest line instead of silence; strangers still get nothing."""
+    if _owner_private(update):
+        return True
+    from kyraan.control_plane import kernel
+    person, stage = _viewer_for(update)
+    if not person or stage not in ("read_mostly", "full"):
+        return False  # not admitted to chat at all — stay silent
+    token = kernel.set_viewer(person, stage)
+    try:
+        if kernel.stage_allows(capability):
+            return True
+    finally:
+        kernel.reset_viewer_stage(token)
+    display = person.replace("_", " ").title()
+    await update.message.reply_text(
+        f"{display}, you don't have {capability.split('.', 1)[1]} access "
+        "here — ask Maan to grant it.", do_quote=True)
+    return False
+
+
 def _viewer_for(update: Update) -> tuple:
     """(person_id, stage) — BOTH, always (2026-08-28: setting stage only
     left the viewer person empty, a fail-open default turned empty into
@@ -377,8 +403,11 @@ async def _on_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def _on_voice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """A voice note becomes text locally (audio never leaves the Mac) and
     then flows through the exact same pipeline as a typed message."""
-    if not _owner_private(update):
+    if not await _media_admitted(update, "media.voice"):
         return
+    from kyraan.control_plane import kernel as _idkernel
+    _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
+    # runs each handler in its own task, so no reset is needed
     from kyraan.channels import voice
 
     if not await voice.wait_available():
@@ -420,8 +449,11 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     not tracked; the initial pin is what the assistant gets. (Seen live
     2026-08-26: a shared pin matched no handler, was silently dropped,
     and the model kept asking which area the owner was in.)"""
-    if not _owner_private(update):
+    if not await _media_admitted(update, "media.location"):
         return
+    from kyraan.control_plane import kernel as _idkernel
+    _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
+    # runs each handler in its own task, so no reset is needed
     if update.message is None:  # a live-location EDIT arrives as
         return                  # edited_message — initial pin only
     from kyraan.channels import location as geo
@@ -479,8 +511,11 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """A photo becomes one frontier vision call — analysis only, no tools
     on this path (see agents/photo.py). The reply plus a text record land
     in history so follow-up questions work."""
-    if not _owner_private(update):
+    if not await _media_admitted(update, "media.photo"):
         return
+    from kyraan.control_plane import kernel as _idkernel
+    _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
+    # runs each handler in its own task, so no reset is needed
     import base64
 
     from kyraan.agents import orchestrator, photo
@@ -599,8 +634,11 @@ async def _on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     and .docx join document memory — same pipeline as PDFs (local
     extraction, original stored, hash-deduped). Anything else gets the
     honest unsupported reply."""
-    if not _owner_private(update):
+    if not await _media_admitted(update, "media.file"):
         return
+    from kyraan.control_plane import kernel as _idkernel
+    _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
+    # runs each handler in its own task, so no reset is needed
     document = update.message.document
     filename = (document.file_name or "").lower()
     chat_id = update.effective_chat.id
@@ -661,8 +699,11 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     locally, stored. Scanned PDFs without a text layer get an honest
     'can't read scans yet'. Owner-only like all media until P3.5b/c
     scope media for other stages."""
-    if not _owner_private(update):
+    if not await _media_admitted(update, "media.file"):
         return
+    from kyraan.control_plane import kernel as _idkernel
+    _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
+    # runs each handler in its own task, so no reset is needed
     document = update.message.document
     chat_id = update.effective_chat.id
     if (document.file_size or 0) > _PDF_MAX_BYTES:

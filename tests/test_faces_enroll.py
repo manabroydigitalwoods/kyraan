@@ -317,3 +317,46 @@ def test_effective_reviewer_fails_closed():
     finally:
         kernel.reset_viewer_stage(token)
     assert kernel.effective_reviewer() == "owner"   # background default
+
+
+def test_extra_grants_stack_on_stage_and_never_escalate(monkeypatch):
+    """Owner (2026-08-28): roles (stages) + individual grants. Effective
+    access = stage toolset ∪ owner's grants; authority tools are never
+    grantable; pure-role probes (the frozen-surface test's mode) ignore
+    grants."""
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "extra_tools",
+                        lambda pid: ["media.photo"] if pid == "ruma" else [])
+    token = kernel.set_viewer("ruma", "full")
+    try:
+        assert kernel.stage_allows("media.photo") is True        # granted
+        assert kernel.stage_allows("media.voice") is False       # not granted
+        assert kernel.stage_allows("home.turn_on") is False      # stage denies
+        # explicit probe matching the current viewer's stage sees grants
+        assert kernel.stage_allows("media.photo", stage="full") is True
+        # pure-role probe of a FOREIGN stage stays grant-blind
+        assert kernel.stage_allows("media.photo", stage="read_mostly") is False
+    finally:
+        kernel.reset_viewer_stage(token)
+
+
+async def test_set_tools_validates_and_never_grants_authority(monkeypatch):
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    import pytest as _pytest
+    monkeypatch.setattr(persons, "resolve",
+                        lambda n: {"ruma": "ruma"}.get(n.lower()))
+    with _pytest.raises(kernel.ToolFailed, match="never grantable"):
+        await loop_tools._persons_set_tools(
+            7, {"name": "ruma", "grant": ["persons.set_access"]}, "")
+    with _pytest.raises(kernel.ToolFailed, match="unknown capability"):
+        await loop_tools._persons_set_tools(
+            7, {"name": "ruma", "grant": ["hack.everything"]}, "")
+    with _pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._persons_set_tools(
+            7, {"name": "ruma", "grant": ["media.photo"]}, "")
+    monkeypatch.setattr(persons, "extra_tools", lambda pid: ["media.photo"])
+    out = await loop_tools._persons_set_tools(7, {"name": "ruma"}, "")
+    assert out["extra_tools"] == ["media.photo"]   # read-back, no ask

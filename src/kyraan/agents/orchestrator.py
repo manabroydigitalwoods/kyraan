@@ -1038,6 +1038,13 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
                 if not await _aio.to_thread(
                         _gmail._delete_draft, str(ua.get("draft_id", ""))):
                     raise kernel.ToolFailed("that draft is already gone")
+            elif ut == "persons.set_tools":
+                from kyraan.store import persons as _persons
+                pid = _persons.resolve(ua["name"]) or ua["name"]
+                current = set(_persons.extra_tools(pid))
+                _persons.set_extra_tools(
+                    pid, sorted((current | set(ua.get("grant") or []))
+                                - set(ua.get("revoke") or [])))
             elif ut == "persons.set_access":
                 from kyraan.store import persons as _persons
                 prow = next((p for p in _persons.list_persons()
