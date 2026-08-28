@@ -17,6 +17,17 @@ def main() -> int:
         return 2
     archive = Path(sys.argv[1]).expanduser()
     target = sys.argv[sys.argv.index("--target") + 1] if "--target" in sys.argv else "kyraan"
+    # The target is interpolated into DROP/CREATE DATABASE statements —
+    # an unsanitized value is SQL injection AND a live-guard bypass
+    # ("kyraan " passes the != check, psql still hits the live db)
+    # (Bugbot P1, 2026-08-28). Identifier charset only, normalized
+    # BEFORE the guard compares.
+    import re
+    target = target.strip().lower()
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,40}", target):
+        print(f"invalid --target {target!r}: database identifier "
+              "characters only ([a-z_][a-z0-9_]*)", file=sys.stderr)
+        return 2
     with tempfile.TemporaryDirectory() as tmp:
         with tarfile.open(archive) as tar:
             member = next((m for m in tar.getmembers()

@@ -564,3 +564,41 @@ async def test_deliver_retries_once_then_records_the_divergence(monkeypatch):
               logging_setup.EVENT_LOG.read_text().splitlines()]
     failed = [e for e in events if e["kind"] == "reply_delivery_failed"]
     assert failed and failed[-1]["undelivered"] == "Done — the ac is off."
+
+
+async def test_enrolled_person_reminders_are_delivered(monkeypatch):
+    """Bugbot P1 (2026-08-28): reminders.create is in every viewer
+    stage's toolset, but the owner-era send gate silently retired any
+    non-owner chat's reminder — a viewer could set one and never
+    receive it. Admitted enrolled chats now deliver; unknown chats
+    (dev-harness records) still retire."""
+    from types import SimpleNamespace
+    from kyraan.store import persons
+    from kyraan.triggers import scheduler
+
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    monkeypatch.setattr(persons, "person_for_chat",
+                        lambda cid: ("ruma", "full") if cid == 891 else None)
+    sent = []
+
+    class FakeBot:
+        async def send_message(self, chat_id, text):
+            sent.append((chat_id, text))
+
+    captured = {}
+    monkeypatch.setattr(scheduler, "init",
+                        lambda schedule_fn, cancel_fn, send_fn:
+                        captured.update(send=send_fn))
+    monkeypatch.setattr(telegram_bot.orchestrator, "record_proactive",
+                        lambda cid, text: None)
+
+    class FakeJQ:
+        def run_once(self, *a, **k): pass
+        def get_jobs_by_name(self, n): return []
+
+    telegram_bot._wire_scheduler(FakeJQ(), FakeBot())
+    send_fn = captured["send"]
+    assert await send_fn(1, "owner reminder") is True
+    assert await send_fn(891, "ruma reminder") is True     # enrolled: delivered
+    assert await send_fn(9999, "harness record") is False  # unknown: retired
+    assert [c for c, _ in sent] == [1, 891]

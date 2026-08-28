@@ -249,3 +249,37 @@ def test_alias_names_resolve_to_subjects(_household):
     assert documents.subjects_from_name("Titu's electricity invoice") \
         == ["titu_roy"]
     assert documents.valid_subjects(["Titu Roy"]) == ["titu_roy"]
+
+
+@pytest.mark.pg
+def test_delete_unlinks_files_only_after_commit(doc_db, monkeypatch, tmp_path):
+    """Bugbot P1 (2026-08-28): originals were unlinked mid-transaction —
+    a rollback restored the rows while the bytes were already gone.
+    Files now go only after the commit succeeds."""
+    monkeypatch.setattr(documents, "FILES_DIR", tmp_path / "documents")
+    doc_id = documents.ingest(7, "photo", _CARD, caption="card",
+                              original=(b"\xff\xd8bytes", "jpg"))
+    path, _ = documents.original_file(7, doc_id)
+    from pathlib import Path
+    order = []
+    real_commit = pg.connection
+
+    class SpyConn:
+        def __init__(self, conn): self._c = conn
+        def execute(self, *a, **k): return self._c.execute(*a, **k)
+        def commit(self):
+            order.append(("commit", Path(path).exists()))
+            return self._c.commit()
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def spying_connection():
+        with real_commit() as conn:
+            yield SpyConn(conn)
+
+    monkeypatch.setattr(documents.pg, "connection", spying_connection)
+    documents.delete_documents(7, [doc_id])
+    # at commit time the file still existed; it is gone only afterwards
+    assert order == [("commit", True)]
+    assert not Path(path).exists()

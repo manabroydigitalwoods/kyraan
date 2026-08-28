@@ -34,7 +34,12 @@ def main() -> int:
         ["docker", "exec", "kyraan-postgres", "pg_dump", "-U", "kyraan", "kyraan"],
         capture_output=True, text=True)
     if dump.returncode == 0:
-        pg_sql.write_text(dump.stdout)
+        # 0600 from birth (Bugbot P2): the dump holds every fact,
+        # episode, and document — the same owner-only rule as every
+        # other personal-data file, with no umask window.
+        fd = os.open(pg_sql, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(dump.stdout)
     else:
         print(f"pg_dump skipped: {dump.stderr[:150]}", file=sys.stderr)
         pg_sql.unlink(missing_ok=True)

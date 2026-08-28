@@ -98,7 +98,12 @@ async def check(chat_id: int, send_fn) -> int:
 
     sent = 0
     for key, value, text in decide_alerts(ac, energy, _markers()):
-        await send_fn(chat_id, text)
+        if await send_fn(chat_id, text) is False:
+            # Delivery truth (Bugbot P1): an undelivered alert must not
+            # burn its once-per-day/stretch marker — it re-fires on the
+            # next check instead of being suppressed unheard.
+            log_event("home_alert_send_failed", rule=key, chat_id=chat_id)
+            continue
         _mark(key, value)
         log_event("home_alert_sent", rule=key, chat_id=chat_id)
         sent += 1

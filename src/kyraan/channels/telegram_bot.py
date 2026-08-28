@@ -847,13 +847,19 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
         # The store is shared with the dev harnesses (chat.py uses chat 0,
         # walkthrough scripts use their own ids). A record like that would
         # make send_message error on a nonexistent chat and leave the
-        # reminder pending forever, retried on every restart. The bot
-        # delivers to its owner only; anything else is retired — and the
-        # False return makes fire() log it truthfully as
+        # reminder pending forever, retried on every restart. Deliverable
+        # chats are the owner AND admitted enrolled persons (Bugbot P1,
+        # 2026-08-28: reminders.create is in every viewer stage's toolset,
+        # but this owner-era gate silently retired a viewer's reminders —
+        # Ruma could set one and never receive it); anything else is
+        # retired, and the False return makes fire() log it truthfully as
         # reminder_retired_undelivered, not reminder_sent.
         if chat_id != _owner_id():
-            logger.warning("Retiring reminder for non-owner chat %s (dev-harness record)", chat_id)
-            return False
+            from kyraan.store import persons
+            if persons.person_for_chat(chat_id) is None:  # not admitted
+                logger.warning("Retiring reminder for unknown chat %s "
+                               "(dev-harness record)", chat_id)
+                return False
         await bot.send_message(chat_id=chat_id, text=text)
         orchestrator.record_proactive(chat_id, text)
         return True
@@ -862,15 +868,17 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
 
 
 def _wire_brief(job_queue: JobQueue, bot) -> None:
-    async def _send(context, chat_id: int, text: str) -> None:
+    async def _send(context, chat_id: int, text: str) -> bool:
         # Proactive sends get the same delivery truth as replies
         # (audit nit, 2026-08-28): one retry, then a recorded
-        # reply_delivery_failed carrying the undelivered text.
+        # reply_delivery_failed carrying the undelivered text. The
+        # bool PROPAGATES (Bugbot P1: discarding it let a failed brief/
+        # alert be marked sent and permanently suppressed).
         async def _once():
             await context.bot.send_message(chat_id=chat_id, text=text)
             orchestrator.record_proactive(chat_id, text)
 
-        await _deliver(chat_id, _once, text)
+        return await _deliver(chat_id, _once, text)
 
     at = briefs.brief_time("morning")
     if at is not None:

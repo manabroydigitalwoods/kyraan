@@ -147,3 +147,31 @@ def test_evening_brief_time_from_config(monkeypatch):
     at = briefs.brief_time("evening")
     assert (at.hour, at.minute) == (21, 30)
     assert briefs.brief_time("morning") is None  # not configured here
+
+
+async def test_failed_brief_delivery_is_not_marked_sent(monkeypatch):
+    """Bugbot P1 (2026-08-28): a brief whose Telegram send failed was
+    still logged brief_sent — and the catch-up grid then suppressed it
+    forever. A False from the send fn now means NOT sent."""
+    import json
+    from kyraan.control_plane import kernel, logging_setup
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+
+    async def compose_stub(chat_id):
+        return "🌅 brief"
+
+    monkeypatch.setattr(briefs, "compose", compose_stub)
+
+    async def failed_send(chat_id, text):
+        return False
+
+    assert await briefs.fire(1, failed_send) is False
+    events = [json.loads(l) for l in
+              logging_setup.EVENT_LOG.read_text().splitlines()]
+    kinds = [e["kind"] for e in events]
+    assert "brief_send_failed" in kinds and "brief_sent" not in kinds
+
+    async def ok_send(chat_id, text):
+        return True
+
+    assert await briefs.fire(1, ok_send) is True

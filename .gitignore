@@ -22,3 +22,8 @@ docker/homeassistant/*
 !docker/homeassistant/automations.yaml
 !docker/homeassistant/scripts.yaml
 !docker/homeassistant/scenes.yaml
+# stray runtime telemetry at the root (a scratch KYRAAN_LOG_DIR
+# once wrote here and got committed — Bugbot P2, 2026-08-28)
+events.jsonl
+traces.jsonl
+chat.jsonl

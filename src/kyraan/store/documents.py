@@ -376,7 +376,7 @@ def rename_document(chat_id: int, doc_id: str, caption: str) -> str | None:
 def delete_documents(chat_id: int, doc_ids: list) -> list:
     """Hard-delete documents by id (captures are the owner's to destroy;
     chunks cascade). Returns the deleted captions."""
-    captions = []
+    captions, doomed_files = [], []
     with pg.connection() as conn:
         for doc_id in doc_ids:
             row = conn.execute(
@@ -385,14 +385,17 @@ def delete_documents(chat_id: int, doc_ids: list) -> list:
                 "file_path",
                 (chat_id, doc_id)).fetchone()
             if row and row[1]:
-                # the original goes with the record — captures are the
-                # owner's to destroy, files included
-                basename = row[1].replace("\\", "/").split("/")[-1]
-                (FILES_DIR / basename).unlink(missing_ok=True)
-            row = row[:1] if row else row
+                doomed_files.append(row[1].replace("\\", "/").split("/")[-1])
             if row is not None:
                 captions.append(row[0])
         conn.commit()
+    # Originals go ONLY after the commit (Bugbot P1, 2026-08-28):
+    # unlinking mid-transaction meant a later failure rolled the rows
+    # back while the bytes were already gone — a permanent loss the
+    # database claimed never happened. A crash in the gap leaves an
+    # orphaned file, which is recoverable noise, not data loss.
+    for basename in doomed_files:
+        (FILES_DIR / basename).unlink(missing_ok=True)
     for caption in captions:
         log_event("document_deleted", chat_id=chat_id, caption=caption[:80])
     return captions

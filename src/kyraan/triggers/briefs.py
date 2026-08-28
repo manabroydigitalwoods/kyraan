@@ -132,7 +132,11 @@ async def fire(chat_id: int, send_fn) -> bool:
         log_event("brief_skipped", chat_id=chat_id)
         return False
     text = await compose(chat_id)
-    await send_fn(chat_id, text)
+    if await send_fn(chat_id, text) is False:
+        # Delivery truth (Bugbot P1): a failed send must NOT count as
+        # sent — the catch-up grid retries it instead of suppressing.
+        log_event("brief_send_failed", chat_id=chat_id)
+        return False
     log_event("brief_sent", chat_id=chat_id)
     return True
 
@@ -202,6 +206,8 @@ async def fire_evening(chat_id: int, send_fn) -> bool:
         log_event("evening_brief_skipped", chat_id=chat_id)
         return False
     text = await compose_evening(chat_id)
-    await send_fn(chat_id, text)
+    if await send_fn(chat_id, text) is False:
+        log_event("evening_brief_send_failed", chat_id=chat_id)
+        return False
     log_event("evening_brief_sent", chat_id=chat_id)
     return True

@@ -195,21 +195,28 @@ async def fire(task_id: str) -> None:
         if not task.repeat:
             _retry_later(task, 30)  # held through quiet hours, not lost
         return
-    if task.pending_result and not task.repeat:
+    if task.pending_result:
         # A produced result awaits delivery — resend it, NEVER re-run the
         # model. The label carries the ambiguity, exactly like reminders'
-        # stale-lease takeover.
+        # stale-lease takeover. Recurring tasks redeliver at their NEXT
+        # occurrence and then continue with the fresh run (Bugbot P2:
+        # their stashed results were previously dropped outright).
         try:
             await _send_fn(task.chat_id,
                            f"⏱ {task.pending_result}\n(may be a repeat — an "
                            "earlier delivery attempt failed mid-send)")
         except Exception as exc:
             log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
-            _retry_later(task, 5)
+            if not task.repeat:
+                _retry_later(task, 5)
             return
         log_event("agent_task_ran", task_id=task_id, redelivered=True)
-        cancel(task.id)
-        return
+        _set_pending_result(task.id, "")
+        if not task.repeat:
+            cancel(task.id)
+            return
+        task = next((AgentTask(**r) for r in _load()
+                     if r["id"] == task_id), task)  # fresh run continues
     try:
         result = await _run_fn(task.chat_id, task.instruction)
     except Exception as exc:
@@ -234,8 +241,8 @@ async def fire(task_id: str) -> None:
         # path stays closed; the may-be-a-repeat label covers the
         # ambiguous case.
         log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
-        if not task.repeat:
-            _set_pending_result(task.id, str(result))
+        _set_pending_result(task.id, str(result))  # recurring: redelivered
+        if not task.repeat:                        # at the next occurrence
             _retry_later(task, 5)
         return
     log_event("agent_task_ran", task_id=task_id)
