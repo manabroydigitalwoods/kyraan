@@ -798,8 +798,14 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
 
 def _wire_brief(job_queue: JobQueue, bot) -> None:
     async def _send(context, chat_id: int, text: str) -> None:
-        await context.bot.send_message(chat_id=chat_id, text=text)
-        orchestrator.record_proactive(chat_id, text)
+        # Proactive sends get the same delivery truth as replies
+        # (audit nit, 2026-08-28): one retry, then a recorded
+        # reply_delivery_failed carrying the undelivered text.
+        async def _once():
+            await context.bot.send_message(chat_id=chat_id, text=text)
+            orchestrator.record_proactive(chat_id, text)
+
+        await _deliver(chat_id, _once, text)
 
     at = briefs.brief_time("morning")
     if at is not None:

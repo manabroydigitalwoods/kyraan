@@ -676,9 +676,12 @@ async def _persons_add(chat_id: int, args: dict, raw_text: str):
     name = str(args.get("name", "")).strip()
     if not 2 <= len(name) <= 40:
         raise kernel.ToolFailed("give the person's name (2-40 chars)")
-    person_id = name.lower().replace(" ", "_").replace("-", "_")
-    if person_id == "owner":
-        raise kernel.ToolFailed("the owner is not a contact")
+    import re as _re
+    person_id = _re.sub(r"[^a-z0-9_]+", "_",
+                        name.lower().replace(" ", "_").replace("-", "_")
+                        ).strip("_")
+    if not person_id or person_id == "owner":
+        raise kernel.ToolFailed("give a plain name for the person")
     existing = {p[0] for p in persons.list_persons()}
     if person_id in existing:
         return {"added": False, "note": f"{name} is already in the registry"}

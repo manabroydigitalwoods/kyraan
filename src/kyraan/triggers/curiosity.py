@@ -111,7 +111,10 @@ def collect_candidates(chat_id: int) -> list:
 def daily_line(chat_id: int) -> str | None:
     """At most ONE question, chosen deterministically, never repeated
     within 14 days. Returns the brief line or None (quiet days are
-    normal and good)."""
+    normal and good). Marked asked at COMPOSE time — if the brief's
+    delivery then fails, the retry in _deliver is the recovery; a
+    question lost to a double delivery failure resurfaces in 14 days,
+    which is the right price for never nagging twice in one morning."""
     asked = _state().get("asked", {})
     for key, question in collect_candidates(chat_id):
         if _recently_asked(key, asked):
