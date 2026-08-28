@@ -289,3 +289,31 @@ async def test_set_access_is_owner_authority_with_all_gates(monkeypatch):
         {}, {"changed": True, "person_id": "ruma", "stage": "read_mostly",
              "prior_stage": "none"}, None
     ) == ("persons.set_access", {"name": "ruma", "stage": "none"})
+
+
+def test_effective_reviewer_fails_closed():
+    """The system-wide sweep after the Ruma identity incident: an empty
+    viewer person inherits owner ONLY at owner stage — every memory
+    read/write path treats None as refuse."""
+    from kyraan.control_plane import kernel
+    import pytest as _pytest
+    token = kernel.set_viewer("", "full")
+    try:
+        assert kernel.effective_reviewer() is None
+        from kyraan.memory import store as memory_store
+        with _pytest.raises(ValueError, match="unidentified viewer"):
+            memory_store.propose_fact("people/x.md", "- leaked", source="x")
+        from kyraan.agents import agent_loop
+        from kyraan.model_router import router as _router
+        import unittest.mock as _mock
+        with _mock.patch.object(_router, "provider_is_local",
+                                lambda p: True):
+            assert agent_loop._pending_block("cheap") == "(none)"
+    finally:
+        kernel.reset_viewer_stage(token)
+    token = kernel.set_viewer("ruma", "full")
+    try:
+        assert kernel.effective_reviewer() == "ruma"
+    finally:
+        kernel.reset_viewer_stage(token)
+    assert kernel.effective_reviewer() == "owner"   # background default

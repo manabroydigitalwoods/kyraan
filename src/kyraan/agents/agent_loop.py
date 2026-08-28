@@ -393,9 +393,14 @@ def _pending_block(tier: str) -> str:
     provider = kernel.config.load()["model_tiers"].get(tier, {}).get("provider", "")
     if _router.provider_is_local(provider):
         # reviewer-keyed (multi-user audit 2026-08-27): each viewer's
-        # prompt carries only THEIR pending queue
-        return (memory_store.load_pending_facts(
-            reviewer=kernel.viewer_person() or "owner") or "(none)")
+        # prompt carries only THEIR pending queue. Fail-closed
+        # (2026-08-28): an unidentified viewer gets NOTHING — the old
+        # `or "owner"` handed the owner's pending facts to any
+        # stage-only turn (Ruma's first enrolled turns qualified).
+        reviewer = kernel.effective_reviewer()
+        if reviewer is None:
+            return "(none)"
+        return memory_store.load_pending_facts(reviewer=reviewer) or "(none)"
     return "(pending items are held locally until the owner reviews them)"
 
 
@@ -425,6 +430,8 @@ def _identity_block(chat_id: int) -> str:
         # person is owner ONLY when the stage says owner; otherwise the
         # speaker is explicitly unidentified and explicitly not the owner.
         person_id = kernel.viewer_person()
+        if person_id == "none":  # set_viewer's empty encoding
+            person_id = ""
         if not person_id:
             if kernel.viewer_stage() == "owner":
                 person_id = "owner"

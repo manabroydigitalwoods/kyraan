@@ -166,7 +166,10 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
             # the authority — re-registering the same fact is a no-op.
             return entry["id"]
     from kyraan.control_plane import kernel as _kernel
-    author = _kernel.viewer_person() or "owner"
+    # Fail-closed authorship (2026-08-28 sweep): an unidentified viewer
+    # is "unknown", never the owner — visibility clauses treat unknown
+    # authors as strangers, so a mis-set turn can't mint owner facts.
+    author = _kernel.effective_reviewer() or "unknown"
     changed, disputes = [], []
     if supersedes:
         old_words = _words(supersedes)

@@ -75,7 +75,12 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     # P3.5c: proposals belong to whoever's turn produced them — their
     # review queue, not the owner's (review keyed by person, arch §4).
     from kyraan.control_plane import kernel as _kernel
-    reviewer = _kernel.viewer_person() or "owner"
+    reviewer = _kernel.effective_reviewer()
+    if reviewer is None:
+        # Fail-closed (2026-08-28): an unidentified viewer's statement
+        # must never enter ANY queue — least of all the owner's, which
+        # is exactly how "User goes by the name Ruma" got in.
+        raise ValueError("unidentified viewer — proposal refused")
     # P3.5e: in earned `sampled` mode, 2 of every 3 proposals carry a 24h
     # objection window instead of holding for review — still visible in
     # the pending queue exactly as today; a reject IS the objection.

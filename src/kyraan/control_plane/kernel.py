@@ -75,6 +75,18 @@ def viewer_person() -> str:
     return _viewer.get()[0]
 
 
+def effective_reviewer() -> str | None:
+    """The person this turn's memory writes/reads belong to, FAIL-CLOSED
+    (2026-08-28 sweep after the Ruma identity incident): an empty viewer
+    person inherits owner ONLY when the stage itself says owner — a
+    stage-only viewer gets None, and every caller must treat None as
+    'refuse', never as 'the owner'."""
+    person, stage = _viewer.get()
+    if person and person != "none":  # "none" is set_viewer's empty encoding
+        return person
+    return "owner" if stage == "owner" else None
+
+
 def set_viewer(person: str, stage: str):
     return _viewer.set((person or "none", stage or "none"))
 
