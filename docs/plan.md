@@ -176,6 +176,13 @@ tools — a rule the proposal itself broke for WhatsApp/Slack/GitHub.
   reviewed facts only reachable via context assembly or relations.
 - **Normalized error names** (`AUTH_REQUIRED`, `RATE_LIMITED`, …) — a thin
   mapping over `ToolError`/`TransientToolError`, not a new system.
+- **`system.status` (READ ONLY) — adopted 2026-08-28.** Memory pressure
+  (wired/free/compressed, swap), the four local Docker containers
+  (Postgres/Redis/Home Assistant/SearXNG), and currently-loaded Ollama
+  models — one tool, one call, no arguments (zero injection surface).
+  Ships with `system.status` only; `system.restart_*`/stop/update/delete
+  tools are a SEPARATE decision, gated below, not a natural next step of
+  this one.
 
 **Adopt next (the one substantial win)**
 - **Google Contacts → IdentityResolver → persons.** Known OAuth model, feeds
@@ -203,9 +210,23 @@ tools — a rule the proposal itself broke for WhatsApp/Slack/GitHub.
   prefix that bills ~47% of input at the cached rate; trades a measured
   saving for a speculative one, to solve a menu-size problem only the
   proposal's own scope expansion creates.
-- `system.restart_container` / `system.*` writes — Kyraan restarting its
-  own Postgres is a self-outage vector (governance §5). Read-only
-  `system.status` is fine, later.
+- `system.restart_container` / `system.*` write/update/delete — Kyraan
+  restarting its own Postgres is a self-outage vector (governance §5).
+  **Owner's call (2026-08-28): read-only now; writes reopen once Kyraan
+  has proven trustworthy.** Made concrete rather than left as a feeling,
+  mirroring governance §8's clean-soak-day bar — the graduation criteria
+  are ALL of:
+  1. 30 consecutive soak days with zero unconfirmed writes anywhere in
+     the system (the existing stage-1 exit bar, §8) run again from
+     whatever day `system.status` goes live;
+  2. the eval gate green throughout — a single regression resets the
+     clock, the same rule §8 already applies to privacy-boundary bugs;
+  3. `system.status` itself has been actually relied on to answer a real
+     question at least a handful of times, not just shipped and ignored.
+  Even once cleared, scope narrow: reversible/idempotent operations
+  (restart a container) before anything destructive, each still behind
+  the standard confirm gate — this bar authorizes DESIGNING the write
+  tools, not shipping them unconfirmed.
 - Directory restructure into `integrations/` — churn across 660+ tests
   for zero behavior change; revisit only if a second provider for the
   same capability actually lands.

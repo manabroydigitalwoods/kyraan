@@ -493,6 +493,92 @@ async def _usage_report(chat_id: int, args: dict, raw_text: str):
     return usage_report.usage_summary(days=days)
 
 
+_SYSTEM_CONTAINERS = ("kyraan-postgres", "kyraan-redis", "homeassistant", "searxng")
+
+
+def _system_status_sync() -> dict:
+    """Blocking machine-health probe — READ ONLY by construction: no
+    argument reaches a subprocess or URL, so there is no injection
+    surface, and nothing here can start, stop, or restart anything
+    (plan §3c: writes are gated behind a soak record, not built yet).
+    Each section is independent — Docker or Ollama being unreachable
+    must not blank out the sections that ARE available."""
+    import subprocess
+
+    status: dict = {}
+
+    try:
+        vm = subprocess.run(["vm_stat"], capture_output=True, text=True,
+                            timeout=5).stdout
+        pages = {}
+        for line in vm.splitlines():
+            if ":" in line:
+                key, _, val = line.partition(":")
+                pages[key.strip()] = val.strip().rstrip(".")
+        page_bytes = 16384
+        wired = int(pages.get("Pages wired down", 0)) * page_bytes / 1073741824
+        free = int(pages.get("Pages free", 0)) * page_bytes / 1073741824
+        compressed = int(pages.get("Pages occupied by compressor", 0)) * page_bytes / 1073741824
+        swap = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True,
+                              text=True, timeout=5).stdout
+        swap_used = swap_total = None
+        for part in swap.split():
+            if part.startswith("used"):
+                swap_used = swap.split("used = ")[1].split("M")[0].strip()
+            if part.startswith("total"):
+                swap_total = swap.split("total = ")[1].split("M")[0].strip()
+        status["memory"] = {
+            "wired_gb": round(wired, 2), "free_gb": round(free, 2),
+            "compressed_gb": round(compressed, 2),
+            "swap_used_mb": swap_used, "swap_total_mb": swap_total,
+        }
+    except Exception as exc:
+        status["memory"] = {"error": str(exc)[:150]}
+
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}\t{{.Status}}"],
+            capture_output=True, text=True, timeout=5).stdout
+        seen = {}
+        for line in out.splitlines():
+            if "\t" not in line:
+                continue
+            name, sep, running = line.partition("\t")
+            seen[name] = running
+        status["containers"] = [
+            {"name": c, "status": seen.get(c, "not found")}
+            for c in _SYSTEM_CONTAINERS
+        ]
+    except Exception as exc:
+        status["containers"] = {"error": str(exc)[:150]}
+
+    try:
+        import json as _json
+        import urllib.request
+
+        from kyraan.control_plane import config as _config
+        from kyraan.model_router import router as _router
+        ollama_cfg = _config.load().get("providers", {}).get("ollama", {})
+        base = _router.resolve_base_url("ollama", ollama_cfg).removesuffix("/v1")
+        with urllib.request.urlopen(base + "/api/ps", timeout=5) as resp:
+            data = _json.load(resp)
+        status["ollama_loaded"] = [
+            {"model": m.get("name"),
+             "size_gb": round(m.get("size", 0) / 1073741824, 2),
+             "expires_at": m.get("expires_at")}
+            for m in data.get("models", [])
+        ]
+    except Exception as exc:
+        status["ollama_loaded"] = {"error": str(exc)[:150]}
+
+    return status
+
+
+async def _system_status(chat_id: int, args: dict, raw_text: str):
+    import asyncio
+    return await asyncio.to_thread(_system_status_sync)
+
+
 async def _task_schedule(chat_id: int, args: dict, raw_text: str):
     from kyraan.triggers import agent_tasks
     instruction = str(args.get("instruction", "")).strip()
@@ -1326,6 +1412,19 @@ TOOLS = {
         "about": "Kyraan's own AI usage: per-day calls, tokens, cost USD, budget picture. For 'how much did we spend', 'token usage'. days is a NUMBER (vague ranges: 7) — call directly, never ask which.",
         "run": _usage_report,
     },
+    "system.status": {
+        "params": "{}",
+        "about": ("This machine's health, READ ONLY: memory pressure (wired/"
+                  "free/compressed GB, swap used), which of the local "
+                  "Docker containers (Postgres/Redis/Home Assistant/"
+                  "SearXNG) are running, and which Ollama models are "
+                  "currently loaded in memory (with size and eviction "
+                  "time). For 'is the AC integration up', 'is postgres "
+                  "running', 'is qwen loaded', 'how's memory/swap doing'. "
+                  "There is NO restart/stop tool — if something is down, "
+                  "report it plainly; the owner restarts it themselves."),
+        "run": _system_status,
+    },
     "tasks.schedule": {
         "params": '{"instruction": "<what to DO at that time, self-contained>", "when_iso": "<first run, ISO +05:30>", "repeat": "<omit|daily|weekdays|weekly|monthly>"}',
         "about": "Schedule an instruction the assistant RUNS at that time with read-only tools (check calendar/email/home and report). Owner confirms creation. Use for 'every evening check X and tell me' — NOT for plain reminders. If today's occurrence of the stated time is still AHEAD, the first run is TODAY, not tomorrow.",
@@ -1993,7 +2092,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "my.abilities",
                     "web.search", "weather.get", "places.nearby",
                     "routes.eta", "email.read", "email.important",
-                    "email.search"}
+                    "email.search", "system.status"}
 
 
 

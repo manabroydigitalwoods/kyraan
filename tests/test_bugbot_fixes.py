@@ -1,4 +1,5 @@
 """Regression pins for the 2026-08-27 repository-wide audit findings."""
+import re
 import json
 from dataclasses import replace
 from datetime import timedelta
@@ -928,3 +929,64 @@ def test_restore_refuses_a_dataless_restore():
     # in a database that never held a fact, so counting it let the stale
     # dump report "~1 rows, exit 0"
     assert "relname <> 'schema_version'" in src
+
+
+# --- system.status: read-only machine health (owner decision 2026-08-28) --
+
+def test_system_status_is_read_only_by_construction():
+    """No argument reaches a subprocess or URL — the tool takes no params
+    at all — so there is no injection surface, and nothing in it can
+    start/stop/restart anything. The owner's decision was read-only NOW,
+    writes gated behind a soak record; this pins the boundary in code,
+    not just in the tool's params schema."""
+    from kyraan.agents import loop_tools
+
+    spec = loop_tools.TOOLS["system.status"]
+    assert spec["params"] == "{}"
+    import inspect
+    src = inspect.getsource(loop_tools._system_status_sync)
+    # every subprocess.run call site, not prose in comments/docstrings —
+    # only "docker ps", "vm_stat", "sysctl -n" may appear as ARGV
+    calls = re.findall(r"subprocess\.run\(\s*\[([^\]]+)\]", src)
+    assert calls, "no subprocess.run call sites found — test is stale"
+    for argv_literal in calls:
+        argv = [a.strip().strip('"\'') for a in argv_literal.split(",")]
+        for banned in ("restart", "stop", "kill", "rm", "down", "prune", "up"):
+            assert banned not in argv, f"write-shaped verb in argv: {argv}"
+
+
+def test_system_status_degrades_per_section(monkeypatch):
+    """Docker or Ollama being unreachable must not blank the section
+    that DID answer — the three probes are independent."""
+    import subprocess
+    from kyraan.agents import loop_tools
+
+    real_run = subprocess.run
+
+    def flaky_run(cmd, **kw):
+        if cmd[0] == "docker":
+            raise FileNotFoundError("docker not installed")
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "run", flaky_run)
+    status = loop_tools._system_status_sync()
+    assert "error" in status["containers"]
+    assert "error" not in status["memory"]          # vm_stat still answered
+
+
+async def test_system_status_is_scheduled_run_safe():
+    """A scheduled task ('every morning check the machine') must be able
+    to call this — it's in the explicit read-only allowlist enforced for
+    read_only-mode loop runs."""
+    from kyraan.agents import loop_tools
+
+    assert "system.status" in loop_tools._READ_ONLY_TOOLS
+
+
+def test_system_status_containers_cover_the_compose_stack():
+    """The four containers this machine actually runs, per docker-compose
+    — a name typo here silently reports 'not found' forever."""
+    from kyraan.agents import loop_tools
+
+    assert set(loop_tools._SYSTEM_CONTAINERS) == {
+        "kyraan-postgres", "kyraan-redis", "homeassistant", "searxng"}
