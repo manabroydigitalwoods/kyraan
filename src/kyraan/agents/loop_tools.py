@@ -775,6 +775,57 @@ async def _persons_alias(chat_id: int, args: dict, raw_text: str):
     return {"aliased": True, "person_id": person_id, "alias": alias}
 
 
+async def _persons_set_access(chat_id: int, args: dict, raw_text: str):
+    """OWNER AUTHORITY in the owner's own chat (owner: "make owner
+    authority is very important", 2026-08-28 after "entoll ruma" hit a
+    ceremony-lives-elsewhere wall). Grant or revoke a person's chat
+    stage — owner-only by construction (this tool joins no stage
+    toolset; the frozen-surface test keeps it that way), confirm-gated,
+    and every hard precondition preserved: recorded consent + chat id
+    to GRANT, the unreviewed-subjects gate to raise a stage, demotion
+    to none always instant and ungated."""
+    import asyncio as _aio
+
+    from kyraan.store import persons
+    name = str(args.get("name", "")).strip()
+    stage = str(args.get("stage", "")).strip().lower()
+    if stage not in persons.STAGES:
+        raise kernel.ToolFailed(
+            f"stage must be one of {persons.STAGES} — none revokes, "
+            "read_mostly grants chat with read tools, full adds their "
+            "own memory loop")
+    person_id = persons.resolve(name)
+    if not person_id or person_id == "owner":
+        raise kernel.ToolFailed(
+            f"{name!r} is not a registered person (persons.add first); "
+            "the owner's own access is not a stage")
+    row = next((p for p in persons.list_persons() if p[0] == person_id),
+               None)
+    _, person_chat, current_stage, consented = row
+    if stage != "none":
+        if not person_chat:
+            raise kernel.ToolFailed(
+                f"{person_id} has no Telegram chat id on record — they "
+                "must message the bot once (or give you their id) before "
+                "access can exist")
+        if not consented:
+            raise kernel.ToolFailed(
+                f"{person_id} has no recorded consent — their consent "
+                "date is a required part of the enrollment record")
+    if stage == current_stage:
+        return {"changed": False,
+                "note": f"{person_id} is already at stage {stage!r}"}
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("persons.set_access", dict(args))
+    try:
+        await _aio.to_thread(persons.enroll, person_id, person_chat,
+                             stage, consented)
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))  # the unreviewed-subjects gate
+    return {"changed": True, "person_id": person_id,
+            "stage": stage, "prior_stage": current_stage}
+
+
 async def _persons_list(chat_id: int, args: dict, raw_text: str):
     """The whole person roster in one call — live 2026-08-28 13:04:
     "list my all relatives" was answered with "there isn't a bulk-list
@@ -1215,6 +1266,17 @@ TOOLS = {
                   "Text formats only; ~200KB cap."),
         "run": _files_send,
     },
+    "persons.set_access": {
+        "params": '{"name": "<registered person>", "stage": "none|read_mostly|full"}',
+        "about": ("OWNER ONLY: grant or revoke a person's CHAT access. "
+                  "\"give ruma chat access\" / \"enroll ruma\" -> stage "
+                  "read_mostly (chat + read tools, their own data only, "
+                  "never the owner's memory); \"cut X off\" -> stage none "
+                  "(instant). Requires their recorded consent + chat id; "
+                  "raising a stage is refused while any fact's subject is "
+                  "unreviewed — relay that blocker honestly."),
+        "run": _persons_set_access,
+    },
     "persons.list": {
         "params": "{}",
         "about": ("Every person Kyraan tracks — ids, other names, face "
@@ -1433,6 +1495,10 @@ UNDO_MAP = {
         if isinstance(r, dict) and r.get("id") else None),
     "persons.add": lambda a, r, p: None,  # registry removal is an owner ceremony
     "persons.alias": lambda a, r, p: None,  # alias removal likewise
+    "persons.set_access": lambda a, r, p: (
+        ("persons.set_access", {"name": r["person_id"],
+                                "stage": r["prior_stage"]})
+        if isinstance(r, dict) and r.get("changed") else None),
     "files.send": lambda a, r, p: None,   # a delivered file can't be unsent
     "documents.show": lambda a, r, p: None,  # ditto — it re-sends the owner's own upload
     "email.draft": lambda a, r, p: (
@@ -1640,6 +1706,18 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "documents.rename":
         return (f'About to rename the saved document matching '
                 f'"{args.get("query")}" to "{args.get("new_name")}"')
+    if tool == "persons.set_access":
+        stage = str(args.get("stage", ""))
+        what = {"none": "REVOKE their chat access entirely (instant)",
+                "read_mostly": ("grant CHAT ACCESS with read tools — their "
+                                "own reminders/docs, household calendar, "
+                                "weather/places/web; NEVER your memory, "
+                                "home control, email, or files"),
+                "full": ("grant chat access PLUS their own memory loop "
+                         "(facts extracted from their messages, reviewed "
+                         "in THEIR queue — never yours)")}.get(stage, stage)
+        return (f"OWNER AUTHORITY — about to set {args.get('name')}'s "
+                f"access stage to {stage!r}: {what}")
     if tool == "persons.alias":
         return (f"About to make \"{args.get('alias')}\" another name for "
                 f"\"{args.get('name')}\" — same person, both names work "
@@ -1711,6 +1789,16 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "documents.rename" and isinstance(outcome, dict):
         return (f'Renamed the document "{outcome.get("prior")}" → '
                 f'"{outcome.get("now")}" — ask for it by that name anytime.')
+    if tool == "persons.set_access" and isinstance(outcome, dict):
+        if not outcome.get("changed"):
+            return outcome.get("note", "No change.")
+        stage = outcome.get("stage")
+        if stage == "none":
+            return (f'{outcome.get("person_id")} is cut off — their next '
+                    "message gets the polite rejection (within a minute).")
+        return (f'{outcome.get("person_id")} now has chat access at stage '
+                f'{stage!r} — live on their next message. Say '
+                f'"cut {outcome.get("person_id")} off" to revoke anytime.')
     if tool == "persons.alias" and isinstance(outcome, dict):
         if not outcome.get("aliased"):
             return outcome.get("note", "Nothing to change.")

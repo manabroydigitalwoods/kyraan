@@ -243,3 +243,49 @@ def test_non_owner_tool_surface_is_frozen():
         assert reachable == allowed_set & set(loop_tools.TOOLS), (
             f"stage {stage!r} reach changed: "
             f"+{reachable - allowed_set} -{allowed_set - reachable}")
+
+
+async def test_set_access_is_owner_authority_with_all_gates(monkeypatch):
+    """Owner (2026-08-28): "make owner authority is very important" —
+    grant/revoke from the owner's chat, every precondition preserved."""
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    import pytest as _pytest
+    enrolls = []
+    monkeypatch.setattr(persons, "resolve",
+                        lambda n: {"ruma": "ruma", "kamal": "kamal",
+                                   "owner": "owner"}.get(n.lower()))
+    monkeypatch.setattr(persons, "list_persons",
+                        lambda: [("owner", None, "owner", None),
+                                 ("ruma", 891, "none", "2026-08-27"),
+                                 ("kamal", None, "none", None)])
+    monkeypatch.setattr(persons, "enroll",
+                        lambda pid, chat, stage, consent:
+                        enrolls.append((pid, chat, stage, consent)))
+    # grant needs confirm
+    with _pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._persons_set_access(
+            7, {"name": "ruma", "stage": "read_mostly"}, "")
+    # no chat id -> honest requirement, never an enroll
+    with _pytest.raises(kernel.ToolFailed, match="no Telegram chat id"):
+        await loop_tools._persons_set_access(
+            7, {"name": "kamal", "stage": "read_mostly"}, "")
+    # the owner is not a stage; unknown stage refused
+    with _pytest.raises(kernel.ToolFailed):
+        await loop_tools._persons_set_access(
+            7, {"name": "owner", "stage": "full"}, "")
+    with _pytest.raises(kernel.ToolFailed, match="stage must be"):
+        await loop_tools._persons_set_access(
+            7, {"name": "ruma", "stage": "admin"}, "")
+    # no-op is honest without an ask
+    out = await loop_tools._persons_set_access(
+        7, {"name": "ruma", "stage": "none"}, "")
+    assert out["changed"] is False
+    assert enrolls == []                       # nothing without a yes
+    # undo restores the prior stage
+    from kyraan.agents.loop_tools import UNDO_MAP
+    assert UNDO_MAP["persons.set_access"](
+        {}, {"changed": True, "person_id": "ruma", "stage": "read_mostly",
+             "prior_stage": "none"}, None
+    ) == ("persons.set_access", {"name": "ruma", "stage": "none"})

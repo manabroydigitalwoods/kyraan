@@ -56,7 +56,7 @@ def capability_brief() -> str:
             pass
     lines.append('- A shared location pin arrives as "[I\'m sharing my current location: <place> (lat, lon)]" — use it for local answers immediately; never ask which city after a pin. You cannot request or track location.')
     lines.append('- Merge/dedup of saved memories: tell the user to say EXACTLY "consolidate memory" — you cannot apply merges yourself.')
-    lines.append("- Granting someone CHAT access to Kyraan is an owner ceremony OUTSIDE chat (enrollment script + their consent + a stage decision) — you cannot grant it; say so plainly. persons.add only makes someone trackable, it gives them nothing.")
+    lines.append("- The OWNER can grant or revoke another person's chat access right here: persons.set_access (\"enroll ruma\", \"cut X off\"). Granting requires their recorded consent + chat id and a clean subject review; revoking is instant. persons.add only makes someone trackable — it gives them nothing.")
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
         lines.append('- Read the Google Calendar ("what\'s on my calendar tomorrow?").')

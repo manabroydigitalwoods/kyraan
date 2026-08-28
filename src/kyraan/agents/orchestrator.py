@@ -1038,6 +1038,13 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
                 if not await _aio.to_thread(
                         _gmail._delete_draft, str(ua.get("draft_id", ""))):
                     raise kernel.ToolFailed("that draft is already gone")
+            elif ut == "persons.set_access":
+                from kyraan.store import persons as _persons
+                prow = next((p for p in _persons.list_persons()
+                             if p[0] == ua["name"]), None)
+                if prow is None:
+                    raise kernel.ToolFailed("that person is no longer registered")
+                _persons.enroll(ua["name"], prow[1], ua["stage"], prow[3])
             elif ut == "documents.rename":
                 from kyraan.store import documents as _documents
                 hits = await _aio.to_thread(
