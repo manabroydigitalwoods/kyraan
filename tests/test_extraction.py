@@ -257,3 +257,22 @@ def test_normalize_path_maps_aliases_only():
     assert extraction._normalize_path("habits/tea.md") == "routines/tea.md"
     assert extraction._normalize_path("people/wife.md") == "people/wife.md"
     assert extraction._normalize_path("../../.env") == "../../.env"  # still dies in validation
+
+
+async def test_identity_claims_never_become_facts(monkeypatch, isolated_memory):
+    """Identity is registry territory (2026-08-28): a known alias is
+    skipped, an unknown name routes to the alias flow — neither enters
+    the fact queue where a poisoned name once lived."""
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "resolve",
+                        lambda n: "owner" if n.lower() == "maan" else None)
+    _mock_model(
+        monkeypatch,
+        '{"facts": ['
+        '{"path": "people/name.md", "content": "- User goes by the nickname Maan"}, '
+        '{"path": "people/wife.md", "content": "- Wife\'s name is Mira"}]}',
+    )
+    queued = await extraction.propose_from_message("maan is my nike name and my wife is mira")
+    assert queued == ["- Wife's name is Mira"]     # the identity claim: gone
+    saved = list(isolated_memory.glob("*.md"))
+    assert len(saved) == 1

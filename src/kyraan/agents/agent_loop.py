@@ -71,7 +71,12 @@ _DEFLECTION_RE = re.compile(
     # exactly do you want from your PDF?") — an unscoped ask has the
     # obvious default scope (the whole thing): do that instead.
     r"|\A(?:(?:got it|okay|ok|sure|great|noted)\W{0,4})?what (?:exactly )?do you want"
-    r"|do you want a summary of the entire)",
+    r"|do you want a summary of the entire"
+    # Echo-menu: quoting the user's own concrete request back as a
+    # multiple-choice ("when you say 'add Suman Ghosh', do you mean
+    # (1)... (2)...") — the request already said what to do; do the
+    # obvious reading and state it (live 2026-08-28 14:31).
+    r"|when you say [\"'“‘][^\"'”’.?!]{2,50}[\"'”’],? do you (?:mean|want))",
     re.IGNORECASE)
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs

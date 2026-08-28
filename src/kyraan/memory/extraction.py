@@ -74,6 +74,14 @@ Empty: {{"facts": []}}"""
 # always the model over-extracting, not the user info-dumping.
 _MAX_FACTS_PER_MESSAGE = 3
 
+import re as _re_mod
+
+# A fact ABOUT what the user is called: goes by / nickname / call me.
+_re_identity = _re_mod.compile(
+    r"\b(?:goes by|nick\s?name|nike name|preferred name|call (?:me|him|her)"
+    r"|known as)\b", _re_mod.IGNORECASE)
+_re_capnames = _re_mod.compile(r"\b[A-Z][a-z]{2,}\b")
+
 # The model names categories the tree doesn't have ("personal/",
 # "family/") no matter what the prompt lists — a real fact about
 # Kiaan's vaccination card was silently DROPPED for its path alone
@@ -189,6 +197,27 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
             if message_words and not (fact_words & message_words):
                 log_event("extraction_fact_fabricated", fact=fact, source=args["text"])
                 continue
+            # Identity claims are REGISTRY territory, never memory facts
+            # (2026-08-28: a poisoned "goes by" fact made Kyraan call
+            # the owner by his wife's name; hours later "Maan is my
+            # nickname" — already a registry alias — became a junk
+            # pending fact). A name the resolver already maps to the
+            # speaker is known; one it doesn't belongs in the alias
+            # flow, not the fact queue.
+            content = str(fact.get("content", ""))
+            if _re_identity.search(content):
+                try:
+                    from kyraan.control_plane import kernel as _kernel
+                    from kyraan.store import persons as _persons
+                    viewer = _kernel.viewer_person() or "owner"
+                    names = _re_capnames.findall(content)
+                    if any(_persons.resolve(n) == viewer for n in names):
+                        log_event("identity_claim_already_known", fact=fact)
+                        continue
+                    log_event("identity_claim_routed_to_alias", fact=fact)
+                    continue  # never a fact; the alias flow owns names
+                except Exception:
+                    pass
             # Dedup: restating something already live or already pending
             # review is queue noise, not new memory (a duplicate wife-name
             # proposal was seen live).
