@@ -893,6 +893,9 @@ async def _persons_list(chat_id: int, args: dict, raw_text: str):
                 "person": pid,
                 "aka": aka,
                 "face": pid in enrolled,
+                "access_stage": stage,
+                "extra_abilities": persons.extra_tools(pid)
+                if pid != "owner" else ["(everything)"],
                 "kind": ("the user" if pid == "owner"
                          else "household" if chat or stage != "none"
                          else "contact")})

@@ -516,6 +516,12 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from kyraan.control_plane import kernel as _idkernel
     _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
     # runs each handler in its own task, so no reset is needed
+    # BIOMETRICS ARE OWNER-GOVERNED (review 2026-08-28): a granted
+    # media.photo means DOCUMENT/scene capture — never face operations.
+    # Without this, a viewer's "its me" would have enrolled their face
+    # under the OWNER'S name, and their photos would be annotated with
+    # matches from the household's templates.
+    is_owner_turn = _owner_private(update)
     import base64
 
     from kyraan.agents import orchestrator, photo
@@ -541,8 +547,10 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # photo in the same message the intent is unambiguous, and the
         # confirm gate still stands (seen live 2026-08-26 23:08: the
         # natural caption described the photo instead of enrolling).
-        enroll_name = faces.enroll_request(caption) or faces.enroll_from_text(caption)
-        if enroll_name is None and faces.self_claim(caption):
+        enroll_name = (faces.enroll_request(caption)
+                       or faces.enroll_from_text(caption)
+                       ) if is_owner_turn else None
+        if is_owner_turn and enroll_name is None and faces.self_claim(caption):
             # "its me": the owner asserting identity IS enrollment
             # intent for their own face — confirm gate still owns the
             # biometric write, so a "no" costs nothing.
@@ -554,7 +562,7 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             # confirm gate below still owns the biometric write.
             recent = [t for role, t in orchestrator._history[chat_id]
                       if role == "assistant"]
-            if recent:
+            if recent and is_owner_turn:
                 enroll_name = faces.invite_followup(recent[-1])
         if enroll_name is not None:
             # Biometric write → the standard confirm gate; the photo's
@@ -567,8 +575,10 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             return
 
         with _stage("face_recognize"):
+            # Recognition consults the OWNER'S biometric templates —
+            # never run for another viewer's photos.
             recognized = (await asyncio.to_thread(faces.recognize, image_bytes)
-                          if faces.available()
+                          if faces.available() and is_owner_turn
                           else {"names": [], "maybe": [], "unknown_faces": 0})
         data_url = ("data:image/jpeg;base64,"
                     + base64.b64encode(image_bytes).decode())
@@ -576,7 +586,7 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id, data_url, caption,
             recognized=recognized["names"],
             maybe=recognized.get("maybe") or [])
-        if vision_enroll and faces.available():
+        if vision_enroll and faces.available() and is_owner_turn:
             # The vision model read enrollment intent in the caption (any
             # wording) — the regex above only catches the fixed phrases.
             # Same confirm gate; the ask replaces the descriptive reply.
@@ -588,7 +598,7 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 _plain(reply), do_quote=True,
                 reply_markup=_confirm_keyboard(chat_id))
             return
-        if (faces.available()
+        if (faces.available() and is_owner_turn
                 and re.search(r"who(?:'s| is)|do you (?:know|recogni[sz]e)",
                               caption, re.IGNORECASE)
                 and not recognized["names"] and not recognized.get("maybe")):
@@ -601,7 +611,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                       + (f"I have face data for: {', '.join(enrolled)}."
                          if enrolled else "No faces are enrolled yet.")
                       + ")")
-        hint_name = faces.enroll_hint(caption) if faces.available() else None
+        hint_name = (faces.enroll_hint(caption)
+                     if faces.available() and is_owner_turn else None)
         if hint_name:
             reply += (f'\n\n(Want me to recognize this face later? Send a solo '
                       f'photo of them captioned "remember this face as '

@@ -360,3 +360,20 @@ async def test_set_tools_validates_and_never_grants_authority(monkeypatch):
     monkeypatch.setattr(persons, "extra_tools", lambda pid: ["media.photo"])
     out = await loop_tools._persons_set_tools(7, {"name": "ruma"}, "")
     assert out["extra_tools"] == ["media.photo"]   # read-back, no ask
+
+
+def test_biometrics_stay_owner_governed_on_viewer_photo_turns():
+    """Review 2026-08-28: media.photo grants DOCUMENT capture, never
+    face operations — a viewer's "its me" must not enroll their face
+    under the owner's name, and their photos are never annotated from
+    the owner's templates. The handler gates every face path on
+    is_owner_turn; this locks the source."""
+    import inspect
+    from kyraan.channels import telegram_bot
+    src = inspect.getsource(telegram_bot._on_photo)
+    assert "is_owner_turn" in src
+    for guarded in ("faces.enroll_request", "faces.self_claim",
+                    "faces.invite_followup", "faces.recognize",
+                    "vision_enroll and faces.available() and is_owner_turn",
+                    "faces.enroll_hint"):
+        assert guarded in src, guarded
