@@ -167,3 +167,25 @@ async def test_persons_alias_renames_never_duplicates(monkeypatch):
         await loop_tools._persons_alias(7, {"name": "Nobody",
                                             "alias": "Xy"}, "")
     assert added == []                    # nothing written without a yes
+
+
+async def test_profile_face_status_resolves_display_aliases(monkeypatch):
+    """Live 2026-08-28 22:26: the face record shows "Habu" (display)
+    while the hub key is kamal — the truth tool claimed "no face data"
+    for an enrolled face. The resolver is the join."""
+    from kyraan.agents import faces, loop_tools
+    from kyraan.memory import engine
+    from kyraan.store import documents, persons, triples
+    monkeypatch.setattr(persons, "resolve",
+                        lambda n: {"habu": "kamal", "kamal": "kamal"}.get(
+                            n.lower()))
+    monkeypatch.setattr(persons, "name_map",
+                        lambda: {"habu": "kamal", "kamal": "kamal"})
+    monkeypatch.setattr(engine, "active_entries", lambda: [])
+    monkeypatch.setattr(documents, "list_documents",
+                        lambda c, limit=15, person="": [])
+    monkeypatch.setattr(triples, "relations_for", lambda p: [])
+    monkeypatch.setattr(faces, "available", lambda: True)
+    monkeypatch.setattr(faces, "enrolled_names", lambda: ["Habu"])
+    out = await loop_tools._persons_profile(7, {"name": "habu"}, "")
+    assert out["face_recognition"] == "enrolled"

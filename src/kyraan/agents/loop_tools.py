@@ -807,9 +807,18 @@ async def _persons_profile(chat_id: int, args: dict, raw_text: str):
                 documents.list_documents(chat_id, person=person_id)]
         edges = [f'{r["head"]} —{r["relation"]}→ {r["tail"]}'
                  for r in triples.relations_for(person_id)][:12]
-        face = (person_id in [n.lower().replace(" ", "_").replace("-", "_")
-                              for n in faces.enrolled_names()]
-                if faces.available() else False)
+        # Face names are display names ("Habu") while the hub key is the
+        # registry id (kamal) — the resolver IS the join. Comparing raw
+        # slugs made the truth tool itself claim "no face data" for an
+        # enrolled face (live 2026-08-28 22:26).
+        face = False
+        if faces.available():
+            for enrolled in faces.enrolled_names():
+                if (persons.resolve(enrolled)
+                        or enrolled.lower().replace(" ", "_").replace("-", "_")
+                        ) == person_id:
+                    face = True
+                    break
         return facts_about, docs, edges, face
 
     try:
@@ -822,7 +831,9 @@ async def _persons_profile(chat_id: int, args: dict, raw_text: str):
             "graph": edges or ["(no relations yet)"],
             "face_recognition": "enrolled" if face else "no face data",
             "note": ("present with bullets; facts are owner-reviewed "
-                     "truth, graph edges carry provenance")}
+                     "truth; the documents list IS their linked documents "
+                     "— report it verbatim, never second-guess a link "
+                     "this result states")}
 
 
 async def _faces_list(chat_id: int, args: dict, raw_text: str):
