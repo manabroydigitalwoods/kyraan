@@ -155,6 +155,73 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 
 ---
 
+## 3c. Connector & Capability Layer (decided 2026-08-28)
+
+Verdicts from the full connector-architecture proposal review, so the good
+parts land and the rejected parts stay rejected with their reasons on
+record. Ground rule carried over from the proposal's own best idea: the
+agent sees *capabilities* (`email.*`, `contacts.*`), never provider-branded
+tools — a rule the proposal itself broke for WhatsApp/Slack/GitHub.
+
+**Adopt now (small, low-risk, mostly formalizing what exists)**
+- **Trust/taint classes** — name the taxonomy (`EMAIL_UNTRUSTED`,
+  `WEB_UNTRUSTED`, `CONTACT_DATA`, …) over the mechanisms already enforced
+  ad hoc (`web_tainted` write-lockout, email cloud-exclusion, review-listing
+  placeholders). One checked place instead of per-adapter re-derivation.
+- **Capability-contract metadata** — declare `effect` / `risk` /
+  `requires_confirmation` / `verification` per tool, next to the existing
+  registry entries. The behavior already exists (`_describe_call`, confirm
+  gates, `_READ_ONLY_TOOLS`); this makes it auditable data.
+- **`memory.search_facts`** — a real retrieval gap; episodes are searchable,
+  reviewed facts only reachable via context assembly or relations.
+- **Normalized error names** (`AUTH_REQUIRED`, `RATE_LIMITED`, …) — a thin
+  mapping over `ToolError`/`TransientToolError`, not a new system.
+
+**Adopt next (the one substantial win)**
+- **Google Contacts → IdentityResolver → persons.** Known OAuth model, feeds
+  the people-graph directly, no governance conflict. Preconditions: a new
+  row in governance §0's data-destinations table first (contact names/
+  numbers entering cloud prompts is a policy event per §3), and
+  `contacts.sync` runs as a nightly job — never as an agent-callable tool.
+  Normalized contact schema is provider-neutral so a second provider
+  (iCloud) slots in *if* it ever clears its own gate.
+
+**Gated — each needs its own governance round (a `Decide:` line) before design**
+- WhatsApp (unofficial automation risks banning the owner's personal
+  number — product decision, not an estimate line), Slack + GitHub (work
+  data; governance §2's three conditions remain unmet), multi-account /
+  `google_work` (same §2), `web.open`/fetch (SSRF + prompt-injection
+  surface; the snippets-only line is deliberate — loosening it requires
+  extending the taint write-lockout to fetched content), device
+  presence/location (family consent, §1/§8).
+
+**Rejected, with reasons on record**
+- Six-kernel runtime, ConnectorRegistry-as-infrastructure, Source
+  Planner / `context.search` — re-creates the dispatch layer the agent
+  loop measurably beat; the loop IS the planner (phase3_architecture §1).
+- Dynamic per-turn tool exposure — invalidates the byte-stable prompt
+  prefix that bills ~47% of input at the cached rate; trades a measured
+  saving for a speculative one, to solve a menu-size problem only the
+  proposal's own scope expansion creates.
+- `system.restart_container` / `system.*` writes — Kyraan restarting its
+  own Postgres is a self-outage vector (governance §5). Read-only
+  `system.status` is fine, later.
+- Directory restructure into `integrations/` — churn across 660+ tests
+  for zero behavior change; revisit only if a second provider for the
+  same capability actually lands.
+- iCloud mail/calendar/contacts as a near-term target — app-specific
+  passwords have no refresh flow and break silently; highest-maintenance
+  integration in the proposal against a 2h/week budget (§5). Reopen only
+  with a concrete need Google doesn't cover.
+
+*Rationale: about a quarter of the proposal described things already
+built and property-tested (dynamic capability brief, outcome readback,
+commit-state honesty, per-tool failure policy, read-only task scopes).
+The honest delta is contacts + metadata + taint names — so that is the
+plan.*
+
+---
+
 ## 4. Deferred (Explicitly Not v1)
 
 - OCR / Vision input
@@ -198,6 +265,9 @@ These sit *inside* the Agent/Skill execution box in the architecture diagram —
 > **AMENDED 2026-08-27** — the accepted design is
 > [design/phase3_architecture.md](design/phase3_architecture.md): **one
 > loop with scoped contexts**, not multiple agents behind a router.
+> Connector/capability additions follow §3c's verdicts (2026-08-28):
+> taint names + capability metadata + `memory.search_facts` now, Google
+> Contacts next, everything else gated or rejected there.
 > Phase 2's live evidence (the classifier/dispatch architecture losing
 > to the single tool loop) superseded this section's agent-split plan;
 > the split's real goals — capability boundaries, data boundaries — ship
