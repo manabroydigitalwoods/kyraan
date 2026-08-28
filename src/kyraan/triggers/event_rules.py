@@ -209,7 +209,13 @@ async def tick(send=None) -> int:
                     else f"👁 Watch rule: {rule.description} — "
                          f"{rule.entity} is {reading}.")
             if send is not None:
-                await send(rule.chat_id, text)
+                if await send(rule.chat_id, text) is False:
+                    # Delivery truth (Bugbot round-2 P1): an undelivered
+                    # alert must not burn its cooldown — the condition is
+                    # still true and still unheard, so the next tick
+                    # re-fires it, exactly like the DND hold above.
+                    log_event("event_rule_send_failed", rule_id=rule.id)
+                    continue
             _mark_fired(rule.id)
             fired += 1
             log_event("event_rule_fired", rule_id=rule.id,

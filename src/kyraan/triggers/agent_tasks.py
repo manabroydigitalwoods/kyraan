@@ -174,14 +174,17 @@ def init(schedule_fn, run_fn, send_fn, only_chat: int | None = None) -> None:
             log_event("agent_task_schedule_failed", task_id=task.id, error=str(exc))
 
 
-async def fire(task_id: str) -> None:
+async def fire(task_id: str, redeliver_only: bool = False) -> None:
     task = next((t for t in list_active() if t.id == task_id), None)
     if task is None:
         log_event("agent_task_fire_skipped", task_id=task_id, reason="cancelled or gone")
         return
     # recurring tasks advance FIRST — a failure or DND block skips this
-    # occurrence rather than stalling the series
-    if task.repeat:
+    # occurrence rather than stalling the series. A redeliver-only fire
+    # (Bugbot round-2 P2: a recurring task's stashed result must not
+    # wait until next week's occurrence) never advances the series and
+    # never runs fresh work — it exists only to flush pending_result.
+    if task.repeat and not redeliver_only:
         next_when = advance_occurrence(_parse_when(task.when_iso), task.repeat)
         while next_when <= local_now():  # stale base after downtime: catch up
             next_when = advance_occurrence(next_when, task.repeat)
@@ -192,7 +195,7 @@ async def fire(task_id: str) -> None:
     # task (Bugbot P1).
     if not kernel.can_send_proactively():
         log_event("agent_task_skipped_dnd", task_id=task_id)
-        if not task.repeat:
+        if not task.repeat and not redeliver_only:
             _retry_later(task, 30)  # held through quiet hours, not lost
         return
     if task.pending_result:
@@ -215,6 +218,8 @@ async def fire(task_id: str) -> None:
         if not task.repeat:
             cancel(task.id)
             return
+        if redeliver_only:
+            return  # flushed; the series' own schedule does fresh work
         task = next((AgentTask(**r) for r in _load()
                      if r["id"] == task_id), task)  # fresh run continues
     try:
@@ -241,9 +246,15 @@ async def fire(task_id: str) -> None:
         # path stays closed; the may-be-a-repeat label covers the
         # ambiguous case.
         log_event("agent_task_send_failed", task_id=task_id, error=str(exc)[:200])
-        _set_pending_result(task.id, str(result))  # recurring: redelivered
-        if not task.repeat:                        # at the next occurrence
+        _set_pending_result(task.id, str(result))
+        if not task.repeat:
             _retry_later(task, 5)
+        else:
+            # a recurring task's result is redelivered in minutes via a
+            # redeliver-only fire, not at next week's occurrence
+            when = local_now() + timedelta(minutes=5)
+            _schedule_fn(f"task-redeliver-{task.id}", when,
+                         {"task_id": task.id, "redeliver_only": True})
         return
     log_event("agent_task_ran", task_id=task_id)
     if not task.repeat:

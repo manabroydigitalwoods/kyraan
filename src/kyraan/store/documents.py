@@ -393,9 +393,16 @@ def delete_documents(chat_id: int, doc_ids: list) -> list:
     # unlinking mid-transaction meant a later failure rolled the rows
     # back while the bytes were already gone — a permanent loss the
     # database claimed never happened. A crash in the gap leaves an
-    # orphaned file, which is recoverable noise, not data loss.
+    # orphaned file, which is recoverable noise, not data loss. Each
+    # unlink is contained (round-2 P2): one bad file must not abort
+    # the rest of the cleanup or fail a delete the database already
+    # committed — an orphan is logged, never raised.
     for basename in doomed_files:
-        (FILES_DIR / basename).unlink(missing_ok=True)
+        try:
+            (FILES_DIR / basename).unlink(missing_ok=True)
+        except OSError as exc:
+            log_event("document_file_orphaned", file=basename,
+                      error=str(exc)[:120])
     for caption in captions:
         log_event("document_deleted", chat_id=chat_id, caption=caption[:80])
     return captions

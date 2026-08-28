@@ -165,3 +165,16 @@ def test_cancel_then_reactivate_round_trips():
     assert [r.id for r in event_rules.list_active(7)] == [rule.id]
     with pytest.raises(ValueError):
         event_rules.reactivate(7, rule.id)  # already active
+
+
+async def test_failed_delivery_does_not_burn_the_cooldown(ticking, monkeypatch):
+    """Bugbot round-2 P1: an undelivered alert entered cooldown and was
+    suppressed unheard for 2 hours. A False send leaves the rule
+    unfired — the next tick retries, like the DND hold."""
+    _rule()
+
+    async def failing_send(chat_id, text):
+        return False
+
+    assert await event_rules.tick(send=failing_send) == 0
+    assert await event_rules.tick() == 1   # init() send works -> fires now

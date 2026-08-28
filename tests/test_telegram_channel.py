@@ -578,7 +578,8 @@ async def test_enrolled_person_reminders_are_delivered(monkeypatch):
 
     monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
     monkeypatch.setattr(persons, "person_for_chat",
-                        lambda cid: ("ruma", "full") if cid == 891 else None)
+                        lambda cid, strict=False:
+                        ("ruma", "full") if cid == 891 else None)
     sent = []
 
     class FakeBot:
@@ -602,3 +603,12 @@ async def test_enrolled_person_reminders_are_delivered(monkeypatch):
     assert await send_fn(891, "ruma reminder") is True     # enrolled: delivered
     assert await send_fn(9999, "harness record") is False  # unknown: retired
     assert [c for c, _ in sent] == [1, 891]
+
+    # round-2 P1: a store OUTAGE must RAISE (transient -> fire retries),
+    # never return False (permanent retire)
+    def broken_lookup(cid, strict=False):
+        raise RuntimeError("pg down")
+
+    monkeypatch.setattr(persons, "person_for_chat", broken_lookup)
+    with pytest.raises(RuntimeError):
+        await send_fn(891, "ruma reminder during outage")

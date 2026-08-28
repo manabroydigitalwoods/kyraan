@@ -157,9 +157,12 @@ def person_id_any_stage(chat_id: int) -> str | None:
     return result
 
 
-def person_for_chat(chat_id: int) -> tuple | None:
+def person_for_chat(chat_id: int, strict: bool = False) -> tuple | None:
     """(person_id, stage) for an ADMITTED enrolled chat, else None.
-    Fail-closed on any store trouble."""
+    Fail-closed on any store trouble — except strict=True, which RAISES
+    on store trouble instead: callers whose None-handling is PERMANENT
+    (retiring a reminder, Bugbot round-2 P1) must be able to tell
+    "definitely unknown" from "cannot tell right now"."""
     now = time.monotonic()
     cached = _cache.get(chat_id)
     if cached and now - cached[0] < _CACHE_TTL_S:
@@ -172,6 +175,8 @@ def person_for_chat(chat_id: int) -> tuple | None:
     except Exception as exc:
         log_event("person_lookup_failed", chat_id=chat_id,
                   error=str(exc)[:120])
+        if strict:
+            raise
         return None
     result = (row[0], row[1]) if row and row[1] in _ADMITTED_STAGES else None
     _cache[chat_id] = (now, result)

@@ -107,3 +107,53 @@ async def test_read_only_loop_blocks_writes(monkeypatch):
     reply = await agent_loop.run(90, "turn off the ac", read_only=True)
     assert "ask me live" in reply
     assert "not available in a scheduled run" in prompts[1]
+
+
+async def test_recurring_send_failure_redelivers_in_minutes(monkeypatch):
+    """Bugbot round-2 P2: a recurring task's stashed result waited until
+    the NEXT occurrence — days or weeks. A redeliver-only fire is now
+    scheduled minutes out; it flushes the stash without advancing the
+    series or running fresh work."""
+    from datetime import timedelta
+
+    from kyraan.control_plane import kernel
+    from kyraan.control_plane.dnd import local_now
+    from kyraan.triggers import agent_tasks
+
+    scheduled = []
+    sends = []
+    state = {"fail": True}
+
+    async def run_fn(chat_id, instruction):
+        return "the result"
+
+    async def send_fn(chat_id, text):
+        if state["fail"]:
+            raise RuntimeError("telegram down")
+        sends.append(text)
+
+    agent_tasks.init(
+        schedule_fn=lambda name, when, payload: scheduled.append((name, payload)),
+        run_fn=run_fn, send_fn=send_fn)
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+    when = (local_now() + timedelta(days=7)).isoformat()
+    task = agent_tasks.create(1, "weekly check", when, repeat="weekly")
+    scheduled.clear()
+
+    await agent_tasks.fire(task.id)                 # run ok, send fails
+    redelivery = [(n, p) for n, p in scheduled if p.get("redeliver_only")]
+    assert redelivery, "no redeliver-only job scheduled"
+    stored = next(t for t in agent_tasks.list_active() if t.id == task.id)
+    assert stored.pending_result == "the result"
+    series_advances = [n for n, p in scheduled
+                       if not p.get("redeliver_only")]
+
+    state["fail"] = False
+    await agent_tasks.fire(task.id, redeliver_only=True)
+    assert sends and "the result" in sends[0]
+    stored = next(t for t in agent_tasks.list_active() if t.id == task.id)
+    assert stored.pending_result == ""              # flushed
+    # the redeliver-only fire advanced NOTHING and ran nothing fresh
+    assert [n for n, p in scheduled
+            if not p.get("redeliver_only")] == series_advances
+    assert len(sends) == 1

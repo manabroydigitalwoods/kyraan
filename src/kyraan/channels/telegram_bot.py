@@ -807,7 +807,9 @@ async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def _agent_task_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     from kyraan.triggers import agent_tasks
-    await agent_tasks.fire(context.job.data["task_id"])
+    data = context.job.data
+    await agent_tasks.fire(data["task_id"],
+                           redeliver_only=bool(data.get("redeliver_only")))
 
 
 def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
@@ -856,7 +858,10 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
         # reminder_retired_undelivered, not reminder_sent.
         if chat_id != _owner_id():
             from kyraan.store import persons
-            if persons.person_for_chat(chat_id) is None:  # not admitted
+            # strict: a PG outage must RAISE (fire() retries) — returning
+            # False here permanently retires an enrolled person's
+            # reminder over a transient outage (Bugbot round-2 P1).
+            if persons.person_for_chat(chat_id, strict=True) is None:
                 logger.warning("Retiring reminder for unknown chat %s "
                                "(dev-harness record)", chat_id)
                 return False
