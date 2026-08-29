@@ -178,3 +178,40 @@ async def test_failed_delivery_does_not_burn_the_cooldown(ticking, monkeypatch):
 
     assert await event_rules.tick(send=failing_send) == 0
     assert await event_rules.tick() == 1   # init() send works -> fires now
+
+
+async def test_hovering_condition_alerts_once_per_crossing(ticking, monkeypatch):
+    """Live 2026-08-29: a bedroom hovering at 27.2 against a 27
+    threshold nagged every cooldown expiry, all night. Edge-triggered:
+    one alert per crossing; re-alerts only after dropping below and
+    crossing again. DND holds still retry until delivered."""
+    rule = _rule(entity="sensor.bedroom_temp", op="above", value="27",
+                 for_minutes=0, description="too hot",
+                 cooldown_minutes=15)
+    reading = {"state": "27.2"}
+
+    async def fake_state(call, **kw):
+        return dict(reading)
+
+    monkeypatch.setattr(kernel, "run_tool", fake_state)
+    assert await event_rules.tick() == 1          # crossing: fires
+    # cooldown expires, condition still true -> NO nag
+    event_rules._mark_fired(rule.id)  # refresh stamp then age it away
+    import json as _json
+    records = _json.loads(event_rules.RULES_PATH.read_text())
+    for r in records:
+        r["last_fired_iso"] = "2020-01-01T00:00:00+00:00"
+    event_rules.RULES_PATH.write_text(_json.dumps(records))
+    assert await event_rules.tick() == 0          # still true: silent
+    reading["state"] = "26.5"
+    assert await event_rules.tick() == 0          # dropped below: re-armed
+    reading["state"] = "27.4"
+    assert await event_rules.tick() == 1          # new crossing: fires again
+
+
+async def test_dnd_hold_still_retries_under_edge_trigger(ticking, monkeypatch):
+    _rule()
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: False)
+    assert await event_rules.tick() == 0          # held, last_met NOT set
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+    assert await event_rules.tick() == 1          # still lands after DND

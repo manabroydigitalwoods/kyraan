@@ -45,6 +45,12 @@ class Rule:
     cooldown_minutes: int = DEFAULT_COOLDOWN_MIN
     last_fired_iso: str = ""
     active: bool = True
+    # Edge-trigger memory (2026-08-29): was the condition met at the
+    # LAST tick? Rules fire on the false->true transition, not while a
+    # condition merely stays true — a bedroom hovering at 27.2 with a
+    # 27 threshold nagged every cooldown expiry, all night (4 alerts
+    # observed live). The cooldown remains as the backstop.
+    last_met: bool = False
 
 
 def _load() -> list:
@@ -179,6 +185,16 @@ def _mark_fired(rule_id: str) -> None:
         _save(records)
 
 
+def _mark_met(rule_id: str, met: bool) -> None:
+    with locked(RULES_PATH):
+        records = _load()
+        for record in records:
+            if record["id"] == rule_id and record.get("last_met") != met:
+                record["last_met"] = met
+                _save(records)
+                return
+
+
 def init(send_fn) -> None:
     global _send_fn
     _send_fn = send_fn
@@ -195,7 +211,17 @@ async def tick(send=None) -> int:
         try:
             state = await kernel.run_tool(kernel.ToolCall(
                 "home.get_state", {"entity": rule.entity}))
-            if not isinstance(state, dict) or not condition_met(rule, state):
+            met = isinstance(state, dict) and condition_met(rule, state)
+            if not met:
+                if rule.last_met:
+                    _mark_met(rule.id, False)  # re-armed for the next crossing
+                continue
+            if rule.last_met:
+                # EDGE-TRIGGERED (2026-08-29): the condition merely STAYS
+                # true — already alerted for this crossing. It re-alerts
+                # only after dropping below and crossing again. last_met
+                # is set on actual delivery, so DND holds and failed
+                # sends keep retrying until the alert lands.
                 continue
             if _in_cooldown(rule):
                 continue
@@ -217,6 +243,7 @@ async def tick(send=None) -> int:
                     log_event("event_rule_send_failed", rule_id=rule.id)
                     continue
             _mark_fired(rule.id)
+            _mark_met(rule.id, True)
             fired += 1
             log_event("event_rule_fired", rule_id=rule.id,
                       entity=rule.entity, state=str(state.get("state"))[:40])
