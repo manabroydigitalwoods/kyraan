@@ -88,6 +88,41 @@ _re_capnames = _re_mod.compile(r"\b[A-Z][a-z]{2,}\b")
 # (found live 2026-08-27). Same lesson as normalize_flags: map the
 # paraphrase to its parent deterministically; store._validate_path
 # stays the final authority.
+_STOPWORDS = frozenset(
+    "a an and are at for in is my of on the to was you your we he she his "
+    "her it its one each with".split())
+
+
+def _content_words(text: str) -> frozenset:
+    return frozenset(w for w in _re_mod.findall(r"[a-z0-9]+", text.lower())
+                     if w not in _STOPWORDS)
+
+
+def _supersede_pending_near_dup(content: str) -> None:
+    """A correction restated in chat must REPLACE its stale pending
+    proposal, not queue beside it (found live 2026-08-31: "not MRR its
+    MMR" left both wordings pending — approve-all would have saved the
+    wrong vaccine name into a health record). Overlap coefficient on
+    content words >= 0.6 marks the same underlying fact; latest wording
+    wins in the queue. Only UNREVIEWED files are ever touched."""
+    new_words = _content_words(content)
+    if len(new_words) < 4:
+        return
+    for path in sorted(store.PENDING_DIR.glob("*.md")):
+        try:
+            body = path.read_text()
+        except OSError:
+            continue
+        old_words = _content_words(body.split("---", 2)[-1])
+        if not old_words:
+            continue
+        shared = len(new_words & old_words)
+        if shared / min(len(new_words), len(old_words)) >= 0.6:
+            path.unlink(missing_ok=True)
+            log_event("extraction_pending_superseded",
+                      replaced=path.name, shared_words=shared)
+
+
 _CATEGORY_ALIASES = {
     "personal": "people", "family": "people", "relationships": "people",
     "health": "people", "kids": "people", "children": "people",
@@ -245,6 +280,7 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
                 "supersedes": fact.get("supersedes") or None,
             }
             try:
+                _supersede_pending_near_dup(str(fact.get("content", "")))
                 store.propose_fact(_normalize_path(fact["path"]),
                                    fact["content"], source=args["text"],
                                    meta=meta)

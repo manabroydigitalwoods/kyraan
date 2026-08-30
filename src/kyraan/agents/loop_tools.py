@@ -781,9 +781,21 @@ async def _faces_remember(chat_id: int, args: dict, raw_text: str):
 
 async def _memory_pending(chat_id: int, args: dict, raw_text: str):
     from kyraan.agents import orchestrator
+    rows = orchestrator._load_review_proposals(kernel.viewer_person())
+    if orchestrator._cloud_tier_in_use():
+        # PENDING_FACTS taint (control_plane/taint.py): unreviewed facts
+        # reach the local tier only. This tool fed their full text into
+        # frontier prompts (found live 2026-08-31: the queue's MRR
+        # wording quoted back verbatim by the cloud model). The cloud
+        # gets the COUNT; contents stay on this machine — the "review
+        # memory" flow shows them to the owner directly.
+        return {"pending_count": len(rows), "note": (
+            f"{len(rows)} fact(s) queued — contents withheld from cloud "
+            "prompts. Tell the user to say \"review memory\" to see and "
+            "approve/reject them; reply with the count NOW, never an "
+            "empty list.")}
     return [{"n": i + 1, "fact": fact, "target": target}
-            for i, (_, target, fact) in enumerate(
-                orchestrator._load_review_proposals(kernel.viewer_person()))]
+            for i, (_, target, fact) in enumerate(rows)]
 
 
 async def _memory_relations(chat_id: int, args: dict, raw_text: str):

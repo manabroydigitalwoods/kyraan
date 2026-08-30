@@ -290,3 +290,40 @@ async def test_health_flag_outranks_a_short_term_guess(monkeypatch, isolated_mem
     body = next(isolated_memory.glob("*.md")).read_text()
     assert '"term": "long"' in body
     assert '"flags": ["health"]' in body
+
+
+async def test_correction_supersedes_its_stale_pending_proposal(monkeypatch, isolated_memory):
+    """Found live 2026-08-31: "not MRR its MMR" queued a corrected
+    proposal BESIDE the wrong one — approve-all would have saved both
+    wordings of a health record. A near-duplicate correction replaces
+    the stale pending file; unrelated proposals stand."""
+    _mock_model(monkeypatch,
+                '{"facts": [{"path": "people/kid.md", "content": '
+                '"- On 2026-08-30, you administered MRR (measles-rubella) '
+                'and JE vaccines to your son Kiaan in both arms."}]}')
+    await extraction.propose_from_message("we gave kiaan vaccines")
+    _mock_model(monkeypatch,
+                '{"facts": [{"path": "people/kid2.md", "content": '
+                '"- On 2026-08-30, MMR (measles-mumps-rubella) was '
+                'administered to my son Kiaan\\u2014one on each arm (and JE)."}]}')
+    await extraction.propose_from_message("not MRR its MMR")
+    bodies = [p.read_text() for p in isolated_memory.glob("*.md")]
+    assert len(bodies) == 1 and "MMR (measles-mumps-rubella)" in bodies[0]
+
+    _mock_model(monkeypatch,
+                '{"facts": [{"path": "people/kid3.md", "content": '
+                '"- Kiaan starts playschool in November 2027."}]}')
+    await extraction.propose_from_message("kiaan starts playschool")
+    assert len(list(isolated_memory.glob("*.md"))) == 2  # unrelated: kept
+
+
+async def test_pending_list_withholds_contents_from_cloud(monkeypatch):
+    from kyraan.agents import loop_tools, orchestrator
+    monkeypatch.setattr(orchestrator, "_load_review_proposals",
+                        lambda viewer: [("f", "t.md", "- secret pending fact")])
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: True)
+    out = await loop_tools._memory_pending(7, {}, "")
+    assert out["pending_count"] == 1 and "secret" not in str(out)
+    monkeypatch.setattr(orchestrator, "_cloud_tier_in_use", lambda: False)
+    out = await loop_tools._memory_pending(7, {}, "")
+    assert out[0]["fact"] == "- secret pending fact"
