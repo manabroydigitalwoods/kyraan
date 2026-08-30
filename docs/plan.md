@@ -243,6 +243,70 @@ plan.*
 
 ---
 
+## 3d. Competitive Gap Analysis (2026-08-31)
+
+Benchmarked against what ships this month: Hermes Agent (Nous Research,
+self-hosted, 15+ channel gateway, self-improving skills), ChatGPT Work
+(agent mode, connector directory, agentic scheduled tasks), and Claude
+Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
+
+**Where Kyraan is ahead — don't chase ghosts**
+- Owner-reviewed memory (all three competitors auto-save; our review
+  queue + poisoning protection is stronger governance).
+- Real multi-person identity: registry, faces, stages, capability
+  grants. None of them do household multi-user with access control.
+- Privacy floor: email bodies, biometrics, voice audio never leave the
+  machine. Only Hermes shares the self-hosted spirit.
+- Delivery truth + the eval gate. No competitor exposes reliability
+  discipline at any level.
+
+**The gaps, ranked by felt impact**
+1. **Long-horizon work.** ChatGPT Work and Cowork run multi-hour,
+   multi-step projects to a finished deliverable; our agent tasks run
+   one read-only instruction. This is the goal/task-continuity build —
+   already owed a 20-minute design conversation (§7).
+2. **Acting in the world (page reading first).** Cowork browses and
+   fills forms; we can't open a page ("open first news", live
+   2026-08-30). `web.open` stays GATED per §3c (SSRF + injection;
+   requires extending the taint write-lockout to fetched content) —
+   the gap entry here is a reason to run that governance round, not a
+   bypass of it. Email sending and acting rules remain owner-held by
+   decision: deliberate, not gaps.
+3. **Connector breadth via MCP-as-client.** Claude lists 950+ MCP
+   servers; we have 11 hand-built adapters. We will never match breadth
+   by hand — one MCP client adapter mounting external servers behind
+   our own permission registry (capability names, confirm gates, taint
+   classes per §3c) turns their ecosystem into ours. New in this round;
+   needs its own governance row for each mounted server's data
+   destination.
+4. **Availability.** Cowork schedules run in the cloud with no device
+   online; Kyraan lives on a MacBook that sleeps (swallowed
+   vaccination reminder, 2026-08-30 — misfire fix makes us
+   late-but-honest, not awake). Near: pmset/caffeinate wake scheduling
+   around due jobs. Later: an always-on box; the Docker stack ports
+   cleanly.
+5. **Channels.** Hermes speaks 15+ (WhatsApp, Signal, Slack, SMS,
+   iMessage…); Kyraan speaks Telegram only — if Telegram is down we
+   are mute. A second channel (CLI first: zero governance surface)
+   proves the `channels/` abstraction. WhatsApp remains gated (§3c:
+   ban risk on the owner's personal number).
+6. **Self-improvement loop.** Hermes' agent-curated skills grow with
+   use. Our analog is thinner: self-review → corrections → eval suite,
+   by hand, weekly. Modest version: promote repeated confirmed
+   corrections into persona/prompt rules through the same
+   owner-review-queue pattern facts already use. Never self-modifying
+   weights (§1).
+
+**Build order (proposed 2026-08-31, owner not yet committed)**
+1. Web page reading — small, closes a live user-visible failure
+   (governance round first, per §3c).
+2. Goal/task continuity — the design conversation in §7.
+3. MCP client adapter — one build, buys an ecosystem.
+4. Wake-scheduling around due jobs — cheap insurance.
+5. Second channel (CLI) — proves the channel layer.
+
+---
+
 ## 4. Deferred (Explicitly Not v1)
 
 - OCR / Vision input
