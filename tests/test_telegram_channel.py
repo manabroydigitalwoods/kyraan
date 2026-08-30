@@ -612,3 +612,36 @@ async def test_enrolled_person_reminders_are_delivered(monkeypatch):
     monkeypatch.setattr(persons, "person_for_chat", broken_lookup)
     with pytest.raises(RuntimeError):
         await send_fn(891, "ruma reminder during outage")
+
+
+def test_one_shot_jobs_always_fire_even_when_missed(monkeypatch):
+    """Found live 2026-08-30: the Mac slept through a date job's moment
+    and APScheduler's ~1s default grace DISCARDED it on wake — killing
+    the hourly water series (its next occurrence schedules inside
+    fire()), the daily 8 PM calendar task, and Kiaan's 5 AM vaccination
+    reminder. One-shots pass misfire_grace_time=None: fire late, never
+    never."""
+    from kyraan.triggers import scheduler as _sched
+    from kyraan.triggers import agent_tasks as _tasks
+    jobs = []
+
+    class FakeJQ:
+        def run_once(self, cb, when=None, data=None, name=None, job_kwargs=None):
+            jobs.append((name, job_kwargs))
+        def get_jobs_by_name(self, n): return []
+
+    captured = {}
+    monkeypatch.setattr(_sched, "init",
+                        lambda schedule_fn, cancel_fn, send_fn:
+                        captured.update(rem=schedule_fn))
+    monkeypatch.setattr(_tasks, "init",
+                        lambda schedule_fn, run_fn, send_fn, only_chat=None:
+                        captured.update(task=schedule_fn))
+    monkeypatch.setattr(telegram_bot, "_owner_id", lambda: 1)
+    telegram_bot._wire_scheduler(FakeJQ(), object())
+    telegram_bot._wire_agent_tasks(FakeJQ(), object())
+    from kyraan.control_plane.dnd import local_now
+    captured["rem"]("r1", local_now(), {})
+    captured["task"]("t1", local_now(), {})
+    assert jobs == [("r1", {"misfire_grace_time": None}),
+                    ("t1", {"misfire_grace_time": None})]

@@ -800,6 +800,21 @@ async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     )
 
 
+# Misfire policy (found live 2026-08-30): APScheduler's default grace is
+# ~1 second, and this Mac sleeps. A one-shot date job whose moment passed
+# during sleep was DISCARDED on wake — which killed the hourly water
+# series twice (its next occurrence is scheduled inside fire()), dropped
+# the daily 8 PM calendar task, and swallowed Kiaan's 5 AM vaccination
+# reminder outright. One-shots must fire late, never never: every fire
+# path already handles lateness honestly (overdue labels, grid catch-up,
+# DND holds, idempotent claims). Daily jobs get a bounded grace — a
+# morning brief at 11 AM beats silence; past that it skips to tomorrow.
+# Repeating pollers keep the default: skipping to the next slot IS their
+# recovery.
+_ALWAYS_FIRE = {"misfire_grace_time": None}
+_DAILY_GRACE = {"misfire_grace_time": 4 * 3600}
+
+
 async def _reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
     data = context.job.data
     await scheduler.fire(data["reminder_id"], data["chat_id"], data["text"])
@@ -817,7 +832,8 @@ def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
     from kyraan.triggers import agent_tasks
 
     def schedule_fn(job_name: str, run_at, payload: dict) -> None:
-        job_queue.run_once(_agent_task_job, when=run_at, data=payload, name=job_name)
+        job_queue.run_once(_agent_task_job, when=run_at, data=payload,
+                           name=job_name, job_kwargs=_ALWAYS_FIRE)
 
     async def run_fn(chat_id: int, instruction: str) -> str:
         for tier in ("frontier", "cheap"):
@@ -839,7 +855,8 @@ def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
 
 def _wire_scheduler(job_queue: JobQueue, bot) -> None:
     def schedule_fn(job_name: str, run_at, payload: dict) -> None:
-        job_queue.run_once(_reminder_job, when=run_at, data=payload, name=job_name)
+        job_queue.run_once(_reminder_job, when=run_at, data=payload,
+                           name=job_name, job_kwargs=_ALWAYS_FIRE)
 
     def cancel_fn(job_name: str) -> None:
         for job in job_queue.get_jobs_by_name(job_name):
@@ -892,7 +909,7 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
         # run_daily needs a tz-aware time or it fires in UTC.
         job_queue.run_daily(_morning_job, time=at.replace(tzinfo=local_now().tzinfo),
-                            name="morning_brief")
+                            name="morning_brief", job_kwargs=_DAILY_GRACE)
         logger.info("Morning brief scheduled daily at %s %s", at, local_now().tzinfo)
 
     evening_at = briefs.brief_time("evening")
@@ -902,7 +919,7 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
         job_queue.run_daily(_evening_job,
                             time=evening_at.replace(tzinfo=local_now().tzinfo),
-                            name="evening_brief")
+                            name="evening_brief", job_kwargs=_DAILY_GRACE)
         logger.info("Evening brief scheduled daily at %s", evening_at)
 
     review_at = __import__("kyraan.triggers.self_review", fromlist=["x"]).review_time()
@@ -1026,7 +1043,7 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),
-                            name="self_review")
+                            name="self_review", job_kwargs=_DAILY_GRACE)
         logger.info("Nightly self-review scheduled at %s", review_at)
 
     from kyraan.triggers import home_alerts
