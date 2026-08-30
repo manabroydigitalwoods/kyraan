@@ -276,3 +276,17 @@ async def test_identity_claims_never_become_facts(monkeypatch, isolated_memory):
     assert queued == ["- Wife's name is Mira"]     # the identity claim: gone
     saved = list(isolated_memory.glob("*.md"))
     assert len(saved) == 1
+
+
+async def test_health_flag_outranks_a_short_term_guess(monkeypatch, isolated_memory):
+    """Found live 2026-08-31: Kiaan's MRR+JE vaccination proposed as
+    term "short" — it would have AGED OUT of retrieval like a trip
+    note. Safety-class and milestone flags force term long."""
+    _mock_model(monkeypatch,
+                '{"facts": [{"path": "people/kid.md", '
+                '"content": "- Got MRR and JE vaccines on 2026-08-30", '
+                '"term": "short", "flags": ["health"]}]}')
+    await extraction.propose_from_message("we gave kiaan his vaccines")
+    body = next(isolated_memory.glob("*.md")).read_text()
+    assert '"term": "long"' in body
+    assert '"flags": ["health"]' in body

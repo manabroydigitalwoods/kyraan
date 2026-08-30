@@ -224,12 +224,24 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
             if store.is_known_fact(str(fact.get("content", "")), known):
                 log_event("extraction_duplicate_skipped", fact=fact)
                 continue
+            flags = fact.get("flags") or []
+            term = fact.get("term", "long")
+            if term == "short" and set(flags) & {"health", "safety",
+                                                 "emergency", "danger",
+                                                 "milestone"}:
+                # A vaccination record classified "short" would AGE OUT
+                # of retrieval like a trip note (found live 2026-08-31:
+                # Kiaan's MRR+JE dose proposed as short). Safety-class
+                # and milestone facts are permanent history — the flag
+                # outranks the model's term guess, deterministically.
+                log_event("extraction_term_promoted", flags=flags)
+                term = "long"
             meta = {
-                "term": fact.get("term", "long"),
+                "term": term,
                 "importance": fact.get("importance", "normal"),
                 "era": fact.get("era", "current"),
                 "sphere": fact.get("sphere", "personal"),
-                "flags": fact.get("flags") or [],
+                "flags": flags,
                 "supersedes": fact.get("supersedes") or None,
             }
             try:
