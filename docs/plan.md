@@ -400,8 +400,25 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
 
 ---
 
-## 7. Immediate Next Step
+## 7. Open Threads (updated 2026-08-31 — Phases 1–4 engineering complete)
 
-Define the **Phase 1 v1 scope** in concrete technical terms (stack, repo structure, first Telegram bot skeleton, MD file schema) and start building — with Phases 2–5 layered in only once Phase 1 is running reliably for a few weeks.
+Continuing but NOT completed, in priority order:
 
-See [progress.md](progress.md) for what's actually been built against this plan so far.
+1. **Owner hygiene (oldest open thread, owner-side):** credential
+   rotations — bot token revoke/reissue, ICS URL, Google client
+   secret, HASS token — plus re-enrolling Kiaan's face from 3–4 clear
+   photos.
+2. **§3c "adopt now" items, decided 2026-08-28, none yet built:**
+   taint-class taxonomy names, capability-contract metadata,
+   `memory.search_facts`, normalized error names; Google Contacts sync
+   ("adopt next") behind its governance row.
+3. **Goal/task continuity** — the 20-minute design conversation that
+   unblocks §3d gap #1 (long-horizon work).
+4. **Rollout calendar (by design, not late):** 30 clean soak days →
+   ~2026-09-26, plus the §6 sampling gate (200 reviewed / ≥90%
+   trailing) before family stage-2.
+5. **CI:** 6 commits ahead of origin, no workflow runs the suite/eval
+   on push — the "still-unpushed CI verification" from Phase 3.
+6. **Optional, outside every exit bar:** P3.8 advisor personas.
+
+See [progress.md](progress.md) for the build ledger against this plan.
