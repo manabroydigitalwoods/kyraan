@@ -163,7 +163,7 @@ record. Ground rule carried over from the proposal's own best idea: the
 agent sees *capabilities* (`email.*`, `contacts.*`), never provider-branded
 tools — a rule the proposal itself broke for WhatsApp/Slack/GitHub.
 
-**Adopt now (small, low-risk, mostly formalizing what exists)**
+**Adopt now — BUILT 2026-08-31 (taint names, contracts, search_facts, error names)**
 - **Trust/taint classes** — name the taxonomy (`EMAIL_UNTRUSTED`,
   `WEB_UNTRUSTED`, `CONTACT_DATA`, …) over the mechanisms already enforced
   ad hoc (`web_tainted` write-lockout, email cloud-exclusion, review-listing
@@ -408,10 +408,10 @@ Continuing but NOT completed, in priority order:
    rotations — bot token revoke/reissue, ICS URL, Google client
    secret, HASS token — plus re-enrolling Kiaan's face from 3–4 clear
    photos.
-2. **§3c "adopt now" items, decided 2026-08-28, none yet built:**
-   taint-class taxonomy names, capability-contract metadata,
-   `memory.search_facts`, normalized error names; Google Contacts sync
-   ("adopt next") behind its governance row.
+2. **§3c "adopt now" items — BUILT 2026-08-31** (taint-class taxonomy,
+   capability contracts, `memory.search_facts`, normalized error
+   names). Still open from §3c: Google Contacts sync ("adopt next")
+   behind its governance row.
 3. **Goal/task continuity** — the 20-minute design conversation that
    unblocks §3d gap #1 (long-horizon work).
 4. **Rollout calendar (by design, not late):** 30 clean soak days →

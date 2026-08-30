@@ -23,7 +23,7 @@ import json
 import re
 
 from kyraan.agents.capabilities import capability_brief
-from kyraan.control_plane import kernel, kill_switch
+from kyraan.control_plane import kernel, kill_switch, taint
 from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import log_event
 from kyraan.memory import store as memory_store
@@ -889,7 +889,10 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         if (tool not in _READ_ONLY_TOOLS
                 and not (isinstance(result, dict) and result.get("error"))):
             wrote_this_turn = True
-        if tool == "web.search":
+        if taint.source_class(tool) == taint.WEB_UNTRUSTED:
+            # The class map (control_plane/taint.py) is the one checked
+            # place naming which tool results are third-party text — the
+            # rail reads it instead of hardcoding tool names (plan §3c).
             web_tainted = True
         if isinstance(result, dict) and "__direct_reply__" in result:
             # Privacy short-circuit: the executor composed the user-facing

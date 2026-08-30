@@ -1311,6 +1311,41 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
             "now": new_name}
 
 
+async def _memory_search_facts(chat_id: int, args: dict, raw_text: str):
+    """Plan §3c (adopted 2026-08-28): direct search over REVIEWED facts.
+    Before this, reviewed facts were only reachable via context assembly
+    or the relations graph — "what do you know about X" beyond the
+    memory block's budget had no tool. Retrieval reuses the engine's
+    visibility-safe candidate query (the §4 clause is inside it), so a
+    non-owner viewer can never pull another person's facts through here."""
+    query = str(args.get("query", "")).strip()
+    if len(query) < 3:
+        raise kernel.ToolFailed("give words to search saved facts for")
+    import asyncio as _aio
+
+    from kyraan.memory import engine
+    entries = await _aio.to_thread(engine._pg_candidates, query)
+    if entries is None:
+        raise kernel.ToolFailed(
+            "the fact store is unreachable right now — answer from your "
+            "memory block and say the deeper search wasn't available")
+    words = {w for w in query.lower().split() if len(w) > 2}
+    scored = []
+    for e in entries:
+        sim = e.get("_sim") or 0.0
+        hit = sum(1 for w in words if w in e["content"].lower())
+        if sim < 0.35 and not hit:
+            continue
+        scored.append((hit, sim, e))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    top = [f"- {e['content']} (saved {e['created'][:10]})"
+           for _, _, e in scored[:8]]
+    if not top:
+        return {"matches": [], "note": "no saved fact matches — say so, "
+                                       "never invent one"}
+    return {"matches": top}
+
+
 async def _memory_recall(chat_id: int, args: dict, raw_text: str):
     """P3.3c: episodic recall — past conversations beyond the history
     window, retrieved local-only (embedding + Postgres on this machine)."""
@@ -1664,6 +1699,15 @@ TOOLS = {
                   "the doc caption and date. Empty = say no saved document "
                   "matches, never invent one."),
         "run": _documents_search,
+    },
+    "memory.search_facts": {
+        "params": '{"query": "<topic words>"}',
+        "about": ("Search ALL reviewed saved facts — \"what do you know "
+                  "about X\", \"everything about Kiaan's school\" — when "
+                  "the memory block in your prompt doesn't already answer. "
+                  "Returns fact lines with saved dates. Empty = say no "
+                  "saved fact matches, never invent one."),
+        "run": _memory_search_facts,
     },
     "memory.recall_episodes": {
         "params": '{"query": "<topic words>", "k": 5}',
@@ -2086,6 +2130,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
+                    "memory.search_facts",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
                     "faces.check_photo", "persons.profile", "persons.list",

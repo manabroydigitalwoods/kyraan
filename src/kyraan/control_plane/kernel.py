@@ -278,6 +278,7 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
             break
 
     log_event("tool_result", tool=spec.name, ok=False, error=str(last_exc),
+              error_name=registry.error_name(last_exc),
               duration_ms=round((_time.monotonic() - started) * 1000))
     if spec.on_failure.startswith("fallback:") and _allow_fallback:
         # One fallback hop only — a fallback's own fallback never runs, so

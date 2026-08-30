@@ -119,6 +119,45 @@ def load() -> dict:
     return specs
 
 
+def contracts() -> dict:
+    """Capability-contract metadata (plan §3c, adopted 2026-08-28): per
+    tool, {effect, risk, requires_confirmation, taint} as auditable DATA
+    derived from the declared spec — never a second hand-written table
+    that can drift. The suite pins the invariant the derivation rests
+    on: every write-effect tool is confirm-gated."""
+    from kyraan.control_plane import taint as _taint
+    out = {}
+    for name, spec in load().items():
+        out[name] = {
+            "effect": spec.side_effects,
+            "risk": ("external_write" if spec.side_effects == "write"
+                     else "notify" if spec.side_effects == "notify"
+                     else "read_only"),
+            "requires_confirmation": spec.permission == "confirm",
+            "taint": _taint.source_class(name),
+        }
+    return out
+
+
+# Normalized error names (plan §3c): a thin mapping over the two error
+# classes so logs and failure handling can say WHAT KIND without every
+# caller re-parsing provider prose. Not a new system — a label.
+def error_name(exc: BaseException) -> str:
+    text = str(exc).lower()
+    if isinstance(exc, TimeoutError) or "timed out" in text or "timeout" in text:
+        return "TIMEOUT"
+    if any(t in text for t in ("401", "403", "unauthorized", "forbidden",
+                               "credential", "auth", "api key", "token expired")):
+        return "AUTH_REQUIRED"
+    if "429" in text or "rate limit" in text or "too many requests" in text:
+        return "RATE_LIMITED"
+    if "404" in text or "not found" in text:
+        return "NOT_FOUND"
+    if isinstance(exc, TransientToolError):
+        return "NETWORK"
+    return "TOOL_FAILED"
+
+
 def get(tool_name: str) -> ToolSpec:
     specs = load()
     if tool_name not in specs:
