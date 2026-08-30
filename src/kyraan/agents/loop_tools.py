@@ -1341,8 +1341,16 @@ async def _memory_search_facts(chat_id: int, args: dict, raw_text: str):
     top = [f"- {e['content']} (saved {e['created'][:10]})"
            for _, _, e in scored[:8]]
     if not top:
-        return {"matches": [], "note": "no saved fact matches — say so, "
-                                       "never invent one"}
+        # Terminal, and says WHY retrying is futile: the first empty
+        # result live ("anything saved about the car", 2026-08-30) sent
+        # nano re-searching the same words until the repeat rail killed
+        # the tier and the owner got a full outage reply for a question
+        # with an honest one-line answer.
+        return {"matches": [], "note": (
+            "NO saved fact matches — and the search matches by MEANING, "
+            "so re-searching with different words will find nothing "
+            "more. Reply to the user NOW: nothing is saved about this; "
+            "never invent one.")}
     return {"matches": top}
 
 
