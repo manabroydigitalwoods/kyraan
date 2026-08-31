@@ -420,10 +420,11 @@ Continuing but NOT completed, in priority order:
 4. **Rollout calendar (by design, not late):** 30 clean soak days →
    ~2026-09-26, plus the §6 sampling gate (200 reviewed / ≥90%
    trailing) before family stage-2.
-5. **CI — BUILT 2026-08-31:** .github/workflows/ci.yml runs the full
-   suite on every push against pgvector + Redis with migrations
-   applied, under a non-UTC TZ by design. The eval gate stays local
-   (needs live tiers + keys). Owner pushed the backlog same day.
+5. **CI — deferred (owner's call, 2026-08-31):** a workflow was built
+   and briefly pushed, then removed the same day at the owner's
+   direction ("don't require CI now"). The local gate stands: full
+   suite + eval before every deploy. Reinstate from git history
+   (commit 9583df2) when wanted.
 6. **Optional, outside every exit bar:** P3.8 advisor personas.
 
 See [progress.md](progress.md) for the build ledger against this plan.
