@@ -1223,3 +1223,27 @@ def test_identity_block_never_defaults_an_empty_viewer_to_owner(monkeypatch):
         assert "Ruma" in block and "NOT the owner" in block
     finally:
         _kernel.reset_viewer_stage(token)
+
+
+async def test_third_search_is_refused_and_the_answer_ordered(scripted_model, monkeypatch):
+    """Live 2026-08-31: four differently-worded searches burned the
+    whole step cap (distinct args dodge the exact-repeat rail) and the
+    turn died as a fake outage. Two searches per turn; the third gets
+    the reply order instead of executing."""
+    searches = []
+
+    async def fake_dispatch(spec, args):
+        searches.append(args.get("query"))
+        return {"query": args.get("query"), "results": []}
+
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    prompts = scripted_model([
+        '{"action": "call", "tool": "web.search", "args": {"query": "venues siliguri"}}',
+        '{"action": "call", "tool": "web.search", "args": {"query": "kids party halls"}}',
+        '{"action": "call", "tool": "web.search", "args": {"query": "birthday venue list"}}',
+        '{"action": "reply", "text": "Two leads found; send the note as a fresh message."}',
+    ])
+    reply = await agent_loop.run(90, "find venues and note the best")
+    assert len(searches) == 2                      # third never executed
+    assert "no more searches this turn" in prompts[-1]
+    assert "Two leads found" in reply

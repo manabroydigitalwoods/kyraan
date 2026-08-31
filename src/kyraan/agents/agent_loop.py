@@ -628,6 +628,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
     # stubborn fabricator then exhausts the step cap and falls to the
     # deterministic classifier path, which lists correctly
     web_tainted = False  # web text entered this turn — no more write tools
+    web_searches = 0     # per-turn search budget (2) — see the nudge below
 
     for step in range(_MAX_STEPS):
         try:
@@ -841,6 +842,21 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                            "user's access level — answer without it and "
                            "say so if they asked for exactly that.")
             continue
+        if tool == "web.search" and web_searches >= 2:
+            # Search budget (live 2026-08-31: FOUR differently-worded
+            # searches burned the whole step cap and the turn died as a
+            # fake outage — distinct args, so the exact-repeat rail
+            # couldn't fire). Two searches per turn buy the evidence;
+            # the remaining steps belong to the ANSWER.
+            log_event("web_search_budget", chat_id=chat_id)
+            transcript += ("\nSYSTEM: you have searched twice already — no "
+                           "more searches this turn. Reply NOW with the "
+                           "best of what you found (cite urls), and if an "
+                           "action was requested, tell the user to send it "
+                           "as a fresh message.")
+            continue
+        if tool == "web.search":
+            web_searches += 1
         if web_tainted and tool not in _READ_ONLY_TOOLS:
             # The taint rail: once ANY web text is in the transcript, no
             # non-read tool may run this turn — deterministic, so a

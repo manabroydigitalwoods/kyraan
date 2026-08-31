@@ -1739,7 +1739,7 @@ TOOLS = {
     },
     "goals.create": {
         "params": '{"title": "Plan Kiaan\'s birthday", "why": "<optional>", "steps": ["guest list", "venue", "cake"], "cadence_hours": 24}',
-        "about": ("Start a GOAL — a pursuit that survives across days "
+        "about": ("A ONE-TIME request (\"check X and if Y do Z\") is NOT a recurring task — do it NOW in this turn, or schedule it ONCE; only an explicit \"every day/week\" earns repeat. " + "Start a GOAL — a pursuit that survives across days "
                   "(\"plan the birthday\", \"find a new flat\"). Kyraan "
                   "keeps steps + findings, researches open steps daily "
                   "with read-only tools, and pings only on real progress. "
