@@ -396,6 +396,22 @@ Two bugs worth keeping the note for:
   requestAnimationFrame loop fails silently — no console error the user
   would ever see, just an empty canvas. It is a shared helper again.
 
+**Demo data lives in the process, never in a store** (`KYRAAN_PANEL_DEMO=1`,
+`src/kyraan/panel/demo.py`). The obvious way to get a bigger brain to
+design against is to seed the memory tree, and it is the wrong way: an
+ACTIVE fact enters the model's memory block, so a synthetic "favourite
+colour is blue" is not decoration — Kyraan would recall it as true and act
+on it. Two eval fixtures had already leaked in by exactly that route.
+
+So the generator produces ~240 facts, 8 people, 8 scheduled items and a
+deliberate contested pair, entirely in memory, and the payload carries
+`demo: true` so the page says DEMO DATA out loud. The vectors are
+synthetic but STRUCTURED — one centre per topic plus jitter — because
+random noise would have made every layout a blob and exercised none of
+the projection, the clustering or the mesh. One seed, so a screenshot
+today matches one next week. Run it on a second port beside the real
+panel and compare.
+
 Still owed for Phase B: batch approve/reject on the review queue,
 conflict resolution, subject assignment, and the per-person visibility
 preview. Those are WRITES, so they go through the kernel per rule 1 and

@@ -486,7 +486,7 @@ async function loadHub() {
     const counts = graph.counts || {};
     $("hub-sub").textContent =
       `${counts.memory || 0} memories · ${counts.skill || 0} skills · `
-      + `${counts.task || 0} queued · live`;
+      + `${counts.task || 0} queued · ${graph.demo ? "DEMO DATA" : "live"}`;
   } catch (err) {
     $("hub-sub").textContent = "brain unavailable";
   }
@@ -1771,7 +1771,8 @@ async function loadMemory() {
     renderLegend();
     fitWhenSettled();
     note.textContent =
-      `${graph.nodes.length} neurons · ${graph.edges.length} connections`
+      (graph.demo ? "DEMO DATA · " : "")
+      + `${graph.nodes.length} neurons · ${graph.edges.length} connections`
       + ` · mesh ${brain.floor.toFixed(2)}`
       + (graph.contested.length ? ` · ${graph.contested.length} contested` : "")
       + (graph.degraded ? ` · degraded: ${graph.degraded}` : "");

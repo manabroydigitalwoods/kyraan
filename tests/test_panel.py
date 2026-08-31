@@ -809,3 +809,56 @@ def test_fired_rows_are_named_not_just_identified(seeded_logs, monkeypatch, tmp_
     assert "take the medicine" in fired
     assert "the evening brief" in fired
     assert any(t.startswith("reminder gone1234") for t in fired)
+
+
+# -------------------------------------------------------------------- demo
+
+
+def test_demo_mode_is_off_unless_asked_for(monkeypatch):
+    """Demo data must never appear by accident. An ACTIVE fact enters the
+    model's memory block, so a synthetic one is not decoration — it is
+    something Kyraan would recall as true."""
+    from kyraan.panel import demo
+    monkeypatch.delenv("KYRAAN_PANEL_DEMO", raising=False)
+    assert demo.enabled() is False
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "0")
+    assert demo.enabled() is False
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    assert demo.enabled() is True
+
+
+def test_demo_brain_is_labelled_and_never_touches_a_store(monkeypatch, tmp_path):
+    """The payload says demo so the page can say so out loud, and the whole
+    graph builds without a database or a trigger store."""
+    from kyraan.store import pg
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    monkeypatch.setattr(pg, "connection",
+                        lambda: (_ for _ in ()).throw(
+                            AssertionError("demo mode must not reach Postgres")))
+
+    graph = queries.brain_graph()
+    assert graph["demo"] is True
+    assert graph["counts"]["memory"] > 100
+    assert graph["edge_counts"]["synapse"] > 0
+    # Every edge still resolves — the demo path shares the real assembly.
+    ids = {n["id"] for n in graph["nodes"]}
+    assert not [e for e in graph["edges"] if e["a"] not in ids or e["b"] not in ids]
+
+
+def test_demo_brain_is_deterministic(monkeypatch):
+    """One seed: a screenshot taken today matches one taken next week."""
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    first = queries.brain_graph()
+    second = queries.brain_graph()
+    assert [n["label"] for n in first["nodes"]] == [n["label"] for n in second["nodes"]]
+    assert len(first["edges"]) == len(second["edges"])
+
+
+def test_demo_clusters_are_separable(monkeypatch):
+    """Vectors are synthetic but STRUCTURED — one centre per topic plus
+    jitter. Random noise would have made every layout look like a blob and
+    exercised none of the projection, clustering or mesh."""
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    facts = [n for n in queries.brain_graph()["nodes"] if n["type"] == "memory"]
+    clusters = {f["group"] for f in facts}
+    assert len(clusters) >= 3, clusters

@@ -315,6 +315,13 @@ def triggers() -> dict:
     A machine that sleeps misses due jobs (plan.md §3d #4); an overdue row
     here is that failure made visible instead of inferred from silence.
     """
+    from kyraan.panel import demo
+    if demo.enabled():
+        rows = demo.tasks()
+        rows.sort(key=lambda r: r["fire"]["in_seconds"])
+        return {"triggers": rows,
+                "overdue": sum(1 for r in rows if r["fire"]["overdue"])}
+
     from kyraan.triggers import agent_tasks, goals
     from kyraan.triggers import store as reminder_store
 
@@ -468,6 +475,36 @@ def _kmeans(coords, k: int, rounds: int = 24) -> list:
     return labels.tolist()
 
 
+def _demo_memory_map(include_inactive: bool) -> dict:
+    """The same shape memory_map returns, from synthetic facts. Kept beside
+    the real one so the two cannot drift into different payloads."""
+    from kyraan.panel import demo
+
+    rows, vectors = demo.facts()
+    facts_out, usable_vectors = [], []
+    for row, vector in zip(rows, vectors):
+        if not include_inactive and not row["active"]:
+            continue
+        entry = {k: v for k, v in row.items() if k != "topic"}
+        facts_out.append(entry)
+        usable_vectors.append(vector)
+
+    if len(usable_vectors) >= 2:
+        coords = _project_2d(usable_vectors)
+        clusters = _kmeans(coords, k=min(7, max(2, len(usable_vectors) // 30)))
+        for entry, coord, cluster in zip(facts_out, coords, clusters):
+            entry["x"], entry["y"] = coord
+            entry["cluster"] = cluster
+
+    census: dict = defaultdict(lambda: defaultdict(int))
+    for entry in facts_out:
+        for field in ("subject", "kind", "sphere", "era"):
+            census[field][entry[field]] += 1
+    return {"facts": facts_out,
+            "census": {f: dict(c) for f, c in census.items()},
+            "positioned": len(usable_vectors), "degraded": "", "demo": True}
+
+
 def memory_map(limit: int = 400, include_inactive: bool = True) -> dict:
     """Every fact as a point: its 2D position, its cluster, and enough
     metadata to colour and read it.
@@ -476,6 +513,10 @@ def memory_map(limit: int = 400, include_inactive: bool = True) -> dict:
     pg is down this returns the facts WITHOUT coordinates rather than
     nothing — the census and the list stay useful even with no map.
     """
+    from kyraan.panel import demo
+    if demo.enabled():
+        return _demo_memory_map(include_inactive)
+
     from kyraan.store import pg
 
     limit = max(1, min(int(limit), 2000))
@@ -549,6 +590,28 @@ def memory_links(include_superseded: bool = False) -> dict:
     birthday look like a live disagreement (found 2026-08-31 — the panel's
     own false positive, not bad data).
     """
+    from kyraan.panel import demo
+    if demo.enabled():
+        rows, _ = demo.facts()
+        links = [{**link, "active": True} for link in demo.triples(rows)]
+        tails: dict = defaultdict(set)
+        facts_per: dict = defaultdict(set)
+        for link in links:
+            key = (link["from"], link["rel"])
+            tails[key].add(link["to"])
+            facts_per[key].add(link["fact"])
+        contested, variants = set(), set()
+        for key, values in tails.items():
+            if len(values) > 1:
+                (contested if len(facts_per[key]) > 1 else variants).add(key)
+        for link in links:
+            key = (link["from"], link["rel"])
+            link["contested"] = key in contested
+            link["variant"] = key in variants
+        return {"links": links, "degraded": "",
+                "contested": sorted(f"{h} {r}" for h, r in contested),
+                "variants": sorted(f"{h} {r}" for h, r in variants)}
+
     from kyraan.store import pg
 
     try:
@@ -756,13 +819,22 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
         })
 
     # memory_map drops the raw vectors; re-read them for the mesh.
-    from kyraan.store import pg
-    try:
-        with pg.connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT legacy_id, embedding FROM fact ORDER BY created_at")
-            raw = {legacy: vector for legacy, vector in cur.fetchall()}
-    except Exception:
-        raw = {}
+    from kyraan.panel import demo
+    if demo.enabled():
+        # NOT `vectors` — that name is the accumulator this function is
+        # about to append to, and unpacking into it left 480 entries
+        # against 240 ids.
+        demo_rows, demo_vectors = demo.facts()
+        raw = {row["id"]: vector for row, vector in zip(demo_rows, demo_vectors)}
+    else:
+        from kyraan.store import pg
+        try:
+            with pg.connection() as conn, conn.cursor() as cur:
+                cur.execute("SELECT legacy_id, embedding FROM fact "
+                            "ORDER BY created_at")
+                raw = {legacy: vector for legacy, vector in cur.fetchall()}
+        except Exception:
+            raw = {}
     for fact_id in fact_ids:
         vector = raw.get(fact_id)
         if isinstance(vector, str):
@@ -882,6 +954,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
         "dead_skills": [n["label"] for n in nodes if n.get("dead")],
         "synapse_floor": synapse_floor,
         "degraded": memory.get("degraded", ""),
+        "demo": bool(memory.get("demo")),
     }
 
 
