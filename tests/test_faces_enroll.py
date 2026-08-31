@@ -235,7 +235,11 @@ def test_non_owner_tool_surface_is_frozen():
                  "reminders.cancel", "calendar.list_events", "weather.get",
                  "places.nearby", "routes.eta", "web.search",
                  "documents.search", "my.abilities", "memory.propose", "memory.review",
-                 "memory.pending_list"},
+                 "memory.pending_list",
+                 # goal continuity, owner decision 2026-08-31 (design
+                 # record: docs/design/goal_continuity.md)
+                 "goals.create", "goals.list", "goals.show",
+                 "goals.update", "goals.set_status"},
     }
     for stage, allowed_set in expected.items():
         reachable = {name for name in loop_tools.TOOLS

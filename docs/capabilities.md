@@ -33,6 +33,11 @@ scheduled runs get read-only tools by construction.
 - `tasks.schedule` / `list` / `cancel` / `recreate` — **agent tasks**: an
   instruction that RUNS at a set time with read-only tools ("every evening at 8,
   check tomorrow's calendar and warn me about early meetings").
+- `goals.create` / `list` / `show` / `update` / `set_status` — **goals**:
+  pursuits that survive across days ("plan Kiaan's birthday") with
+  steps, a findings journal, and a daily read-only research cycle that
+  pings only on real progress. Max 3 active per person; cycles run at
+  the goal owner's own access level.
 - `rules.create` / `list` / `cancel` / `reactivate` — **watch rules** on home
   entities ("if the AC is on more than 3 hours, tell me"). Edge-triggered: one
   alert per crossing, never a nag. Notify-only by doctrine — a rule can check

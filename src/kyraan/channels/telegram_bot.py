@@ -853,6 +853,55 @@ def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
                      only_chat=_owner_id())
 
 
+async def _goal_cycle_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    from kyraan.triggers import goals
+    await goals.fire(context.job.data["goal_id"])
+
+
+def _wire_goals(job_queue: JobQueue, bot) -> None:
+    from kyraan.agents import agent_loop
+    from kyraan.control_plane import kernel as _kernel
+    from kyraan.triggers import goals
+
+    def schedule_fn(job_name: str, run_at, payload: dict) -> None:
+        for job in job_queue.get_jobs_by_name(job_name):
+            job.schedule_removal()  # cadence moves: one live job per goal
+        job_queue.run_once(_goal_cycle_job, when=run_at, data=payload,
+                           name=job_name, job_kwargs=_ALWAYS_FIRE)
+
+    async def run_fn(goal) -> str:
+        # THE security line of goal continuity (design record 2026-08-31):
+        # a cycle runs AS the goal's person — their stage bounds tool
+        # reach, the §4 clause bounds fact visibility. The contextvar
+        # default is owner, so an unset viewer here would hand an
+        # enrolled adult's goal the owner's whole capability surface.
+        token = _kernel.set_viewer(goal.person, goal.stage)
+        try:
+            for tier in ("frontier", "cheap"):
+                try:
+                    return await agent_loop.run(
+                        goal.chat_id, goals.cycle_instruction(goal),
+                        tier=tier, read_only=True)
+                except agent_loop.AgentUnavailable:
+                    continue
+            return ""
+        finally:
+            _kernel._viewer.reset(token)
+
+    async def send_fn(chat_id: int, text: str) -> bool:
+        if chat_id != _owner_id():
+            from kyraan.store import persons
+            if persons.person_for_chat(chat_id, strict=True) is None:
+                logger.warning("Dropping goal report for unknown chat %s",
+                               chat_id)
+                return False
+        await bot.send_message(chat_id=chat_id, text=_plain(text))
+        orchestrator.record_proactive(chat_id, text)
+        return True
+
+    goals.init(schedule_fn=schedule_fn, run_fn=run_fn, send_fn=send_fn)
+
+
 def _wire_scheduler(job_queue: JobQueue, bot) -> None:
     def schedule_fn(job_name: str, run_at, payload: dict) -> None:
         job_queue.run_once(_reminder_job, when=run_at, data=payload,
@@ -1182,6 +1231,7 @@ def run() -> None:
 
     _wire_scheduler(app.job_queue, app.bot)
     _wire_agent_tasks(app.job_queue, app.bot)
+    _wire_goals(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
 
     # Files OUT (2026-08-28): the loop's files.send delivers through here.

@@ -549,6 +549,13 @@ stage_toolsets:
     - memory.propose
     - memory.review
     - memory.pending_list
+    # Goal continuity (owner decision 2026-08-31): enrolled adults run
+    # their own goals — chat-scoped, cycles at THEIR stage reach.
+    - goals.create
+    - goals.list
+    - goals.show
+    - goals.update
+    - goals.set_status
 
 # Kyraan's voice — owner-editable; rendered into every loop prompt as
 # the PERSONA block (identity+personality work, 2026-08-28). The

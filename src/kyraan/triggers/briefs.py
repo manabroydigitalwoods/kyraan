@@ -91,6 +91,17 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.extend(home)
 
+    # Active goals, one line (goal continuity 2026-08-31) — the owner
+    # sees where each pursuit stands without asking.
+    try:
+        from kyraan.triggers import goals as _goals
+        goal_line = _goals.brief_line(chat_id)
+        if goal_line:
+            lines.append("")
+            lines.append(goal_line)
+    except Exception:
+        pass
+
     # Important-email digest (email tools enhancement, 2026-08-28) —
     # deterministic, unread-only, composed in Python: sender/subject
     # NEVER touches a model prompt on the way into this line, same §3a

@@ -636,6 +636,80 @@ async def _task_cancel(chat_id: int, args: dict, raw_text: str):
     return {"cancelled": True}
 
 
+async def _goals_create(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import goals
+    if not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("goals.create", dict(args))
+    person = kernel.effective_reviewer()
+    if person is None:
+        raise kernel.ToolFailed("goals need an identified person — "
+                                "this viewer is not enrolled")
+    try:
+        goal = goals.create(
+            chat_id, person=person, stage=kernel.viewer_stage(),
+            title=str(args.get("title", "")),
+            why=str(args.get("why", "") or ""),
+            steps=args.get("steps") or [],
+            cadence_hours=int(args.get("cadence_hours", 24) or 24))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"created": True, "id": goal.id, "title": goal.title,
+            "steps": len(goal.steps),
+            "note": "a daily read-only research cycle is now armed; "
+                    "progress pings only when something new is found"}
+
+
+async def _goals_list(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import goals
+    out = []
+    for g in goals.list_for(chat_id, status=None):
+        if g.status == "done":
+            continue
+        done = sum(1 for st in g.steps if st["done"])
+        out.append({"id": g.id, "title": g.title, "status": g.status,
+                    "steps": f"{done}/{len(g.steps)}"})
+    return out or {"goals": 0, "note": "no goals yet — say so"}
+
+
+async def _goals_show(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import goals
+    try:
+        g = goals.resolve(chat_id, str(args.get("goal", "")))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"id": g.id, "title": g.title, "why": g.why, "status": g.status,
+            "steps": [f"[{'x' if st['done'] else ' '}] {st['text']}"
+                      for st in g.steps],
+            "journal": [f"[{e['ts'][:10]}] {e['text'][:300]}"
+                        for e in g.journal[-5:]]}
+
+
+async def _goals_update(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import goals
+    try:
+        g = goals.update(chat_id, str(args.get("goal", "")),
+                         step_done=str(args.get("step_done", "") or ""),
+                         add_step=str(args.get("add_step", "") or ""),
+                         note=str(args.get("note", "") or ""),
+                         reopen_step=str(args.get("reopen_step", "") or ""))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    done = sum(1 for st in g.steps if st["done"])
+    return {"updated": True, "title": g.title,
+            "progress": f"{done}/{len(g.steps)} steps"}
+
+
+async def _goals_set_status(chat_id: int, args: dict, raw_text: str):
+    from kyraan.triggers import goals
+    try:
+        g, prior = goals.set_status(chat_id, str(args.get("goal", "")),
+                                    str(args.get("status", "")))
+    except ValueError as exc:
+        raise kernel.ToolFailed(str(exc))
+    return {"id": g.id, "title": g.title, "status": g.status,
+            "prior": prior}
+
+
 async def _rules_create(chat_id: int, args: dict, raw_text: str):
     from kyraan.triggers import event_rules
     if not kernel.confirmed_context():
@@ -1495,6 +1569,40 @@ TOOLS = {
         "about": "Cancel a scheduled agent task by id.",
         "run": _task_cancel,
     },
+    "goals.create": {
+        "params": '{"title": "Plan Kiaan\'s birthday", "why": "<optional>", "steps": ["guest list", "venue", "cake"], "cadence_hours": 24}',
+        "about": ("Start a GOAL — a pursuit that survives across days "
+                  "(\"plan the birthday\", \"find a new flat\"). Kyraan "
+                  "keeps steps + findings, researches open steps daily "
+                  "with read-only tools, and pings only on real progress. "
+                  "Asks the user to confirm first — automatic. Max 3 "
+                  "active."),
+        "run": _goals_create,
+    },
+    "goals.list": {
+        "params": "{}",
+        "about": "The user's goals (id, title, status, step progress).",
+        "run": _goals_list,
+    },
+    "goals.show": {
+        "params": '{"goal": "<title words or id>"}',
+        "about": ("One goal in full — steps, recent findings journal. "
+                  "For \"where are we on X\", answer FROM this state."),
+        "run": _goals_show,
+    },
+    "goals.update": {
+        "params": '{"goal": "<title words>", "step_done": "<words of a finished step>", "add_step": "<new step>", "note": "<finding to record>"}',
+        "about": ("Record progress the user states — a finished step, a "
+                  "new step, or a finding (\"the venue said yes\" -> "
+                  "step_done or note). Use during normal conversation; "
+                  "no confirm needed."),
+        "run": _goals_update,
+    },
+    "goals.set_status": {
+        "params": '{"goal": "<title words>", "status": "paused|active|done"}',
+        "about": "Pause, resume, or complete a goal.",
+        "run": _goals_set_status,
+    },
     "rules.create": {
         "params": '{"description": "<the rule in plain words>", "entity": "<a listed home entity>", "op": "is|above|below", "value": "on|off|<number>", "for_minutes": 0, "message": "<optional custom alert text>"}',
         "about": ("Create a WATCH RULE: a standing condition checked every "
@@ -1871,6 +1979,17 @@ def _undo_reminders_reschedule(args, result, prior):
 UNDO_MAP = {
     "calendar.create_event": _undo_calendar_create,
     "reminders.create": _undo_reminders_create,
+    # goals.update: a wrongly-checked step reopens; added steps and
+    # journal notes are additive history — no inverse, by policy.
+    "goals.update": lambda a, r, p: (
+        ("goals.update", {"goal": a.get("goal", ""),
+                          "reopen_step": a["step_done"]})
+        if a.get("step_done") and not (a.get("add_step") or a.get("note"))
+        else None),
+    "goals.create": lambda a, r, p: (
+        "goals.set_status", {"goal": r["id"], "status": "paused"}),
+    "goals.set_status": lambda a, r, p: (
+        "goals.set_status", {"goal": r["id"], "status": r["prior"]}),
     "rules.create": lambda a, r, p: (
         ("rules.cancel", {"rule_id": r["id"]})
         if isinstance(r, dict) and r.get("id") else None),
@@ -2069,6 +2188,12 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
         return (f"Schedule this task: at {humanize(str(args.get('when_iso')))}"
                 f"{rep}, I will run: \"{args.get('instruction')}\" (read-only "
                 "tools; results arrive as messages)")
+    if tool == "goals.create":
+        steps = [str(x) for x in (args.get("steps") or [])]
+        return (f"Start goal \"{args.get('title', '?')}\""
+                + (f" with steps: {', '.join(steps)}" if steps else "")
+                + " — I'll research it daily (read-only) and ping you "
+                  "only when I find something new")
     if tool == "rules.create":
         held = (f" for {args.get('for_minutes')} minutes"
                 if int(args.get("for_minutes", 0) or 0) else "")
@@ -2150,6 +2275,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
+                    "goals.list", "goals.show",
                     "memory.search_facts",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",

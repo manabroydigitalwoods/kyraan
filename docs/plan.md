@@ -412,8 +412,11 @@ Continuing but NOT completed, in priority order:
    capability contracts, `memory.search_facts`, normalized error
    names). Still open from §3c: Google Contacts sync ("adopt next")
    behind its governance row.
-3. **Goal/task continuity** — the 20-minute design conversation that
-   unblocks §3d gap #1 (long-horizon work).
+3. **Goal/task continuity — BUILT 2026-08-31** (design conversation
+   held in-chat; record: docs/design/goal_continuity.md). Goals with
+   steps + findings journal, daily read-only research cycles at the
+   goal person's own viewer context, progress-only pings, brief line.
+   §3d gap #1 closed for v1; autonomous-write cycles remain gated.
 4. **Rollout calendar (by design, not late):** 30 clean soak days →
    ~2026-09-26, plus the §6 sampling gate (200 reviewed / ≥90%
    trailing) before family stage-2.
