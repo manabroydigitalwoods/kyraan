@@ -217,4 +217,46 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
                           "it anytime.")
         except Exception as exc:
             log_event("document_ingest_failed", reason=str(exc)[:120])
+    elif reply and not enroll_name:
+        # MOMENTS (owner, 2026-08-31: "store the image ... find the
+        # matches and link them properly and it will create beautiful
+        # memories"): an ordinary photo — no document text — used to be
+        # described and then DROPPED. Now it persists like any capture:
+        # original bytes kept, the vision description as its searchable
+        # text, and locally-recognized faces linked as person subjects —
+        # so "show me Kiaan's photos" answers from a real gallery.
+        # Enrollment shots stay out (they are biometric intake, not
+        # memories); byte-hash dedup makes re-sends free.
+        try:
+            import base64 as _b64
+            import re as _re2
+
+            from kyraan.store import documents as _docs2
+            try:
+                original = (_b64.b64decode(
+                    image_data_url.split(",", 1)[1]), "jpg")
+            except Exception:
+                original = None
+            title = _re2.sub(r"^\s*(?:this|that|here|it)\s+is\s+", "",
+                             caption.strip(), flags=_re2.IGNORECASE)
+            if not title:
+                who = ", ".join(recognized or [])
+                title = (f"{who} — {local_now().strftime('%d %b %Y')}"
+                         if who else
+                         f"Moment — {local_now().strftime('%d %b %Y')}")
+            # subjects_from_name warms the persons name-map cache —
+            # never call it for an empty caption (wasted live-DB read,
+            # and it poisoned a test-DB run's resolver via the TTL
+            # cache, 2026-08-31).
+            subjects = (list(recognized or [])
+                        + (_docs2.subjects_from_name(caption)
+                           if caption.strip() else []))
+            moment_id = _docs2.ingest(
+                chat_id, "moment",
+                f"[photo, {local_now().strftime('%d %b %Y')}] {reply}",
+                caption=title[:120], subjects=subjects, original=original)
+            if moment_id:
+                reply += "\n\n🖼 Saved to memories — ask me to show it anytime."
+        except Exception as exc:
+            log_event("moment_ingest_failed", reason=str(exc)[:120])
     return reply or "(couldn't read that photo — try sending it again)", enroll_name

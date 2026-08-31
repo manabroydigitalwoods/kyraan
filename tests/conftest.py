@@ -103,3 +103,10 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     # with it over a real file lock. Same rule as every other store.
     from kyraan.store import sync_state
     monkeypatch.setattr(sync_state, "STATE_PATH", tmp_path / "pg_sync_state.json")
+    # The persons name-map TTL cache is process-global: warmed against
+    # the LIVE DSN by one test, it poisons the next test's swapped
+    # test-DB resolver for up to 60s ("Suman" resolved to the live
+    # registry's suman_ghosh, 2026-08-31). Same isolation rule as every
+    # file path above.
+    from kyraan.store import persons as _persons_store
+    _persons_store._cache.clear()

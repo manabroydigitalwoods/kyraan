@@ -1745,9 +1745,10 @@ TOOLS = {
     },
     "documents.list": {
         "params": '{"person": "<optional: only docs about this household member>"}',
-        "about": ("The user's saved documents (caption, kind, date) — for "
-                  "\"what documents do I have\", \"list my saved cards/PDFs\". "
-                  "Pass person for \"show Kiaan's documents\". "
+        "about": ("The user's saved documents AND photo memories "
+                  "(caption, kind, date) — \"what documents do I have\", "
+                  "\"show Kiaan's photos\", \"our memories from August\". "
+                  "Pass person to filter to one household member. "
                   'To delete one, tell the user to say "forget the document '
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,

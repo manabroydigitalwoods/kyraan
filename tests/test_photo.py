@@ -8,6 +8,15 @@ from kyraan.agents import orchestrator, photo
 from kyraan.model_router import router
 
 
+@pytest.fixture(autouse=True)
+def _no_live_document_store(monkeypatch):
+    """Moment ingestion (2026-08-31) would write real rows from unit
+    tests — stub it; the moment tests below install their own capture."""
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "ingest",
+                        lambda *a, **k: None)
+
+
 async def test_answer_sends_image_to_frontier(monkeypatch):
     seen = {}
 
@@ -240,3 +249,57 @@ async def test_naming_caption_sheds_its_prefix(monkeypatch):
     await photo.answer(9, "data:image/jpeg;base64,AAAA",
                        "this is Ruma's pain killer gel")
     assert ingested["caption"] == "Ruma's pain killer gel"
+
+
+
+async def test_scene_photo_becomes_a_moment_with_face_links(monkeypatch):
+    """Owner 2026-08-31: "store the image ... find the matches and link
+    them properly — it will create beautiful memories." A photo with NO
+    document text used to be described then dropped; now it persists
+    with recognized faces as person subjects and the original bytes."""
+    from kyraan.store import documents
+    stored = {}
+
+    def capture(chat_id, kind, text, caption="", subjects=None,
+                original=None, **kw):
+        stored.update(kind=kind, text=text, caption=caption,
+                      subjects=subjects, original=original)
+        return "doc-1"
+
+    monkeypatch.setattr(documents, "ingest", capture)
+
+    class _R:
+        text = '{"reply": "Kiaan grinning on the swing, golden evening light."}'
+        latency_ms = 5.0
+
+    async def fake_acall(**kw):
+        return _R()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall)
+    reply, enroll = await photo.answer(
+        9, "data:image/jpeg;base64,QUJD", "", recognized=["Kiaan"])
+    assert stored["kind"] == "moment"
+    assert "golden evening light" in stored["text"]
+    assert stored["subjects"] == ["Kiaan"]          # face match -> person link
+    assert stored["original"][0] == b"ABC"          # bytes kept
+    assert "Kiaan —" in stored["caption"]           # auto-title names who
+    assert "Saved to memories" in reply
+
+
+async def test_enrollment_photo_is_not_a_memory(monkeypatch):
+    from kyraan.store import documents
+    called = []
+    monkeypatch.setattr(documents, "ingest",
+                        lambda *a, **k: called.append(1) or "x")
+
+    class _R:
+        text = '{"reply": "Noted.", "remember_face_as": "Suman"}'
+        latency_ms = 5.0
+
+    async def fake_acall(**kw):
+        return _R()
+
+    monkeypatch.setattr(photo.router, "acall", fake_acall)
+    await photo.answer(9, "data:image/jpeg;base64,QUJD",
+                       "remember this face as Suman")
+    assert called == []   # biometric intake, not a memory
