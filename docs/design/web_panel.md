@@ -183,6 +183,17 @@ controls in a tinted bar under the header, its status in the header's
 verdict slot, and its content scrolling INSIDE the frame so the page never
 scrolls the chrome off the top.
 
+**The chrome does not move.** The header is a fixed 44px and never wraps:
+the readouts rebuild every ten seconds, and a value that grew one
+character — or the stale-server readout appearing — pushed the bar onto a
+second line and moved every sector's whole layout down with it. Values
+are set in tabular figures for the same reason, so a changing digit does
+not re-measure the readout and nudge its neighbours sideways. And `main`
+reserves the scrollbar's gutter always, because a sector that scrolls
+being 8px narrower than one that does not made every switch shift
+horizontally. Measured across all eight sectors: one header height, one
+content top, one content width.
+
 **The rail is icons.** 54px instead of 138: the labels were costing ~84px
 of every screen to say what the icon and the sector number already say.
 Eight inline SVGs stroked with `currentColor`, so they follow the tube
