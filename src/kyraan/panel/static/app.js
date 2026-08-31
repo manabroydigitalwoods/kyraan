@@ -892,12 +892,13 @@ const brain = {
 function runSearch(text) {
   brain.query = (text || "").trim().toLowerCase();
   brain.matches = new Set();
-  if (!brain.query) { renderLegend(); return; }
+  if (!brain.query) { renderLegend(); renderMemories(); return; }
   for (const node of brain.nodes) {
     const hay = `${node.label} ${node.type} ${node.group || ""} `
               + `${node.subject || ""} ${node.kind || ""}`;
     if (hay.toLowerCase().includes(brain.query)) brain.matches.add(node.id);
   }
+  renderMemories();
   const note = $("mem-note");
   if (note) {
     note.textContent = brain.matches.size
@@ -1350,9 +1351,12 @@ function drawGraph(canvas, view, opts) {
       ctx.beginPath(); ctx.arc(p.x, p.y, radius + 6 * ratio, 0, Math.PI * 2); ctx.stroke();
     }
     // Labels appear when zoomed in, or for the big structural nodes.
-    if (opts.labels !== false
-        && (view.scale > 1.7 || node.type === "person"
-            || (node.type === "skill" && (node.uses || 0) > 200))) {
+    // Memories carry long text, so they stay unlabelled by default — but
+    // a search hit or a selection has earned its name on the canvas.
+    const named = view.scale > 1.7 || node.type === "person"
+      || (node.type === "skill" && (node.uses || 0) > 200)
+      || selected || (brain.query && brain.matches.has(node.id));
+    if (opts.labels !== false && named) {
       ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim;
       ctx.fillText(node.label.slice(0, 26), p.x + radius + 4 * ratio, p.y + 3 * ratio);
@@ -1673,6 +1677,47 @@ function renderFindings(graph) {
     graph.contested.length ? "bad" : rows.length ? "warn" : "ok");
 }
 
+function renderMemories() {
+  const body = $("memories-body");
+  if (!body) return;
+  clear(body);
+  let facts = brain.nodes.filter((n) => n.type === "memory");
+  if (brain.query) facts = facts.filter((n) => brain.matches.has(n.id));
+  // Newest first: the thing you are looking for is usually the thing it
+  // just learned.
+  facts.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
+
+  if (!facts.length) {
+    empty(body, brain.query ? "no memory matches that" : "no memories");
+    verdictInto("memories-verdict", "0");
+    return;
+  }
+  const rows = el("div", "rows");
+  for (const fact of facts) {
+    const row = el("div", "row clickable" + (fact.active ? "" : " warn"));
+    row.appendChild(el("span", "body", fact.content || fact.label));
+    if (fact.subject && fact.subject !== "owner") {
+      row.appendChild(el("span", "tag", fact.subject));
+    }
+    if (!fact.active) row.appendChild(el("span", "tag", "superseded"));
+    if (fact.orphan) row.appendChild(el("span", "tag", "orphan"));
+    row.title = (fact.created || "").slice(0, 10) + " · " + fact.kind;
+    // Clicking a line selects the neuron and flies to it, so the list and
+    // the graph are two views of one thing rather than two lists.
+    row.addEventListener("click", () => {
+      brain.selection = new Set([fact.id]);
+      renderSelection();
+      focusOn($("mem-canvas"), [fact, ...neighboursOf(fact.id).map((n) => n.other)]);
+      syncUrl(false);
+    });
+    rows.appendChild(row);
+  }
+  body.appendChild(rows);
+  verdictInto("memories-verdict",
+    brain.query ? `${facts.length} of ${brain.nodes.filter((n) => n.type === "memory").length}`
+                : String(facts.length));
+}
+
 function renderLegend() {
   const legend = $("mem-legend");
   clear(legend);
@@ -1767,6 +1812,7 @@ async function loadMemory() {
     renderGate(review);
     renderCensus(graph);
     renderFindings(graph);
+    renderMemories();
     renderSelection();
     renderLegend();
     fitWhenSettled();

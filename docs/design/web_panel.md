@@ -396,6 +396,16 @@ Two bugs worth keeping the note for:
   requestAnimationFrame loop fails silently — no console error the user
   would ever see, just an empty canvas. It is a shared helper again.
 
+**Memories are readable, not just plottable.** Owner's question, and a
+fair one: memory was the ONE node type the graph never labelled. People
+were named, busy skills were named, and the 43 facts — the actual content
+of the second brain — were anonymous red dots, legible only by hovering
+one you had already found. Two fixes: a Memories console beside the graph
+listing every fact as text, newest first, filtered by the search and
+clickable to select and fly to its neuron; and on the canvas, a search hit
+or a selection now earns its name. Long fact text still stays off by
+default, because 43 sentences drawn at once is not a graph.
+
 **Demo data lives in the process, never in a store** (`KYRAAN_PANEL_DEMO=1`,
 `src/kyraan/panel/demo.py`). The obvious way to get a bigger brain to
 design against is to seed the memory tree, and it is the wrong way: an
