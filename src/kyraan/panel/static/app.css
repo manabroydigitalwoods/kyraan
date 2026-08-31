@@ -135,35 +135,51 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 }
 
 #rail {
-  flex: 0 0 138px; background: var(--panel);
+  /* Icon width. The labels were costing ~90px of every screen to say
+     things the icons and the sector numbers already say. */
+  flex: 0 0 54px; background: var(--panel);
   border-right: 1px solid var(--line-hot);
-  padding: 12px 0; display: flex; flex-direction: column; gap: 1px;
-  align-self: stretch; min-height: 0; overflow-y: auto;
+  padding: 10px 0; display: flex; flex-direction: column; gap: 2px;
+  align-self: stretch; min-height: 0; overflow: visible;
+  position: relative; z-index: 4;
 }
 #rail::before {
-  content: "sector";
-  font-size: 9px; letter-spacing: .3em; text-transform: uppercase;
-  color: var(--dim); opacity: .65; padding: 0 12px 8px;
+  content: "\25a4"; font-size: 12px; color: var(--dim); opacity: .55;
+  text-align: center; padding-bottom: 8px;
 }
 .sector {
+  position: relative;
   background: none; border: none; border-left: 3px solid transparent;
-  color: var(--dim); font: inherit; text-align: left; cursor: pointer;
-  padding: 6px 12px; letter-spacing: .14em; text-transform: uppercase;
-  display: flex; gap: 9px; align-items: baseline;
+  color: var(--dim); font: inherit; cursor: pointer;
+  padding: 7px 0 6px; display: flex; flex-direction: column;
+  align-items: center; gap: 2px;
+}
+.sector svg {
+  width: 17px; height: 17px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.3;
+  stroke-linecap: square; stroke-linejoin: miter;
 }
 .sector b {
-  font-weight: normal; font-size: 10px; opacity: .55; letter-spacing: .06em;
+  font-weight: normal; font-size: 8.5px; letter-spacing: .08em; opacity: .55;
 }
+/* The label is still THERE — it flies out on hover, so the rail is
+   learnable rather than a guessing game of glyphs. */
+.sector .sector-name {
+  position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+  margin-left: 6px; padding: 3px 10px; white-space: nowrap;
+  background: var(--panel); border: 1px solid var(--line-hot);
+  color: var(--text); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; opacity: 0; pointer-events: none;
+  transition: opacity .09s ease-out;
+}
+.sector:hover .sector-name, .sector:focus-visible .sector-name { opacity: 1; }
 .sector:hover { color: var(--text); background: rgba(255, 255, 255, .03); }
 .sector.on {
   color: var(--accent); border-left-color: var(--accent);
   background: linear-gradient(90deg,
-    color-mix(in srgb, var(--accent) 14%, transparent), transparent 82%);
-  text-shadow: 0 0 8px var(--glow);
+    color-mix(in srgb, var(--accent) 16%, transparent), transparent 90%);
 }
-.sector.on::after {
-  content: "\25c2"; margin-left: auto; font-size: 9px; opacity: .9;
-}
+.sector.on svg { filter: drop-shadow(0 0 5px var(--glow)); }
 .sector.on b { opacity: 1; }
 
 main {
@@ -232,11 +248,12 @@ main {
   .console.span2, .console.span4 { grid-column: span 1; }
   #deck { flex-direction: column; }
   #rail {
-    flex: 0 0 auto; flex-direction: row; overflow-x: auto; position: static;
-    max-height: none; border-right: none;
-    border-bottom: 3px double var(--line-hot);
+    flex: 0 0 auto; flex-direction: row; overflow-x: auto;
+    border-right: none; border-bottom: 1px solid var(--line-hot);
   }
-  .sector { border-left: none; border-bottom: 3px solid transparent; }
+  .sector { border-left: none; border-bottom: 3px solid transparent; padding: 6px 12px; }
+  .sector .sector-name { display: none; }
+  #rail-foot { display: none; }
   .sector.on { border-left-color: transparent; border-bottom-color: var(--accent); }
 }
 .console h2 {
@@ -544,15 +561,15 @@ footer::before {
 
 #rail { justify-content: flex-start; }
 #rail-foot {
-  margin-top: auto; padding: 12px 12px 4px;
+  margin-top: auto; padding: 10px 9px 2px;
   border-top: 1px solid var(--line);
-  display: flex; flex-direction: column; gap: 5px;
+  display: flex; flex-direction: column; gap: 5px; align-items: center;
 }
-.rail-stat { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.rail-stat { font-size: 9px; letter-spacing: .04em; text-transform: uppercase; }
 .rail-stat.ok   { color: var(--ok); }
 .rail-stat.bad  { color: var(--bad); text-shadow: 0 0 7px currentColor; }
 .rail-bar {
-  height: 4px; border: 1px solid var(--line-hot); padding: 1px;
+  height: 4px; width: 100%; border: 1px solid var(--line-hot); padding: 1px;
 }
 .rail-bar > span {
   display: block; height: 100%; background: var(--accent);
@@ -561,8 +578,8 @@ footer::before {
 .rail-bar > span.warn { background: var(--warn); }
 .rail-bar > span.bad  { background: var(--bad); }
 .rail-meta {
-  font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--dim); opacity: .7;
+  font-size: 8.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--dim); opacity: .65;
 }
 @media (max-width: 720px) { #rail-foot { display: none; } }
 

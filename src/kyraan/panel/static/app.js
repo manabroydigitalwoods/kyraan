@@ -229,7 +229,7 @@ async function refreshStatus() {
     // rail is what the eye rests on when the header is not.
     const railState = $("rail-state");
     if (railState) {
-      railState.textContent = kill.engaged ? "halted" : "running";
+      railState.textContent = kill.engaged ? "HALT" : "RUN";
       railState.parentElement.className =
         "rail-stat " + (kill.engaged ? "bad" : "ok");
     }

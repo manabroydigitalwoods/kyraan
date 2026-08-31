@@ -183,6 +183,13 @@ controls in a tinted bar under the header, its status in the header's
 verdict slot, and its content scrolling INSIDE the frame so the page never
 scrolls the chrome off the top.
 
+**The rail is icons.** 54px instead of 138: the labels were costing ~84px
+of every screen to say what the icon and the sector number already say.
+Eight inline SVGs stroked with `currentColor`, so they follow the tube
+like everything else — static markup, never built from data, so rule 2 is
+untouched. The label still exists and flies out on hover, because a rail
+of bare glyphs is a guessing game the first few times.
+
 **The rail carries state.** It runs full height with a footer pinned to
 the bottom: halted-or-running, the budget bar, and the read-only mark.
 All three exist in the header too, but the rail is what the eye rests on

@@ -28,21 +28,44 @@
   <!-- Sector rail: the six consoles, always in the same place, so the
        eye learns positions rather than re-reading labels. -->
   <nav id="rail">
-    <button class="sector on" data-view="overview"><b>00</b>Overview</button>
-    <button class="sector" data-view="stream"><b>01</b>Stream</button>
-    <button class="sector" data-view="turns"><b>02</b>Turns</button>
-    <button class="sector" data-view="triggers"><b>03</b>Schedule</button>
-    <button class="sector" data-view="cost"><b>04</b>Spend</button>
-    <button class="sector" data-view="health"><b>05</b>Systems</button>
-    <button class="sector" data-view="memory"><b>06</b>Brain</button>
-    <button class="sector" data-view="host"><b>07</b>Host</button>
-    <!-- Rail footer: the two facts worth carrying between sectors — is it
-         halted, and how much of today's budget is gone. Both live in the
-         header too, but the rail is what the eye rests on. -->
+    <button class="sector on" data-view="overview" aria-label="Overview" title="00 Overview">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><rect x="2" y="2" width="5.5" height="5.5"/><rect x="10.5" y="2" width="5.5" height="5.5"/><rect x="2" y="10.5" width="5.5" height="5.5"/><rect x="10.5" y="10.5" width="5.5" height="5.5"/></g></svg>
+      <b>00</b><span class="sector-name">Overview</span>
+    </button>
+    <button class="sector" data-view="stream" aria-label="Stream" title="01 Stream">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><path d="M2 4h14M2 9h10M2 14h12"/></g></svg>
+      <b>01</b><span class="sector-name">Stream</span>
+    </button>
+    <button class="sector" data-view="turns" aria-label="Turns" title="02 Turns">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><circle cx="9" cy="9" r="6.5"/><path d="M9 5v4.4l3 2"/></g></svg>
+      <b>02</b><span class="sector-name">Turns</span>
+    </button>
+    <button class="sector" data-view="triggers" aria-label="Schedule" title="03 Schedule">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><rect x="2.5" y="3.5" width="13" height="12"/><path d="M2.5 7.5h13M6 2v3M12 2v3"/></g></svg>
+      <b>03</b><span class="sector-name">Schedule</span>
+    </button>
+    <button class="sector" data-view="cost" aria-label="Spend" title="04 Spend">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><path d="M3 15.5V9M8 15.5V4M13 15.5v-4"/></g></svg>
+      <b>04</b><span class="sector-name">Spend</span>
+    </button>
+    <button class="sector" data-view="health" aria-label="Systems" title="05 Systems">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><path d="M2 9.5h3.4l2-4.5 2.6 9 2-4.5H16"/></g></svg>
+      <b>05</b><span class="sector-name">Systems</span>
+    </button>
+    <button class="sector" data-view="memory" aria-label="Brain" title="06 Brain">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><circle cx="9" cy="9" r="2.4"/><circle cx="3" cy="4" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="4" cy="14.5" r="1.4"/><circle cx="14.5" cy="14" r="1.4"/><path d="M7 7.5 4.2 5.2M11 7.8 13.7 6M7.4 10.6 5 13.3M10.8 10.5 13.3 12.9"/></g></svg>
+      <b>06</b><span class="sector-name">Brain</span>
+    </button>
+    <button class="sector" data-view="host" aria-label="Host" title="07 Host">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><rect x="4" y="4" width="10" height="10"/><path d="M7 1.5v2.5M11 1.5v2.5M7 14v2.5M11 14v2.5M1.5 7H4M1.5 11H4M14 7h2.5M14 11h2.5"/></g></svg>
+      <b>07</b><span class="sector-name">Host</span>
+    </button>
+    <!-- Rail footer: the two facts worth carrying between sectors. Narrow
+         now, so the words go and the marks stay. -->
     <div id="rail-foot">
-      <div class="rail-stat"><span id="rail-state">—</span></div>
+      <div class="rail-stat" title="state"><span id="rail-state">—</span></div>
       <div class="rail-bar"><span id="rail-budget"></span></div>
-      <div class="rail-meta" id="rail-meta">read-only</div>
+      <div class="rail-meta" id="rail-meta" title="the panel never writes">RO</div>
     </div>
   </nav>
 
