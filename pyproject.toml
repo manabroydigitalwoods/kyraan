@@ -40,6 +40,11 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# The panel ships its page as real files (no inline script or style —
+# its CSP forbids both), so they must travel with the package.
+[tool.setuptools.package-data]
+"kyraan.panel" = ["static/*"]
+
 [tool.pytest.ini_options]
 markers = ["pg: needs the local Postgres container (auto-skips when unreachable)"]
 asyncio_mode = "auto"

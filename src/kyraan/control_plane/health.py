@@ -133,11 +133,18 @@ def _census_24h() -> Counter:
     return counts
 
 
-def report() -> tuple:
+def report(probed: list | None = None) -> tuple:
     """(verdict, text): verdict 'OK'|'WARN'|'FAIL', text = the full
-    human-readable report ending in the needs-work list."""
+    human-readable report ending in the needs-work list.
+
+    `probed` accepts an already-run component sweep. The probes make real
+    network calls (searxng alone waits up to 8s), so a caller that wants
+    BOTH the structured component list and this text — the web panel's
+    system console does — passes its own sweep rather than paying for a
+    second one.
+    """
     lines, needs_work = [], []
-    components = _probe_components()
+    components = _probe_components() if probed is None else probed
     lines.append("COMPONENTS:")
     for name, status, detail in components:
         lines.append(f"  {'✅' if status == 'OK' else '❌'} {name}: {detail}")

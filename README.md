@@ -130,6 +130,29 @@ Cost notes and free-tier landmines are documented inline in the YAML.
 
 ## Dev tools
 
+`scripts/panel.py` is the web panel — read-only mission control over what
+Kyraan already logs. The overview deck shows six consoles at once
+(systems, budget with a 7-day sparkline, schedule with overdue jobs, the
+live event tail, top turns by tokens, and the 24h anomaly census); five
+more sectors open the same data full-screen, including per-turn forensics
+with every model call, tool call and timing, and a brain view that draws the
+whole second brain as one graph — memories, the people they are about,
+queued work, and skills — wired by embedding similarity, stored triples,
+and which tools actually fire in the same turn, with live neuron pulses
+off the event stream. Every sector is a
+real URL, so a reload or a shared link lands on the same view with the
+same filters. It binds 127.0.0.1 and
+prints a URL carrying a one-time token; reach it from a phone over
+Tailscale, never a forwarded port. It writes nothing — see
+[docs/design/web_panel.md](docs/design/web_panel.md) for why that matters
+and what Phases B-D would add. The look is a CRT phosphor terminal: amber,
+green, or P1 blue, switched from the header and remembered per browser.
+
+```bash
+python scripts/panel.py                      # http://127.0.0.1:8765
+KYRAAN_PANEL_TOKEN=... python scripts/panel.py   # a URL that survives restarts
+```
+
 `scripts/chat.py` (CLI) and `scripts/tui.py` (full-screen Textual
 dashboard) exercise the real orchestrator without Telegram. The TUI shows
 per-turn provider/model/latency/tokens, cost vs. budget, collapsible
@@ -170,4 +193,7 @@ after the switch is engaged does nothing.
 - `config/permissions.yaml` — every skill and tool with its permission
   level; write tools are confirm-gated by a validator that refuses to load
   anything else
+- `src/kyraan/panel/` — the read-only web panel (Phase A): queries over
+  the logs and stores, a stdlib HTTP server, and a page that builds every
+  node with textContent
 - `docker/` — compose file + container configs (SearXNG, Home Assistant)

@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Kyraan — mission control</title>
+<meta name="color-scheme" content="dark">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+
+<!-- Status rail. Always visible, never scrolls away: in a command centre
+     the vitals are not something you navigate to. -->
+<header id="strip">
+  <h1>Kyraan</h1>
+  <div class="readouts" id="readouts"></div>
+  <span class="spacer"></span>
+  <div id="phosphor" title="phosphor">
+    <button type="button" data-phosphor="amber" aria-label="amber phosphor">A</button>
+    <button type="button" data-phosphor="green" aria-label="green phosphor">G</button>
+    <button type="button" data-phosphor="blue" aria-label="blue phosphor">B</button>
+  </div>
+  <span class="stamp" id="stamp">connecting…</span>
+</header>
+
+<div id="deck">
+  <!-- Sector rail: the six consoles, always in the same place, so the
+       eye learns positions rather than re-reading labels. -->
+  <nav id="rail">
+    <button class="sector on" data-view="overview"><b>00</b>Overview</button>
+    <button class="sector" data-view="stream"><b>01</b>Stream</button>
+    <button class="sector" data-view="turns"><b>02</b>Turns</button>
+    <button class="sector" data-view="triggers"><b>03</b>Schedule</button>
+    <button class="sector" data-view="cost"><b>04</b>Spend</button>
+    <button class="sector" data-view="health"><b>05</b>Systems</button>
+    <button class="sector" data-view="memory"><b>06</b>Brain</button>
+  </nav>
+
+  <main>
+    <!-- 00 — the deck itself: every console at once. -->
+    <section id="view-overview" class="view on">
+      <div class="grid">
+        <section class="console span2">
+          <h2>Systems <span class="verdict" id="system-verdict">—</span></h2>
+          <div class="console-body" id="system-body"></div>
+        </section>
+
+        <section class="console">
+          <h2>Budget <span class="verdict" id="budget-verdict">—</span></h2>
+          <div class="console-body" id="budget-body"></div>
+        </section>
+
+        <section class="console">
+          <h2>Schedule <span class="verdict" id="schedule-verdict">—</span></h2>
+          <div class="console-body" id="schedule-body"></div>
+        </section>
+
+        <section class="console span2">
+          <h2>Activity <span class="verdict" id="ticker-verdict">—</span></h2>
+          <div class="console-body tight" id="ticker-body"></div>
+        </section>
+
+        <section class="console span2">
+          <h2>Top consumers <span class="verdict">24h · by tokens</span></h2>
+          <div class="console-body tight" id="consumers-body"></div>
+        </section>
+
+        <section class="console span2">
+          <h2>Anomalies <span class="verdict" id="anomaly-verdict">—</span></h2>
+          <div class="console-body tight" id="anomaly-body"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="view-stream" class="view">
+      <div class="controls">
+        <input id="stream-q" type="search" placeholder="filter (substring)" autocomplete="off">
+        <label><input type="checkbox" id="stream-anomalies"> anomalies only</label>
+        <label><input type="checkbox" id="stream-live" checked> live</label>
+        <button id="stream-clear" type="button">clear</button>
+        <span class="tool-filter" id="stream-tools"></span>
+        <span class="note" id="stream-note"></span>
+      </div>
+      <div id="stream-rows" class="rows"></div>
+    </section>
+
+    <section id="view-turns" class="view">
+      <div class="controls">
+        <label>sort
+          <select id="turns-sort">
+            <option value="recent">most recent</option>
+            <option value="tokens">most tokens</option>
+            <option value="cost">most cost</option>
+            <option value="slow">slowest</option>
+          </select>
+        </label>
+        <label>window
+          <select id="turns-hours">
+            <option value="24">24h</option>
+            <option value="72">3d</option>
+            <option value="168">7d</option>
+          </select>
+        </label>
+        <button id="turns-refresh" type="button">refresh</button>
+        <span class="tool-filter" id="turns-tools"></span>
+        <span class="note" id="turns-note"></span>
+      </div>
+      <!-- Detail above the list: clicking row 80 of 100 and being sent to
+           a panel below the fold is how a forensics view gets ignored. -->
+      <div id="turn-detail" class="detail"></div>
+      <div id="turns-rows" class="rows"></div>
+    </section>
+
+    <section id="view-triggers" class="view">
+      <div class="controls">
+        <button id="triggers-refresh" type="button">refresh</button>
+        <span class="note" id="triggers-note"></span>
+      </div>
+      <div id="triggers-rows" class="rows"></div>
+    </section>
+
+    <section id="view-cost" class="view">
+      <div class="controls">
+        <label>days
+          <select id="cost-days">
+            <option value="7">7</option>
+            <option value="14">14</option>
+            <option value="31">31</option>
+          </select>
+        </label>
+        <button id="cost-refresh" type="button">refresh</button>
+        <span class="note" id="cost-note"></span>
+      </div>
+      <div id="cost-body"></div>
+    </section>
+
+    <section id="view-memory" class="view">
+      <div class="controls">
+        <label>colour
+          <select id="mem-colour">
+            <option value="lobe">lobe</option>
+            <option value="group">group</option>
+            <option value="subject">subject</option>
+            <option value="kind">kind</option>
+          </select>
+        </label>
+        <span class="group-label">lobes</span>
+        <label><input type="checkbox" id="show-memory" checked> memory</label>
+        <label><input type="checkbox" id="show-person" checked> people</label>
+        <label><input type="checkbox" id="show-task" checked> work</label>
+        <label><input type="checkbox" id="show-skill" checked> skills</label>
+        <span class="group-label">wiring</span>
+        <label><input type="checkbox" id="edge-synapse" checked> synapses</label>
+        <label><input type="checkbox" id="edge-coactivation" checked> co-firing</label>
+        <label><input type="checkbox" id="edge-relation" checked> relations</label>
+        <label><input type="checkbox" id="edge-structure" checked> structure</label>
+        <label title="cosine floor for a synapse">mesh
+          <input type="range" id="mem-floor" min="0.25" max="0.85" step="0.05" value="0.45">
+          <span class="readout-value" id="mem-floor-value">0.45</span>
+        </label>
+        <button id="mem-fit" type="button">fit</button>
+        <button id="mem-reset" type="button">reset</button>
+        <span class="note" id="mem-note"></span>
+      </div>
+      <p class="hint">drag a neuron to move it · shift-drag to pick a group ·
+        double-click to zoom into its cluster · wheel to zoom · esc clears</p>
+      <div class="memory-layout">
+        <div class="starfield">
+          <canvas id="mem-canvas"></canvas>
+          <div class="legend" id="mem-legend"></div>
+        </div>
+        <div class="memory-side">
+          <section class="console">
+            <h2>Review gate <span class="verdict" id="gate-verdict">—</span></h2>
+            <div class="console-body" id="gate-body"></div>
+          </section>
+          <section class="console">
+            <h2>Selection <span class="verdict" id="pick-verdict">—</span></h2>
+            <div class="console-body" id="pick-body"></div>
+          </section>
+          <section class="console">
+            <h2>Findings <span class="verdict" id="findings-verdict">—</span></h2>
+            <div class="console-body" id="findings-body"></div>
+          </section>
+          <section class="console">
+            <h2>Wiring <span class="verdict" id="census-verdict">—</span></h2>
+            <div class="console-body" id="census-body"></div>
+          </section>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-health" class="view">
+      <div class="controls">
+        <button id="health-refresh" type="button">re-probe</button>
+        <span class="note" id="health-note"></span>
+      </div>
+      <pre id="health-body"></pre>
+    </section>
+  </main>
+</div>
+
+<footer>read-only — every control surface goes through the kernel, and none exist yet (docs/design/web_panel.md)</footer>
+<script src="/app.js"></script>
+</body>
+</html>
