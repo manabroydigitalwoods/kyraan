@@ -27,7 +27,12 @@ else:
 
 
 @pytest.fixture
-def chat_id():
+def chat_id(monkeypatch):
+    # conftest disables the action_log mirror suite-wide (every pytest run
+    # was writing real rows into production). These tests ARE the store's
+    # tests, so they opt back in — same pattern as the facts and promises
+    # pg tests — and clean up their own rows below.
+    monkeypatch.setattr(actions, "MIRROR_ENABLED", True)
     cid = -random.randrange(10**9, 10**10)  # negative: never a real chat
     yield cid
     with pg.connection() as conn:

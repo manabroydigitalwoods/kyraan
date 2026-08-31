@@ -60,6 +60,10 @@
       <svg viewBox="0 0 18 18" aria-hidden="true"><g><rect x="4" y="4" width="10" height="10"/><path d="M7 1.5v2.5M11 1.5v2.5M7 14v2.5M11 14v2.5M1.5 7H4M1.5 11H4M14 7h2.5M14 11h2.5"/></g></svg>
       <b>07</b><span class="sector-name">Host</span>
     </button>
+    <button class="sector" data-view="actions" aria-label="Actions" title="08 Actions">
+      <svg viewBox="0 0 18 18" aria-hidden="true"><g><path d="M2.5 8.5a6.5 6.5 0 1 1 2 4.7"/><path d="M2.5 3.5v5h5"/></g></svg>
+      <b>08</b><span class="sector-name">Actions</span>
+    </button>
     <!-- Rail footer: the two facts worth carrying between sectors. Narrow
          now, so the words go and the marks stay. -->
     <div id="rail-foot">
@@ -292,6 +296,26 @@
           <div class="console-body tight scrolls" id="host-procs"></div>
         </section>
       </div>
+    </section>
+
+    <section id="view-actions" class="view">
+     <section class="console sector-console" data-index="08">
+      <h2 data-index="08">Actions <span class="verdict" id="actions-note"></span></h2>
+      <div class="controls">
+        <label>window
+          <select id="actions-days">
+            <option value="1">24h</option>
+            <option value="7">7d</option>
+            <option value="30" selected>30d</option>
+            <option value="365">all</option>
+          </select>
+        </label>
+        <button id="actions-refresh" type="button">refresh</button>
+        <span class="note" id="actions-summary"></span>
+      </div>
+      <div id="actions-tools" class="action-tools"></div>
+      <div id="actions-rows" class="rows fills"></div>
+     </section>
     </section>
 
     <section id="view-health" class="view">

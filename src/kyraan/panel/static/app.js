@@ -9,7 +9,7 @@
    files from disk but loads its Python once, so an edited-then-not-
    restarted panel would otherwise render new consoles against old JSON
    and simply drop whatever is missing. Must match queries.API_VERSION. */
-const EXPECTED_API = 10;
+const EXPECTED_API = 11;
 
 const $ = (id) => document.getElementById(id);
 
@@ -2321,6 +2321,89 @@ function loadHost() {
   return Promise.resolve();
 }
 
+/* --------------------------------------------------------------- actions */
+/* Sector 08 — what Kyraan has actually DONE. The other sectors answer what
+   it knows, what is scheduled, what it can do and what it cost; this is
+   the one that answers what it changed in the calendar, the reminders and
+   the memory, which is the question an owner-reviewed system exists to
+   answer.
+
+   `undoable` is a STATE here, not a button. Undoing is a write and goes
+   through the kernel in Phase C — rule 1. */
+
+const actionsState = { toolFilter: new Set() };
+
+function actionSummary(action) {
+  const args = Object.entries(action.args || {})
+    .filter(([k]) => k !== "chat_id")
+    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`)
+    .join(" ");
+  return args || "—";
+}
+
+function renderActions(data) {
+  const rows = $("actions-rows");
+  clear(rows);
+
+  const tools = $("actions-tools");
+  clear(tools);
+  for (const entry of data.by_tool) {
+    const chip = el("span", "chip-tool"
+      + (actionsState.toolFilter.size && !actionsState.toolFilter.has(entry.tool)
+         ? " off" : ""));
+    chip.appendChild(el("span", null, `${entry.tool} ${entry.count}`));
+    chip.addEventListener("click", () => {
+      if (actionsState.toolFilter.has(entry.tool)) actionsState.toolFilter.delete(entry.tool);
+      else actionsState.toolFilter.add(entry.tool);
+      renderActions(data);
+      syncUrl(false);
+    });
+    tools.appendChild(chip);
+  }
+
+  const shown = data.actions.filter(
+    (a) => !actionsState.toolFilter.size || actionsState.toolFilter.has(a.tool));
+  if (!shown.length) { empty(rows, "no actions in this window"); }
+  else {
+    const list = el("div", "rows");
+    for (const action of shown) {
+      const state = action.undone ? "undone"
+                  : action.undoable ? "undoable" : "irreversible";
+      const row = el("div", "row " + (action.undone ? "undone" : ""));
+      row.appendChild(el("span", "ts", hhmmss(action.at)));
+      row.appendChild(el("span", "kind", action.tool));
+      row.appendChild(el("span", "body", actionSummary(action)));
+      const mark = el("span", "undo-state " + state, state);
+      // The inverse is the interesting part of an undoable action: it says
+      // exactly what reversing it would run.
+      mark.title = action.undo_tool
+        ? `inverse: ${action.undo_tool}` : "no declared inverse";
+      row.appendChild(mark);
+      list.appendChild(row);
+    }
+    rows.appendChild(list);
+  }
+
+  $("actions-summary").textContent =
+    `${data.undoable} undoable · ${data.irreversible} irreversible · `
+    + `${data.undone} undone`
+    + (data.degraded ? ` · ${data.degraded}` : "");
+  verdictInto("actions-note",
+    `${shown.length} of ${data.total} · ${data.days}d`);
+}
+
+async function loadActions() {
+  const rows = $("actions-rows");
+  try {
+    const data = await api("/api/actions?limit=400&days="
+      + encodeURIComponent($("actions-days").value));
+    actionsState.last = data;
+    renderActions(data);
+  } catch (err) {
+    empty(rows, "could not load actions: " + err.message);
+  }
+}
+
 /* ---------------------------------------------------------------- health */
 
 async function loadHealth(force) {
@@ -2349,7 +2432,7 @@ async function loadHealth(force) {
 const ROUTES = {
   overview: "overview", stream: "stream", turns: "turns",
   schedule: "triggers", spend: "cost", systems: "health", brain: "memory",
-  host: "host",
+  host: "host", actions: "actions",
 };
 const VIEW_TO_ROUTE = Object.fromEntries(
   Object.entries(ROUTES).map(([route, view]) => [view, route]));
@@ -2406,6 +2489,11 @@ function collectState(view) {
     params.set("hours", $("turns-hours").value);
     if (toolFilter.turns.length) params.set("tools", toolFilter.turns.join(","));
     if (openTurnId) params.set("turn", openTurnId);
+  } else if (view === "actions") {
+    params.set("days", $("actions-days").value);
+    if (actionsState.toolFilter.size) {
+      params.set("tools", [...actionsState.toolFilter].join(","));
+    }
   } else if (view === "cost") {
     params.set("days", $("cost-days").value);
   } else if (view === "memory") {
@@ -2447,6 +2535,10 @@ function applyState(view, params) {
     toolFilter.turns = (params.get("tools") || "").split(",").filter(Boolean);
     if (params.get("sort")) $("turns-sort").value = params.get("sort");
     if (params.get("hours")) $("turns-hours").value = params.get("hours");
+  } else if (view === "actions") {
+    if (params.get("days")) $("actions-days").value = params.get("days");
+    actionsState.toolFilter = new Set(
+      (params.get("tools") || "").split(",").filter(Boolean));
   } else if (view === "cost") {
     if (params.get("days")) $("cost-days").value = params.get("days");
   } else if (view === "memory") {
@@ -2527,7 +2619,7 @@ const LOADERS = {
   overview: loadOverview,
   stream: loadStream, turns: loadTurns, triggers: loadTriggers,
   cost: loadCost, health: () => loadHealth(false), memory: loadMemory,
-  host: loadHost,
+  host: loadHost, actions: loadActions,
 };
 const loaded = new Set();
 let currentView = "overview";
@@ -2569,7 +2661,8 @@ window.addEventListener("popstate", navigate);
 for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
                   "turns-hours", "cost-days", "mem-colour", "show-memory",
                   "show-person", "show-task", "show-skill", "edge-synapse",
-                  "edge-relation", "edge-coactivation", "edge-structure"]) {
+                  "edge-relation", "edge-coactivation", "edge-structure",
+                  "actions-days"]) {
   const node = $(id);
   if (node) node.addEventListener("change", () => syncUrl(false));
 }
@@ -2583,6 +2676,8 @@ $("turns-hours").addEventListener("change", loadTurns);
 $("turns-refresh").addEventListener("click", loadTurns);
 $("triggers-refresh").addEventListener("click", loadTriggers);
 $("cost-days").addEventListener("change", loadCost);
+$("actions-days").addEventListener("change", loadActions);
+$("actions-refresh").addEventListener("click", loadActions);
 $("cost-refresh").addEventListener("click", loadCost);
 $("health-refresh").addEventListener("click", () => loadHealth(true));
 

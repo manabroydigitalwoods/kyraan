@@ -26,7 +26,7 @@ from kyraan.control_plane import logging_setup
 # predated `components`). Bump this whenever a response SHAPE changes,
 # and bump EXPECTED_API in app.js with it; the page then says so out loud
 # instead of quietly dropping a panel.
-API_VERSION = 10
+API_VERSION = 11
 
 # A turn is "overdue" for the trigger board on the same slack the
 # scheduler itself uses, so the panel and the bot never disagree about
@@ -1248,4 +1248,61 @@ def routines(hours: float = 24) -> dict:
         "timeline": rows + upcoming,
         "counts": dict(counts),
         "now": local_now().isoformat(),
+    }
+
+
+# --------------------------------------------------------------------------
+# actions — what Kyraan has actually DONE
+
+
+def actions(limit: int = 200, days: float = 30, chat_id: int | None = None) -> dict:
+    """The action log: every side-effectful tool call, with its inverse.
+
+    The panel's other sectors answer what Kyraan KNOWS, what is SCHEDULED,
+    what it CAN do and what it COST. This is the one that answers what it
+    DID to the calendar, the reminders and the memory — which is the
+    question an owner-reviewed system exists to answer.
+
+    Read-only, like everything else here: `undoable` is a STATE, not a
+    button. Undoing is a write and belongs to Phase C, through the kernel.
+    """
+    from kyraan.store import pg
+
+    limit = max(1, min(int(limit), 1000))
+    since = datetime.now(timezone.utc) - timedelta(days=max(0.1, days))
+    rows, degraded = [], ""
+    try:
+        with pg.connection() as conn, conn.cursor() as cur:
+            where = "WHERE done_at >= %s" + ("" if chat_id is None else " AND chat_id = %s")
+            params = [since] if chat_id is None else [since, chat_id]
+            cur.execute(
+                "SELECT id, chat_id, tool, args, undo_tool, undo_args, "
+                "       done_at, undone_at FROM action_log "
+                + where + " ORDER BY done_at DESC LIMIT %s", (*params, limit))
+            rows = cur.fetchall()
+    except Exception as exc:
+        degraded = f"{type(exc).__name__}: {exc}"
+
+    out = []
+    for (action_id, chat, tool, args, undo_tool, undo_args, done_at, undone_at) in rows:
+        out.append({
+            "id": str(action_id)[:8], "chat_id": chat, "tool": tool,
+            "args": args if isinstance(args, dict) else {},
+            "undo_tool": undo_tool or "",
+            "undoable": bool(undo_tool) and undone_at is None,
+            "undone": undone_at is not None,
+            "at": done_at.isoformat() if done_at else "",
+            "undone_at": undone_at.isoformat() if undone_at else "",
+        })
+
+    by_tool: Counter = Counter(r["tool"] for r in out)
+    return {
+        "actions": out,
+        "by_tool": [{"tool": t, "count": n} for t, n in by_tool.most_common()],
+        "total": len(out),
+        "undoable": sum(1 for r in out if r["undoable"]),
+        "undone": sum(1 for r in out if r["undone"]),
+        "irreversible": sum(1 for r in out if not r["undo_tool"]),
+        "days": days,
+        "degraded": degraded,
     }

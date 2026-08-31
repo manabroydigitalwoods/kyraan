@@ -906,3 +906,82 @@ def test_people_come_from_the_registry_not_only_from_facts(monkeypatch, tmp_path
     subjects = {n["subject"] for n in graph["nodes"] if n["type"] == "memory"}
     assert people - subjects, "registry adds nobody — the join is fact-only again"
     assert any(n.get("registered") for n in graph["nodes"] if n["type"] == "person")
+
+
+# ----------------------------------------------------------------- actions
+
+
+def _fake_action_rows(monkeypatch, rows):
+    captured = {}
+
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=()):
+            captured["sql"] = sql
+            captured["params"] = params
+        def fetchall(self): return rows
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    from kyraan.store import pg
+    monkeypatch.setattr(pg, "connection", lambda: _Conn())
+    return captured
+
+
+def test_actions_classify_undoable_irreversible_and_undone(monkeypatch):
+    """Reversibility is the column an owner scans. Three states, and they
+    must not blur: an action with no declared inverse is IRREVERSIBLE,
+    which is different from one that has already been undone."""
+    now = datetime.now(timezone.utc)
+    _fake_action_rows(monkeypatch, [
+        ("a1", 5, "reminders.create", {"text": "x"}, "reminders.cancel",
+         {"reminder_id": "r"}, now, None),
+        ("a2", 5, "documents.show", {"query": "card"}, None, None, now, None),
+        ("a3", 5, "calendar.create_event", {}, "calendar.delete_event", {},
+         now, now),
+    ])
+    result = queries.actions()
+    assert result["total"] == 3
+    assert result["undoable"] == 1
+    assert result["irreversible"] == 1
+    assert result["undone"] == 1
+    states = {a["tool"]: (a["undoable"], a["undone"]) for a in result["actions"]}
+    assert states["reminders.create"] == (True, False)
+    assert states["documents.show"] == (False, False)
+    # An undone action is NOT undoable any more, even though it has an
+    # inverse — otherwise the panel would invite reversing it twice.
+    assert states["calendar.create_event"] == (False, True)
+
+
+def test_actions_can_be_narrowed_to_one_chat(monkeypatch):
+    captured = _fake_action_rows(monkeypatch, [])
+    queries.actions(chat_id=6755024720)
+    assert "chat_id = %s" in captured["sql"]
+    assert 6755024720 in captured["params"]
+    queries.actions()
+    assert "chat_id = %s" not in captured["sql"]
+
+
+def test_actions_degrade_instead_of_failing_when_postgres_is_down(monkeypatch):
+    from kyraan.store import pg
+    monkeypatch.setattr(pg, "connection",
+                        lambda: (_ for _ in ()).throw(RuntimeError("pg down")))
+    result = queries.actions()
+    assert result["actions"] == [] and result["total"] == 0
+    assert "pg down" in result["degraded"]
+
+
+def test_the_action_log_mirror_is_off_under_test():
+    """Regression for the leak: every pytest run was writing real rows into
+    the production action_log — 2,450 test rows against 33 real ones by the
+    time it was noticed. Undo history is a safety surface; it has to be the
+    owner's actions and nobody else's."""
+    from kyraan.store import actions as actions_store
+    assert actions_store.MIRROR_ENABLED is False
+    # And the write path honours the switch rather than only being patched
+    # at the call sites.
+    assert actions_store.record(90, "reminders.create", {}, None, None)

@@ -355,6 +355,38 @@ taken first):
   Three separate facts saying Kiaan is the owner's son is agreement, not
   three relationships.
 
+## Sector 08 — what it actually did (2026-08-31)
+
+The other sectors answer what Kyraan KNOWS, what is SCHEDULED, what it CAN
+do and what it COST. `action_log` answers what it DID — to the calendar,
+the reminders, the memory — and nothing surfaced it. For an
+owner-reviewed system that is the question the whole design exists to
+answer, so it was the largest gap in the panel.
+
+Every side-effectful call with its declared inverse, in three states that
+must not blur: **undoable** (has an inverse, not yet used), **undone**
+(already reversed — no longer undoable, or the panel would invite
+reversing it twice), and **irreversible** (no inverse was ever declared).
+Filter chips per tool; the inverse is in the tooltip, because "what would
+reversing this run" is the thing you want before you decide.
+
+`undoable` is a STATE, not a button. Undoing is a write and goes through
+the kernel in Phase C — rule 1.
+
+**Building it found a live data leak.** The table held 2,473 rows and 2,450
+of them were from chat ids 90 and 93 — the synthetic chats in
+`tests/test_agent_loop.py`. `store/actions.py` had no `MIRROR_ENABLED`
+gate, unlike `facts.py` and `promises.py`, so every `pytest` run wrote
+real rows into production; the owner had 32 actions against 2,450 fakes.
+Fixed at the source (gate added, conftest flips it off suite-wide, the
+store's own pg tests opt back in and clean up after themselves), the test
+rows purged after a snapshot, and pinned by a test. A full suite run now
+leaves the table at 33.
+
+That is the same failure as the eval fixtures in the memory tree, in a
+worse place: the undo history is a safety surface, and it has to be the
+owner's actions and nobody else's.
+
 ## Sector 07 — the machine (2026-08-31)
 
 Two halves of one question, and neither source can answer for the other.

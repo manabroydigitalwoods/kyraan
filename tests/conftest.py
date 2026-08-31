@@ -35,9 +35,14 @@ def _no_fact_mirroring(monkeypatch, tmp_path):
     """The memory tree is isolated below, but the P3.2a/P3.2d mirrors
     would still write into the LIVE Postgres container — off by default;
     the pg-marked sync tests re-enable them and clean up their own rows."""
-    from kyraan.store import facts, promises, sync_state, triples
+    from kyraan.store import actions, facts, promises, sync_state, triples
     monkeypatch.setattr(facts, "MIRROR_ENABLED", False)
     monkeypatch.setattr(promises, "MIRROR_ENABLED", False)
+    # The action_log was NOT covered here and every run wrote into the
+    # production table — 2,450 test rows against 33 real ones by the time
+    # it was noticed (2026-08-31). Undo history is a safety surface; it
+    # must be the owner's actions only.
+    monkeypatch.setattr(actions, "MIRROR_ENABLED", False)
     monkeypatch.setattr(triples, "EXTRACT_ENABLED", False)
     # sync_state persists to data/pg_sync_state.json — a pg-down TEST
     # wrote a real stale mark and live reads then refused PG for hours

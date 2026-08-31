@@ -17,6 +17,13 @@ from datetime import datetime, timezone
 
 from kyraan.store import pg
 
+# Suite-wide kill switch, the same pattern facts.py and promises.py use.
+# Without it every pytest run wrote real rows into the production
+# action_log: found 2026-08-31 with 2,450 of 2,473 rows belonging to the
+# test chat ids 90 and 93, against 33 real ones. The undo history is a
+# safety surface — it has to be the owner's actions and nobody else's.
+MIRROR_ENABLED = True
+
 
 @dataclass(frozen=True)
 class Action:
@@ -38,6 +45,8 @@ def record(chat_id: int, tool: str, args: dict,
            undo_tool: str | None, undo_args: dict | None) -> str:
     """Log one executed write. Returns the action id."""
     action_id = str(uuid.uuid4())
+    if not MIRROR_ENABLED:
+        return action_id
     with pg.connection() as conn:
         conn.execute(
             """INSERT INTO action_log
