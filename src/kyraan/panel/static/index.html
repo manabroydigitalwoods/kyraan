@@ -35,6 +35,7 @@
     <button class="sector" data-view="cost"><b>04</b>Spend</button>
     <button class="sector" data-view="health"><b>05</b>Systems</button>
     <button class="sector" data-view="memory"><b>06</b>Brain</button>
+    <button class="sector" data-view="host"><b>07</b>Host</button>
     <!-- Rail footer: the two facts worth carrying between sectors — is it
          halted, and how much of today's budget is gone. Both live in the
          header too, but the rail is what the eye rests on. -->
@@ -211,6 +212,38 @@
         </div>
       </div>
      </section>
+    </section>
+
+    <section id="view-host" class="view">
+      <div class="grid">
+        <section class="console span4 strip" data-index="07">
+          <h2 data-index="07">Machine <span class="verdict" id="host-verdict">—</span></h2>
+          <div class="console-body" id="host-gauges"></div>
+        </section>
+
+        <section class="console span4 tall" data-index="08">
+          <h2 data-index="08">Resident memory by role
+            <span class="verdict" id="host-graph-note">collecting…</span></h2>
+          <div class="console-body">
+            <canvas id="host-canvas"></canvas>
+          </div>
+        </section>
+
+        <section class="console span2" data-index="09">
+          <h2 data-index="09">Kyraan's share <span class="verdict" id="host-roles-note">—</span></h2>
+          <div class="console-body tight scrolls" id="host-roles"></div>
+        </section>
+
+        <section class="console span2" data-index="10">
+          <h2 data-index="10">Model time <span class="verdict" id="workload-note">24h</span></h2>
+          <div class="console-body tight scrolls" id="workload-body"></div>
+        </section>
+
+        <section class="console span4" data-index="11">
+          <h2 data-index="11">Processes <span class="verdict">by resident memory</span></h2>
+          <div class="console-body tight scrolls" id="host-procs"></div>
+        </section>
+      </div>
     </section>
 
     <section id="view-health" class="view">

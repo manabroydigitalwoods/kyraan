@@ -9,7 +9,7 @@
    files from disk but loads its Python once, so an edited-then-not-
    restarted panel would otherwise render new consoles against old JSON
    and simply drop whatever is missing. Must match queries.API_VERSION. */
-const EXPECTED_API = 7;
+const EXPECTED_API = 8;
 
 const $ = (id) => document.getElementById(id);
 
@@ -850,6 +850,24 @@ function hslFromAccent() {
   return { h, s: Math.max(0.4, s), l };
 }
 
+/* N colours spread around the tube's own hue. Shared by the brain's
+   palette and the host graph's stacked bands, so a role and a lobe are
+   coloured by the same rule. (This existed, was inlined into the brain's
+   buildPalette during a rewrite, and the host graph then called a name
+   that no longer resolved — a throw inside a requestAnimationFrame loop
+   fails silently, which is why the graph was simply blank.) */
+function tubeVariants(count) {
+  const base = hslFromAccent();
+  const out = [];
+  for (let i = 0; i < Math.max(1, count); i++) {
+    const spread = count > 1 ? (i / (count - 1) - 0.5) : 0;
+    out.push({ h: (base.h + spread * 82 + 360) % 360,
+               s: Math.round(base.s * 100),
+               l: Math.round(48 + spread * 15) });
+  }
+  return out;
+}
+
 function groupKey(node) {
   if (brain.colour === "lobe") return node.type;
   if (brain.colour === "group") return node.group || node.type;
@@ -858,13 +876,8 @@ function groupKey(node) {
 
 function buildPalette() {
   const keys = [...new Set(brain.nodes.map(groupKey))].sort();
-  const base = hslFromAccent();
-  brain.palette = new Map(keys.map((key, i) => {
-    const spread = keys.length > 1 ? (i / (keys.length - 1) - 0.5) : 0;
-    return [key, { h: (base.h + spread * 82 + 360) % 360,
-                   s: Math.round(base.s * 100),
-                   l: Math.round(48 + spread * 15) }];
-  }));
+  const variants = tubeVariants(keys.length);
+  brain.palette = new Map(keys.map((key, i) => [key, variants[i]]));
 }
 
 function nodeColour(node, alpha) {
@@ -1672,6 +1685,269 @@ function wireMemory() {
   }
 }
 
+/* ------------------------------------------------------------------ host */
+/* Sector 07 — the MacBook itself. Two halves of one question:
+   the OS says what is holding MEMORY (the local model, by a mile), and
+   our own audit log says where the TIME goes. Neither can answer for the
+   other: ps cannot tell a chosen call from a degraded fallback, and the
+   log cannot see six resident gigabytes. */
+
+const hostState = { history: [], roles: [], raf: null, snapshot: null };
+
+const GB = 1024 ** 3;
+function gb(bytes) { return (bytes / GB).toFixed(bytes >= 10 * GB ? 0 : 1) + " GB"; }
+
+function gauge(label, value, pct, level, note) {
+  const box = el("div", "gauge");
+  const head = el("div", "gauge-head");
+  head.appendChild(el("span", null, label));
+  head.appendChild(el("span", "gauge-value " + (level || ""), value));
+  box.appendChild(head);
+  if (pct !== null && pct !== undefined) {
+    const bar = el("div", "bar");
+    const fill = el("span", level === "ok" ? "" : level);
+    fill.style.width = Math.min(100, Math.max(0, pct)) + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+  }
+  if (note) box.appendChild(el("div", "gauge-note", note));
+  return box;
+}
+
+function renderHostGauges(snap) {
+  const body = $("host-gauges");
+  clear(body);
+  const grid = el("div", "gauges");
+
+  const load = snap.load || {};
+  // Load per CORE is the number that travels: 1.0 means fully committed,
+  // above it there is a queue. Raw load means nothing without the core count.
+  const loadLevel = load.per_core >= 1 ? "bad" : load.per_core >= 0.7 ? "warn" : "ok";
+  grid.appendChild(gauge("load / core", String(load.per_core ?? "—"),
+    (load.per_core || 0) * 100, loadLevel,
+    `${load["1m"]} · ${load["5m"]} · ${load["15m"]} over ${snap.cpus} cores`));
+
+  const mem = snap.memory || {};
+  const memLevel = mem.used_pct >= 90 ? "bad" : mem.used_pct >= 75 ? "warn" : "ok";
+  grid.appendChild(gauge("memory", `${mem.used_pct ?? "—"}%`, mem.used_pct, memLevel,
+    `${gb(mem.used || 0)} of ${gb(mem.total || 0)} · ${gb(mem.compressed || 0)} compressed`));
+
+  const disk = snap.disk || {};
+  const diskLevel = disk.used_pct >= 90 ? "bad" : disk.used_pct >= 80 ? "warn" : "ok";
+  grid.appendChild(gauge("disk", `${disk.used_pct ?? "—"}%`, disk.used_pct, diskLevel,
+    `${gb(disk.free || 0)} free`));
+
+  const batt = snap.battery || {};
+  if (batt.percent !== undefined && batt.percent !== null) {
+    grid.appendChild(gauge("power", `${batt.percent}%`, batt.percent,
+      batt.power === "ac" ? "ok" : batt.percent < 25 ? "bad" : "",
+      batt.power === "ac" ? "on mains" : "on battery — scheduled jobs still fire"));
+  }
+  body.appendChild(grid);
+
+  const worst = Math.max(load.per_core >= 1 ? 2 : load.per_core >= 0.7 ? 1 : 0,
+                         mem.used_pct >= 90 ? 2 : mem.used_pct >= 75 ? 1 : 0,
+                         disk.used_pct >= 90 ? 2 : disk.used_pct >= 80 ? 1 : 0);
+  verdictInto("host-verdict", ["nominal", "watch", "pressure"][worst],
+              ["ok", "warn", "bad"][worst]);
+}
+
+function renderHostRoles(snap) {
+  const body = $("host-roles");
+  clear(body);
+  const roles = snap.roles || [];
+  if (!roles.length) { empty(body, "no Kyraan processes found"); return; }
+  const peak = Math.max(...roles.map((r) => r.rss), 1);
+  const rows = el("div", "rows");
+  for (const role of roles) {
+    const row = el("div", "row");
+    row.appendChild(el("span", "kind", role.role));
+    const gaugeCell = el("span", "body");
+    const bar = el("div", "bar");
+    const fill = el("span");
+    fill.style.width = Math.round(role.rss / peak * 100) + "%";
+    bar.appendChild(fill);
+    gaugeCell.appendChild(bar);
+    gaugeCell.title = role.note;
+    row.appendChild(gaugeCell);
+    row.appendChild(el("span", "num", gb(role.rss)));
+    row.appendChild(el("span", "num", role.cpu.toFixed(1) + "%"));
+    rows.appendChild(row);
+  }
+  body.appendChild(rows);
+  const total = roles.reduce((sum, r) => sum + r.rss, 0);
+  const share = snap.memory && snap.memory.total
+    ? Math.round(total / snap.memory.total * 100) : null;
+  verdictInto("host-roles-note",
+    gb(total) + (share === null ? "" : ` · ${share}% of RAM`));
+}
+
+function renderHostProcesses(snap) {
+  const body = $("host-procs");
+  clear(body);
+  const rows = el("div", "rows");
+  for (const proc of (snap.processes || []).slice(0, 14)) {
+    const row = el("div", "row" + (proc.role ? " ok" : ""));
+    row.appendChild(el("span", "ts", String(proc.pid)));
+    const name = el("span", "kind", proc.name);
+    name.title = proc.command;
+    row.appendChild(name);
+    row.appendChild(el("span", "body", proc.role
+      ? `${proc.role} — ${proc.role_note}` : ""));
+    row.appendChild(el("span", "num", gb(proc.rss)));
+    row.appendChild(el("span", "num", proc.cpu.toFixed(1) + "%"));
+    rows.appendChild(row);
+  }
+  body.appendChild(rows);
+}
+
+function renderWorkload(data) {
+  const body = $("workload-body");
+  clear(body);
+  if (!data.models.length) { empty(body, "no model calls in the window"); return; }
+  const rows = el("div", "rows");
+  for (const model of data.models) {
+    const row = el("div", "row");
+    row.appendChild(el("span", "kind", model.model));
+    const gaugeCell = el("span", "body");
+    const bar = el("div", "bar");
+    const fill = el("span", model.ms_share >= 50 ? "warn" : "");
+    fill.style.width = model.ms_share + "%";
+    bar.appendChild(fill);
+    gaugeCell.appendChild(bar);
+    gaugeCell.title = `${model.calls} calls · avg ${model.avg_ms}ms`;
+    row.appendChild(gaugeCell);
+    row.appendChild(el("span", "num", model.ms_share + "%"));
+    row.appendChild(el("span", "num", (model.ms / 1000).toFixed(0) + "s"));
+    row.appendChild(el("span", "num", model.avg_ms + "ms"));
+    row.appendChild(el("span", "num", "$" + model.cost_usd.toFixed(4)));
+    rows.appendChild(row);
+  }
+  body.appendChild(rows);
+  verdictInto("workload-note", `${data.hours}h · by wall time`);
+}
+
+/* Stacked areas of resident memory per role over time, with load per core
+   drawn over it on its own scale. Stacked because the question is "what is
+   the machine holding", and a stack answers it at a glance where four
+   separate lines make you add them up yourself. */
+function drawHostGraph() {
+  const canvas = $("host-canvas");
+  if (!canvas || currentView !== "host") return;
+  const ctx = canvas.getContext("2d");
+  const ratio = window.devicePixelRatio || 1;
+  const box = canvas.getBoundingClientRect();
+  if (canvas.width !== Math.round(box.width * ratio)
+      || canvas.height !== Math.round(box.height * ratio)) {
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+  }
+  const styles = getComputedStyle(document.documentElement);
+  const dim = styles.getPropertyValue("--dim").trim() || "#888";
+  const accent = styles.getPropertyValue("--accent").trim() || "#ffb000";
+  const warn = styles.getPropertyValue("--warn").trim() || "#e0a458";
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const points = hostState.history;
+  if (points.length < 2) {
+    ctx.fillStyle = dim;
+    ctx.font = `${12 * ratio}px ui-monospace, monospace`;
+    ctx.fillText("collecting — one sample every 5s", 12 * ratio, 24 * ratio);
+    hostState.raf = requestAnimationFrame(drawHostGraph);
+    return;
+  }
+
+  const pad = { l: 8 * ratio, r: 8 * ratio, t: 10 * ratio, b: 16 * ratio };
+  const w = canvas.width - pad.l - pad.r;
+  const h = canvas.height - pad.t - pad.b;
+  const roles = [...new Set(points.flatMap((p) => Object.keys(p.roles || {})))];
+  const peak = Math.max(1, ...points.map(
+    (p) => Object.values(p.roles || {}).reduce((a, b) => a + b, 0)));
+
+  const x = (i) => pad.l + (i / (points.length - 1)) * w;
+  const y = (v) => pad.t + h - (v / peak) * h;
+
+  const hues = tubeVariants(roles.length);
+  roles.forEach((role, index) => {
+    // Stack from the bottom: each band sits on the sum of the ones below.
+    const below = roles.slice(0, index);
+    ctx.beginPath();
+    points.forEach((point, i) => {
+      const base = below.reduce((sum, r) => sum + (point.roles[r] || 0), 0);
+      const top = base + (point.roles[role] || 0);
+      if (i === 0) ctx.moveTo(x(i), y(top)); else ctx.lineTo(x(i), y(top));
+    });
+    for (let i = points.length - 1; i >= 0; i--) {
+      const base = below.reduce((sum, r) => sum + (points[i].roles[r] || 0), 0);
+      ctx.lineTo(x(i), y(base));
+    }
+    ctx.closePath();
+    const hsl = hues[index];
+    ctx.fillStyle = `hsla(${hsl.h}, ${hsl.s}%, ${hsl.l}%, 0.42)`;
+    ctx.fill();
+    ctx.strokeStyle = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+    ctx.lineWidth = ratio;
+    ctx.stroke();
+  });
+
+  // Load per core, on its own 0..2 scale, dashed so it never reads as
+  // another memory band.
+  ctx.beginPath();
+  points.forEach((point, i) => {
+    const value = Math.min(2, point.load || 0) / 2;
+    const py = pad.t + h - value * h;
+    if (i === 0) ctx.moveTo(x(i), py); else ctx.lineTo(x(i), py);
+  });
+  ctx.setLineDash([4 * ratio, 4 * ratio]);
+  ctx.strokeStyle = warn;
+  ctx.lineWidth = 1.4 * ratio;
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.font = `${10 * ratio}px ui-monospace, monospace`;
+  ctx.fillStyle = dim;
+  ctx.fillText(gb(peak), pad.l, pad.t + 9 * ratio);
+  ctx.fillText(`${points.length * 5}s window · dashed = load/core (0-2)`,
+               pad.l, canvas.height - 4 * ratio);
+
+  let legendX = pad.l;
+  roles.forEach((role, index) => {
+    const hsl = hues[index];
+    ctx.fillStyle = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+    ctx.fillRect(legendX, pad.t + 16 * ratio, 7 * ratio, 7 * ratio);
+    ctx.fillStyle = dim;
+    ctx.fillText(role, legendX + 11 * ratio, pad.t + 23 * ratio);
+    legendX += ctx.measureText(role).width + 26 * ratio;
+  });
+  void accent;
+  hostState.raf = requestAnimationFrame(drawHostGraph);
+}
+
+async function refreshHost() {
+  try {
+    const [snap, history, load] = await Promise.all([
+      api("/api/host"), api("/api/host/history"), api("/api/workload?hours=24"),
+    ]);
+    hostState.snapshot = snap;
+    hostState.history = history.points || [];
+    renderHostGauges(snap);
+    renderHostRoles(snap);
+    renderHostProcesses(snap);
+    renderWorkload(load);
+    verdictInto("host-graph-note", hostState.history.length < 2
+      ? "collecting…" : `${hostState.history.length} samples`);
+  } catch (err) {
+    empty($("host-gauges"), "host unavailable: " + err.message);
+  }
+}
+
+function loadHost() {
+  refreshHost();
+  if (hostState.raf) cancelAnimationFrame(hostState.raf);
+  drawHostGraph();
+  return Promise.resolve();
+}
+
 /* ---------------------------------------------------------------- health */
 
 async function loadHealth(force) {
@@ -1700,6 +1976,7 @@ async function loadHealth(force) {
 const ROUTES = {
   overview: "overview", stream: "stream", turns: "turns",
   schedule: "triggers", spend: "cost", systems: "health", brain: "memory",
+  host: "host",
 };
 const VIEW_TO_ROUTE = Object.fromEntries(
   Object.entries(ROUTES).map(([route, view]) => [view, route]));
@@ -1865,6 +2142,7 @@ const LOADERS = {
   overview: loadOverview,
   stream: loadStream, turns: loadTurns, triggers: loadTriggers,
   cost: loadCost, health: () => loadHealth(false), memory: loadMemory,
+  host: loadHost,
 };
 const loaded = new Set();
 let currentView = "overview";
@@ -1891,6 +2169,8 @@ function showView(name, options = {}) {
   // burn — the deck is meant to be left open for hours.
   if (name === "memory") restartBrain();
   else if (brain.raf) { cancelAnimationFrame(brain.raf); brain.raf = null; }
+  if (name === "host") { drawHostGraph(); }
+  else if (hostState.raf) { cancelAnimationFrame(hostState.raf); hostState.raf = null; }
 }
 
 for (const sector of document.querySelectorAll(".sector")) {
@@ -1926,4 +2206,6 @@ setInterval(refreshStatus, 10000);
 // The deck's slower consoles refresh on their own clock — schedule and
 // spend move in minutes, not seconds, and re-probing systems is costly.
 setInterval(() => { if (currentView === "overview") refreshDeck(); }, 60000);
+// The host view is a monitor: it refreshes on its own while it is open.
+setInterval(() => { if (currentView === "host") refreshHost(); }, 5000);
 navigate();

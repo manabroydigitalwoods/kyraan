@@ -26,7 +26,7 @@ from kyraan.control_plane import logging_setup
 # predated `components`). Bump this whenever a response SHAPE changes,
 # and bump EXPECTED_API in app.js with it; the page then says so out loud
 # instead of quietly dropping a panel.
-API_VERSION = 7
+API_VERSION = 8
 
 # A turn is "overdue" for the trigger board on the same slack the
 # scheduler itself uses, so the panel and the bot never disagree about
@@ -883,3 +883,64 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
         "synapse_floor": synapse_floor,
         "degraded": memory.get("degraded", ""),
     }
+
+
+# --------------------------------------------------------------------------
+# workload — what OUR OWN records say the models cost
+
+
+def workload(hours: float = 24) -> dict:
+    """Model calls grouped by model, with wall time as well as tokens.
+
+    The host panel answers "what is holding the machine's memory" (the
+    local model, by a mile). This answers the other half — "where does the
+    TIME and the money go" — and only the audit log can, because the OS
+    cannot see that a 6 GB llama-server process was serving a degraded
+    fallback rather than a chosen call.
+    """
+    since = _since_iso(hours)
+    by_model: dict = {}
+    total_ms = 0
+    for record in _iter_records(_event_files(), since=since, needle='"model_call"'):
+        if record.get("kind") != "model_call":
+            continue
+        key = f"{record.get('provider', '?')}/{record.get('model', '?')}"
+        row = by_model.setdefault(key, {
+            "model": key, "tier": record.get("tier", "?"), "calls": 0,
+            "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0,
+            "cost_usd": 0.0, "ms": 0, "errors": 0,
+        })
+        row["calls"] += 1
+        row["input_tokens"] += record.get("input_tokens") or 0
+        row["output_tokens"] += record.get("output_tokens") or 0
+        row["cached_tokens"] += record.get("cached_tokens") or 0
+        row["cost_usd"] = round(row["cost_usd"] + (record.get("cost_usd") or 0), 6)
+        latency = record.get("latency_ms") or 0
+        row["ms"] += latency
+        total_ms += latency
+
+    for record in _iter_records(_event_files(), since=since,
+                                needle='"model_call_error"'):
+        if record.get("kind") != "model_call_error":
+            continue
+        key = f"{record.get('provider', '?')}/{record.get('model', '?')}"
+        if key in by_model:
+            by_model[key]["errors"] += 1
+
+    rows = sorted(by_model.values(), key=lambda r: -r["ms"])
+    for row in rows:
+        row["ms_share"] = round(row["ms"] / total_ms * 100, 1) if total_ms else 0
+        row["avg_ms"] = round(row["ms"] / row["calls"]) if row["calls"] else 0
+    return {"models": rows, "total_ms": total_ms, "hours": hours}
+
+
+def host_now() -> dict:
+    from kyraan.panel import host
+    host.ensure_sampler()
+    return host.snapshot()
+
+
+def host_history() -> dict:
+    from kyraan.panel import host
+    host.ensure_sampler()
+    return host.history()

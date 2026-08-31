@@ -337,6 +337,47 @@ taken first):
   Three separate facts saying Kiaan is the owner's son is agreement, not
   three relationships.
 
+## Sector 07 — the machine (2026-08-31)
+
+Two halves of one question, and neither source can answer for the other.
+
+**The OS says what holds MEMORY.** Load per core (the number that travels
+between machines — 1.0 is fully committed), memory with macOS's real
+"used" (active + wired + compressed; free pages alone are famously
+misleading here), disk, battery, and a process table where every row is
+tagged with the PART of Kyraan it is: local model, containers, postgres,
+redis, the bot, the panel itself. A wall of paths tells you nothing; a
+role tells you what to turn off.
+
+**Our audit log says where the TIME goes.** Model calls grouped by model
+with wall time as well as tokens. `ps` cannot tell a chosen call from a
+degraded fallback, and the log cannot see six resident gigabytes.
+
+The finding on day one, from the two together: **qwen3:8b holds 5.8 GB
+resident — 98% of Kyraan's memory footprint — and burns 51% of all model
+wall time on 10% of the calls** (16.5s average against nano's 1.75s).
+That is the true price of the local fallback, and neither number alone
+would have said it.
+
+stdlib and the OS's own tools only. psutil is the obvious dependency and
+is deliberately not taken: this reads four numbers and a process table on
+one platform, and the panel's argument for existing is that it adds
+nothing to the machine it watches. History lives in a bounded deque in
+memory, which is why the graph resets on restart — persisting it would
+mean the reader starts writing, and rule 1 says it does not.
+
+Two bugs worth keeping the note for:
+
+- `ps -o comm=` gives the EXECUTABLE, so every Python service was
+  "Python" and the bot could not be told from the panel. `args=` fixes it,
+  and then the parser must be strict — a command line containing newlines
+  had a loose split parsing a continuation line as a fake process, which
+  picked up whatever role its text happened to match.
+- The graph rendered blank because it called `tubeVariants`, which had
+  been inlined away during the brain rewrite. A throw inside a
+  requestAnimationFrame loop fails silently — no console error the user
+  would ever see, just an empty canvas. It is a shared helper again.
+
 Still owed for Phase B: batch approve/reject on the review queue,
 conflict resolution, subject assignment, and the per-person visibility
 preview. Those are WRITES, so they go through the kernel per rule 1 and

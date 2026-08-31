@@ -690,3 +690,69 @@ def test_contested_and_variant_are_different_findings(monkeypatch):
                            ("f2", "kiaan", "born_on", "3_may_2024", True)])
     assert two_facts["contested"] == ["kiaan born_on"]
     assert two_facts["variants"] == []
+
+
+# ------------------------------------------------------------------- host
+
+
+def test_host_process_parser_ignores_wrapped_command_lines():
+    """A command line can contain newlines (any `python -c` with embedded
+    ones does). A loose split parsed a continuation line as a fake process,
+    which then picked up whatever role its text happened to match."""
+    from kyraan.panel import host
+
+    sample = (
+        "  501  6026976   0.1 /opt/homebrew/.../llama-server --model blobs\n"
+        "  502     1024   3.3 /usr/bin/python -c import x\n"
+        "print('this is a continuation line, not a process')\n"
+        "    for role in roles: pass\n"
+    )
+    rows = []
+    for line in sample.splitlines():
+        match = host._PS_ROW.match(line)
+        if match:
+            rows.append(match.groups())
+    assert len(rows) == 2
+    assert rows[0][0] == "501" and "llama-server" in rows[0][3]
+
+
+def test_roles_name_the_part_of_kyraan_a_process_is():
+    """A process table is a wall of paths; the useful question is which
+    PART of the system is eating the machine."""
+    from kyraan.panel import host
+
+    def role_of(command):
+        for pattern, role, _ in host._ROLES:
+            if pattern.search(command):
+                return role
+        return ""
+
+    assert role_of("/opt/homebrew/.../lib/ollama/llama-server --model x") == "local model"
+    assert role_of("/Applications/OrbStack.app/.../OrbStack Helper vmgr") == "containers"
+    assert role_of("/usr/bin/python -m kyraan.main") == "kyraan bot"
+    assert role_of("/usr/bin/python scripts/panel.py --port 8765") == "panel"
+    assert role_of("/Applications/Brave Browser.app/Contents/MacOS/Brave") == ""
+
+
+def test_workload_ranks_models_by_wall_time(seeded_logs):
+    """The host panel says what holds MEMORY; this says where the TIME
+    goes. ps cannot tell a chosen call from a degraded fallback."""
+    _write_log(logging_setup.EVENT_LOG, [
+        {"ts": _ago(minutes=5), "kind": "model_call", "provider": "ollama",
+         "model": "qwen3:8b", "tier": "cheap", "latency_ms": 16000,
+         "input_tokens": 900, "output_tokens": 40, "cost_usd": 0},
+        {"ts": _ago(minutes=4), "kind": "model_call", "provider": "openai",
+         "model": "gpt-5.4-nano", "tier": "frontier", "latency_ms": 1800,
+         "input_tokens": 9000, "output_tokens": 120, "cost_usd": 0.0009},
+        {"ts": _ago(minutes=3), "kind": "model_call", "provider": "openai",
+         "model": "gpt-5.4-nano", "tier": "frontier", "latency_ms": 1600,
+         "input_tokens": 8000, "output_tokens": 90, "cost_usd": 0.0008},
+    ])
+    result = queries.workload(hours=2)
+    slowest = result["models"][0]
+    # One local call outweighs two cloud calls on wall time while costing
+    # nothing — which is exactly the trade the panel exists to show.
+    assert slowest["model"] == "ollama/qwen3:8b"
+    assert slowest["calls"] == 1 and slowest["avg_ms"] == 16000
+    assert slowest["ms_share"] > 50
+    assert result["models"][1]["cost_usd"] > 0 and slowest["cost_usd"] == 0
