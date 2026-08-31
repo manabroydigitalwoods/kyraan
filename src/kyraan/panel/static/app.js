@@ -70,8 +70,12 @@ const tokens = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n || 0);
 function summarize(event) {
   const skip = new Set(["ts", "kind", "turn_id"]);
   switch (event.kind) {
-    case "tool_call":
-      return `${event.tool || event.skill || "?"} ${JSON.stringify(event.args || {})}`;
+    case "tool_call": {
+      const args = Object.entries(event.args || {})
+        .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`)
+        .join(" ");
+      return `${event.tool || event.skill || "?"} ${args}`;
+    }
     case "tool_result":
       return `${event.tool || event.skill || "?"} ${event.ok ? "ok" : "FAILED: " + (event.error || "")}` +
              (event.duration_ms != null ? ` ${event.duration_ms}ms` : "");
@@ -81,12 +85,53 @@ function summarize(event) {
              `$${(event.cost_usd || 0).toFixed(5)}`;
     case "turn_health":
       return event.anomaly_count ? `${event.anomaly_count} anomalies` : "clean";
-    default: {
-      const rest = {};
-      for (const [k, v] of Object.entries(event)) if (!skip.has(k)) rest[k] = v;
-      return JSON.stringify(rest);
-    }
+    case "reminder_recurred":
+      return "next " + shortWhen(event.next);
+    case "wake_armed":
+      return "armed " + shortWhen(event.at) + " for " + shortWhen(event.due);
+    case "episodes_ingested":
+      return `${event.episodes} episodes` +
+             (event.days ? ` (${[].concat(event.days).join(", ")})` : "");
+    case "history_seeded":
+      return `${event.chats} chats`;
+    default:
+      return compact(event, skip);
   }
+}
+
+/* Braces, quotes and colons are 30% of a JSON row and none of it is
+   information. A stream you read for hours should read as fields, not as
+   a serialisation format. Ids are truncated — they exist to be matched,
+   not read — and timestamps become clock times. */
+function compact(event, skip) {
+  const parts = [];
+  for (const [key, value] of Object.entries(event)) {
+    if (skip.has(key) || value === null || value === undefined) continue;
+    let text;
+    if (Array.isArray(value)) text = value.join(", ");
+    else if (typeof value === "object") text = JSON.stringify(value);
+    else text = String(value);
+    if (text === "") continue;
+    if (key.endsWith("_id")) text = text.slice(0, 8);
+    else if (ISO_LIKE.test(text)) text = shortWhen(text);
+    if (text.length > 58) text = text.slice(0, 58) + "…";
+    parts.push(key + " " + text);
+  }
+  return parts.join("   ");
+}
+
+const ISO_LIKE = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+
+/* A time today shows as a clock; another day keeps its date. */
+function shortWhen(value) {
+  if (typeof value !== "string") return String(value ?? "");
+  const when = new Date(value.replace(" ", "T"));
+  if (isNaN(when.getTime())) return value;
+  const today = new Date();
+  const sameDay = when.toDateString() === today.toDateString();
+  const clock = when.toLocaleTimeString([], { hour12: false,
+                                              hour: "2-digit", minute: "2-digit" });
+  return sameDay ? clock : `${when.toLocaleDateString()} ${clock}`;
 }
 
 function eventRow(event, anomalyKinds) {
@@ -179,6 +224,22 @@ async function refreshStatus() {
     rail.appendChild(readout("anomalous",
       `${day.anomalous_turns || 0}  ${rate}%`,
       rate >= 25 ? "bad" : rate > 0 ? "warn" : "ok"));
+
+    // The rail carries the same two facts between sectors, because the
+    // rail is what the eye rests on when the header is not.
+    const railState = $("rail-state");
+    if (railState) {
+      railState.textContent = kill.engaged ? "halted" : "running";
+      railState.parentElement.className =
+        "rail-stat " + (kill.engaged ? "bad" : "ok");
+    }
+    const railBudget = $("rail-budget");
+    if (railBudget) {
+      railBudget.style.width = Math.min(100, pct || 0) + "%";
+      railBudget.className = budgetLevel(pct) === "ok" ? "" : budgetLevel(pct);
+      railBudget.parentElement.title =
+        `$${(budget.spent_today_usd || 0).toFixed(4)} of $${budget.daily_budget_usd} today`;
+    }
 
     $("stamp").textContent = hhmmss(status.now);
     if (currentView === "overview") { renderBudgetConsole(); }

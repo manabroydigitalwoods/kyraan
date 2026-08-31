@@ -155,6 +155,50 @@ Dark-only, deliberately: there is no light-mode CRT, and a phosphor
 palette inverted onto paper is neither retro nor readable. One owner, one
 machine, so it commits.
 
+**The shell is a HUD** (design pass, 2026-08-31). Consoles carry corner
+brackets and a notched top-right corner — drawn as gradient bars and a
+clip-path, so no extra markup and the tube colours them. Each console
+wears its sector index in the frame, headers sit on a rule that fades out
+rather than stopping dead, and the scrollbars are in the palette (an
+OS-grey bar inside a phosphor frame was the one piece of chrome that gave
+away that this is a web page).
+
+Three layout faults the pass fixed, all of them the same mistake — space
+spent on nothing:
+
+- The deck stretched every console to its row's tallest, so the systems
+  strip padded out a quarter of the screen holding one line. Rows are
+  content-sized now (`align-items: start`), with only the last row taking
+  the slack so the deck reaches the footer.
+- Anomalies sat in a half-empty row leaving two dead columns. Regrouped:
+  a full-width lamp strip, then the three numbers you check first, then
+  the two long lists side by side and equal.
+- Console titles centred themselves, because `space-between` was spreading
+  index, name and verdict evenly. The index and name belong together.
+
+**One shell for every sector.** The overview was a HUD and the other five
+views were bare divs on a background — the same app speaking two visual
+languages. Each sector is now a console with its own index and frame, its
+controls in a tinted bar under the header, its status in the header's
+verdict slot, and its content scrolling INSIDE the frame so the page never
+scrolls the chrome off the top.
+
+**The rail carries state.** It runs full height with a footer pinned to
+the bottom: halted-or-running, the budget bar, and the read-only mark.
+All three exist in the header too, but the rail is what the eye rests on
+while reading a sector, and a status you have to look up is a status you
+stop checking.
+
+The blinking cursor is now scoped to the live tail alone. Once the notes
+moved into headers it was rendering on six of them at once, which reads
+as a fault light rather than a heartbeat.
+
+And the content was the real clutter: the activity stream was printing
+raw JSON, where braces, quotes and colons are a third of the row and none
+of it is information. Events render as fields now, ids truncate to eight
+characters (they exist to be matched, not read), and timestamps become
+clock times.
+
 **Version skew is the panel's own trap, and it is now loud.** The server
 serves its page from disk on every request but imports its Python once,
 so editing `queries.py` while the panel runs leaves a NEW page talking to

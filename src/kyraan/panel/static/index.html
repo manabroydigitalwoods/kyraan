@@ -35,57 +35,73 @@
     <button class="sector" data-view="cost"><b>04</b>Spend</button>
     <button class="sector" data-view="health"><b>05</b>Systems</button>
     <button class="sector" data-view="memory"><b>06</b>Brain</button>
+    <!-- Rail footer: the two facts worth carrying between sectors — is it
+         halted, and how much of today's budget is gone. Both live in the
+         header too, but the rail is what the eye rests on. -->
+    <div id="rail-foot">
+      <div class="rail-stat"><span id="rail-state">—</span></div>
+      <div class="rail-bar"><span id="rail-budget"></span></div>
+      <div class="rail-meta" id="rail-meta">read-only</div>
+    </div>
   </nav>
 
   <main>
     <!-- 00 — the deck itself: every console at once. -->
     <section id="view-overview" class="view on">
       <div class="grid">
-        <section class="console span2">
-          <h2>Systems <span class="verdict" id="system-verdict">—</span></h2>
+        <!-- Row 1: a lamp strip. It is one line of content and was
+             occupying a quarter of the deck as empty panel. -->
+        <section class="console span4 strip" data-index="00">
+          <h2 data-index="00">Systems <span class="verdict" id="system-verdict">—</span></h2>
           <div class="console-body" id="system-body"></div>
         </section>
 
-        <section class="console">
-          <h2>Budget <span class="verdict" id="budget-verdict">—</span></h2>
+        <!-- Row 2: the three numbers you check first. -->
+        <section class="console" data-index="01">
+          <h2 data-index="01">Budget <span class="verdict" id="budget-verdict">—</span></h2>
           <div class="console-body" id="budget-body"></div>
         </section>
 
-        <section class="console">
-          <h2>Schedule <span class="verdict" id="schedule-verdict">—</span></h2>
-          <div class="console-body" id="schedule-body"></div>
+        <section class="console" data-index="02">
+          <h2 data-index="02">Schedule <span class="verdict" id="schedule-verdict">—</span></h2>
+          <div class="console-body tight scrolls" id="schedule-body"></div>
         </section>
 
-        <section class="console span2">
-          <h2>Activity <span class="verdict" id="ticker-verdict">—</span></h2>
-          <div class="console-body tight" id="ticker-body"></div>
+        <section class="console span2" data-index="03">
+          <h2 data-index="03">Anomalies <span class="verdict" id="anomaly-verdict">—</span></h2>
+          <div class="console-body tight scrolls" id="anomaly-body"></div>
         </section>
 
-        <section class="console span2">
-          <h2>Top consumers <span class="verdict">24h · by tokens</span></h2>
-          <div class="console-body tight" id="consumers-body"></div>
+        <!-- Row 3: the two long lists, side by side and equal. -->
+        <section class="console span2 tall" data-index="04">
+          <h2 data-index="04">Activity <span class="verdict" id="ticker-verdict">—</span></h2>
+          <div class="console-body tight scrolls" id="ticker-body"></div>
         </section>
 
-        <section class="console span2">
-          <h2>Anomalies <span class="verdict" id="anomaly-verdict">—</span></h2>
-          <div class="console-body tight" id="anomaly-body"></div>
+        <section class="console span2 tall" data-index="05">
+          <h2 data-index="05">Top consumers <span class="verdict">24h · by tokens</span></h2>
+          <div class="console-body tight scrolls" id="consumers-body"></div>
         </section>
       </div>
     </section>
 
     <section id="view-stream" class="view">
+     <section class="console sector-console" data-index="01">
+      <h2 data-index="01">Stream <span class="verdict" id="stream-note"></span></h2>
       <div class="controls">
         <input id="stream-q" type="search" placeholder="filter (substring)" autocomplete="off">
         <label><input type="checkbox" id="stream-anomalies"> anomalies only</label>
         <label><input type="checkbox" id="stream-live" checked> live</label>
         <button id="stream-clear" type="button">clear</button>
         <span class="tool-filter" id="stream-tools"></span>
-        <span class="note" id="stream-note"></span>
       </div>
-      <div id="stream-rows" class="rows"></div>
+      <div id="stream-rows" class="rows fills"></div>
+     </section>
     </section>
 
     <section id="view-turns" class="view">
+     <section class="console sector-console" data-index="02">
+      <h2 data-index="02">Turns <span class="verdict" id="turns-note"></span></h2>
       <div class="controls">
         <label>sort
           <select id="turns-sort">
@@ -104,23 +120,27 @@
         </label>
         <button id="turns-refresh" type="button">refresh</button>
         <span class="tool-filter" id="turns-tools"></span>
-        <span class="note" id="turns-note"></span>
       </div>
       <!-- Detail above the list: clicking row 80 of 100 and being sent to
            a panel below the fold is how a forensics view gets ignored. -->
       <div id="turn-detail" class="detail"></div>
-      <div id="turns-rows" class="rows"></div>
+      <div id="turns-rows" class="rows fills"></div>
+     </section>
     </section>
 
     <section id="view-triggers" class="view">
+     <section class="console sector-console" data-index="03">
+      <h2 data-index="03">Schedule <span class="verdict" id="triggers-note"></span></h2>
       <div class="controls">
         <button id="triggers-refresh" type="button">refresh</button>
-        <span class="note" id="triggers-note"></span>
       </div>
-      <div id="triggers-rows" class="rows"></div>
+      <div id="triggers-rows" class="rows fills"></div>
+     </section>
     </section>
 
     <section id="view-cost" class="view">
+     <section class="console sector-console" data-index="04">
+      <h2 data-index="04">Spend <span class="verdict" id="cost-note"></span></h2>
       <div class="controls">
         <label>days
           <select id="cost-days">
@@ -130,12 +150,14 @@
           </select>
         </label>
         <button id="cost-refresh" type="button">refresh</button>
-        <span class="note" id="cost-note"></span>
       </div>
-      <div id="cost-body"></div>
+      <div id="cost-body" class="fills"></div>
+     </section>
     </section>
 
     <section id="view-memory" class="view">
+     <section class="console sector-console" data-index="06">
+      <h2 data-index="06">Brain <span class="verdict" id="mem-note"></span></h2>
       <div class="controls">
         <label>colour
           <select id="mem-colour">
@@ -161,7 +183,6 @@
         </label>
         <button id="mem-fit" type="button">fit</button>
         <button id="mem-reset" type="button">reset</button>
-        <span class="note" id="mem-note"></span>
       </div>
       <p class="hint">drag a neuron to move it · shift-drag to pick a group ·
         double-click to zoom into its cluster · wheel to zoom · esc clears</p>
@@ -189,14 +210,17 @@
           </section>
         </div>
       </div>
+     </section>
     </section>
 
     <section id="view-health" class="view">
+     <section class="console sector-console" data-index="05">
+      <h2 data-index="05">Systems <span class="verdict" id="health-note"></span></h2>
       <div class="controls">
         <button id="health-refresh" type="button">re-probe</button>
-        <span class="note" id="health-note"></span>
       </div>
-      <pre id="health-body"></pre>
+      <pre id="health-body" class="fills"></pre>
+     </section>
     </section>
   </main>
 </div>

@@ -73,9 +73,10 @@ body {
 
 header {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 9px 16px;
+  padding: 7px 16px;
   background: var(--panel);
-  border-bottom: 3px double var(--line-hot);
+  border-bottom: 1px solid var(--line-hot);
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 22%, transparent);
   position: sticky; top: 0; z-index: 3;
 }
 h1 {
@@ -123,11 +124,18 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 #deck { display: flex; align-items: stretch; min-height: calc(100vh - 92px); }
 
 #rail {
-  flex: 0 0 132px; background: var(--panel);
-  border-right: 3px double var(--line-hot);
-  padding: 10px 0; display: flex; flex-direction: column;
-  position: sticky; top: 44px; align-self: flex-start;
-  max-height: calc(100vh - 44px); overflow-y: auto;
+  flex: 0 0 138px; background: var(--panel);
+  border-right: 1px solid var(--line-hot);
+  padding: 12px 0; display: flex; flex-direction: column; gap: 1px;
+  position: sticky; top: 44px; align-self: stretch;
+  /* Full height, not content height: the footer pins to the bottom with
+     margin-top:auto, which needs somewhere to push against. */
+  height: calc(100vh - 44px); overflow-y: auto;
+}
+#rail::before {
+  content: "sector";
+  font-size: 9px; letter-spacing: .3em; text-transform: uppercase;
+  color: var(--dim); opacity: .65; padding: 0 12px 8px;
 }
 .sector {
   background: none; border: none; border-left: 3px solid transparent;
@@ -141,8 +149,12 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 .sector:hover { color: var(--text); background: rgba(255, 255, 255, .03); }
 .sector.on {
   color: var(--accent); border-left-color: var(--accent);
-  background: rgba(255, 255, 255, .04);
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 14%, transparent), transparent 82%);
   text-shadow: 0 0 8px var(--glow);
+}
+.sector.on::after {
+  content: "\25c2"; margin-left: auto; font-size: 9px; opacity: .9;
 }
 .sector.on b { opacity: 1; }
 
@@ -151,20 +163,62 @@ main { flex: 1 1 auto; padding: 14px 16px 40px; min-width: 0; }
 /* ------------------------------------------------------------ consoles */
 
 .grid {
-  display: grid; gap: 12px;
+  display: grid; gap: 10px; flex: 1 1 auto;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-rows: auto auto minmax(268px, 1fr);
+  /* start, not stretch: a console is as tall as what it holds. Stretching
+     left the systems strip padding out a quarter of the deck with nothing
+     in it, which read as "loading" rather than "one line of content". */
+  align-items: start;
 }
+
+/* Console shell: a HUD frame. Corner brackets are drawn as four pairs of
+   gradient bars — no extra markup, and they inherit the tube because the
+   colour is a variable. The notched top-right corner is the one piece of
+   deliberate geometry: it gives the panel a direction. */
 .console {
-  border: 1px solid var(--line-hot); background: var(--panel);
+  position: relative;
+  border: 1px solid var(--line-hot);
+  background-color: var(--panel);
   display: flex; flex-direction: column; min-width: 0;
+  background-image:
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent)),
+    linear-gradient(var(--accent), var(--accent));
+  background-repeat: no-repeat;
+  background-position:
+    left top, left top,            /* ┌ */
+    left bottom, left bottom,      /* └ */
+    right bottom, right bottom;    /* ┘  (top-right is the notch) */
+  background-size:
+    11px 1px, 1px 11px,
+    11px 1px, 1px 11px,
+    11px 1px, 1px 11px;
+  clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%);
 }
 .console.span2 { grid-column: span 2; }
-@media (max-width: 1100px) {
+.console.span4 { grid-column: span 4; }
+
+/* Predictable heights beat ragged ones: the long lists scroll inside
+   their own frame instead of dragging their row taller. */
+/* The long lists stretch into whatever height is left over; their bodies
+   scroll rather than pushing the deck past the fold. */
+.console.tall { align-self: stretch; min-height: 268px; }
+.console.tall .console-body { flex: 1 1 auto; min-height: 0; }
+.console .console-body.scrolls { overflow-y: auto; }
+.console:not(.tall) .console-body.scrolls { max-height: 186px; }
+.console.strip .console-body { padding-top: 7px; padding-bottom: 7px; }
+
+@media (max-width: 1240px) {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .console.span4 { grid-column: span 2; }
 }
 @media (max-width: 720px) {
   .grid { grid-template-columns: minmax(0, 1fr); }
-  .console.span2 { grid-column: span 1; }
+  .console.span2, .console.span4 { grid-column: span 1; }
   #deck { flex-direction: column; }
   #rail {
     flex: 0 0 auto; flex-direction: row; overflow-x: auto; position: static;
@@ -175,15 +229,25 @@ main { flex: 1 1 auto; padding: 14px 16px 40px; min-width: 0; }
   .sector.on { border-left-color: transparent; border-bottom-color: var(--accent); }
 }
 .console h2 {
-  margin: 0; padding: 5px 10px; font-size: 11px; font-weight: normal;
+  margin: 0; padding: 5px 10px 4px; font-size: 10.5px; font-weight: normal;
   color: var(--accent); letter-spacing: .2em; text-transform: uppercase;
-  border-bottom: 1px solid var(--line-hot);
-  display: flex; justify-content: space-between; align-items: baseline; gap: 10px;
+  display: flex; justify-content: flex-start; align-items: baseline; gap: 8px;
   text-shadow: 0 0 7px var(--glow);
+  /* Rule that fades out rather than stopping dead at the frame — the
+     panel reads as an instrument face instead of a table cell. */
+  border-bottom: 1px solid transparent;
+  border-image: linear-gradient(90deg, var(--line-hot) 0%,
+                                var(--line-hot) 62%, transparent 100%) 1;
 }
+/* The sector index, drawn in the frame rather than in the text. */
+.console h2::before {
+  content: attr(data-index);
+  color: var(--dim); opacity: .8; margin-right: 8px; letter-spacing: .1em;
+}
+.console[data-index] > h2::before { content: attr(data-index); }
 .console h2 .verdict {
   font-size: 10px; letter-spacing: .1em; color: var(--dim);
-  text-shadow: none; text-align: right;
+  text-shadow: none; text-align: right; margin-left: auto;
 }
 .console h2 .verdict.ok   { color: var(--ok); }
 .console h2 .verdict.warn { color: var(--warn); }
@@ -239,21 +303,23 @@ label {
 input[type=checkbox] { accent-color: var(--accent); }
 .note { color: var(--dim); font-size: 11.5px; letter-spacing: .05em; }
 
-/* The one animated element: a terminal is alive or it is not. */
-.note::after {
+/* The one animated element: a terminal is alive or it is not. Scoped to
+   the live tail's own status, not to every note on the page — six
+   blinking cursors is a fault light, not a heartbeat. */
+#stream-note::after {
   content: "\2588"; margin-left: 6px; color: var(--accent);
   animation: blink 1.1s step-end infinite;
 }
 @keyframes blink { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .note::after { animation: none; }
+  #stream-note::after { animation: none; }
 }
 
 /* ---------------------------------------------------------------- rows */
 
 .rows { border: 1px solid var(--line-hot); }
 .row {
-  display: flex; gap: 10px; padding: 3px 10px; align-items: baseline;
+  display: flex; gap: 10px; padding: 2px 10px; align-items: baseline;
   border-bottom: 1px solid var(--line);
 }
 .row:last-child { border-bottom: none; }
@@ -413,3 +479,78 @@ input[type=range] { accent-color: var(--accent); width: 92px; }
 .finding:hover .finding-name { color: var(--accent); }
 .finding-name { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis;
                 white-space: nowrap; color: var(--text); }
+
+
+/* Scrollbars in the tube. An OS-grey bar inside a phosphor frame is the
+   one piece of chrome that gives away that this is a web page. */
+* { scrollbar-width: thin; scrollbar-color: var(--line-hot) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-hot); }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* The deck should reach the bottom of the screen rather than stopping in
+   mid-air with a band of empty page under it. */
+main { display: flex; flex-direction: column; min-height: calc(100vh - 92px); }
+#view-overview.on { display: flex; flex-direction: column; flex: 1 1 auto; }
+footer {
+  display: flex; gap: 10px; align-items: center;
+}
+footer::before {
+  content: ""; flex: 0 0 22px; height: 1px; background: var(--line-hot);
+}
+
+/* --------------------------------------------------- sector consoles */
+/* Every view now wears the deck's frame. Before this the overview was a
+   HUD and the other five sectors were bare divs on a background — the
+   same app in two visual languages. */
+
+.view.on > .sector-console { display: flex; }
+.sector-console {
+  flex: 1 1 auto; min-height: 0;
+}
+.sector-console > .controls {
+  margin: 0; padding: 7px 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+/* Content owns the leftover height and scrolls inside the frame, so the
+   page itself never scrolls the chrome off the top. */
+.sector-console > .fills {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  border: none; margin: 0;
+}
+.sector-console > .fills.rows { border: none; }
+.sector-console > pre.fills { border: none; background: transparent; }
+.sector-console > .detail { padding: 10px 10px 0; }
+.sector-console .verdict { text-transform: none; letter-spacing: .04em; }
+
+/* The blinking cursor belongs to a live tail, not to every status line
+   that happens to sit in a header. */
+.console h2 .verdict::after { content: none; }
+
+/* ------------------------------------------------------- rail footer */
+
+#rail { justify-content: flex-start; }
+#rail-foot {
+  margin-top: auto; padding: 12px 12px 4px;
+  border-top: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.rail-stat { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
+.rail-stat.ok   { color: var(--ok); }
+.rail-stat.bad  { color: var(--bad); text-shadow: 0 0 7px currentColor; }
+.rail-bar {
+  height: 4px; border: 1px solid var(--line-hot); padding: 1px;
+}
+.rail-bar > span {
+  display: block; height: 100%; background: var(--accent);
+  box-shadow: 0 0 6px var(--glow); width: 0;
+}
+.rail-bar > span.warn { background: var(--warn); }
+.rail-bar > span.bad  { background: var(--bad); }
+.rail-meta {
+  font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--dim); opacity: .7;
+}
+@media (max-width: 720px) { #rail-foot { display: none; } }
