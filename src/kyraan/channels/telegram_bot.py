@@ -1130,6 +1130,23 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
     job_queue.run_repeating(_rules_job, interval=900, first=180,
                             name="event_rules")
+
+    # Wake planner (§3d #4, 2026-08-31): keep ONE pmset wake armed for
+    # the next due moment so sleep can't delay what the misfire fix
+    # already keeps from being lost. Thread offload — pmset is a
+    # subprocess and the tick must never block the loop.
+    async def _wake_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+        import asyncio as _aio3
+
+        from kyraan.control_plane import wake
+        try:
+            await _aio3.to_thread(wake.plan)
+        except Exception as exc:
+            logger.warning("wake planner failed: %s", exc)
+
+    job_queue.run_repeating(_wake_job, interval=900, first=60,
+                            name="wake_planner")
+    logger.info("Wake planner armed (every 15 min)")
     logger.info("Watch rules armed (every 15 min, DND-gated)")
 
 

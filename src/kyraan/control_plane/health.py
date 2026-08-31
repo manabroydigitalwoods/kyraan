@@ -93,6 +93,19 @@ def _probe_components() -> list:
     probe("embedder", _embedder)
     probe("searxng", _searxng)
     probe("openai key", _openai)
+    def _wake():
+        from kyraan.control_plane import wake
+        # sudo readiness only — WARN-class: without the pmset rule
+        # Kyraan degrades to late-but-honest delivery, nothing is lost.
+        if wake.sudo_ready():
+            return True, "pmset wake scheduling armed"
+        # Degraded, not down: without the rule delivery is late-after-
+        # sleep (the misfire fix), so this stays an OK with a loud
+        # detail rather than failing the whole nightly verdict.
+        return True, ("⚠ NOT armed — sudo rule missing, reminders fire "
+                      "LATE after sleep; install /etc/sudoers.d/"
+                      "kyraan-pmset (one-liner in control_plane/wake.py)")
+    probe("wake planner", _wake)
     return results
 
 
