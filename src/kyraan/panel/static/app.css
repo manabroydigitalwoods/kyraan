@@ -59,11 +59,18 @@
 
 * { box-sizing: border-box; }
 
+html, body { height: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
   font: 13px/1.55 var(--mono);
+  /* The app is a console, not a document: the shell stays put and only
+     the panels scroll. Letting the PAGE scroll dragged the header, the
+     sector rail and every console heading off the top together, so the
+     one thing you always want visible was the first thing to go. */
+  height: 100vh; overflow: hidden;
+  display: flex; flex-direction: column;
   /* Terminals ship one glyph width; keeping ligatures off preserves it. */
   font-variant-ligatures: none;
   -webkit-font-smoothing: antialiased;
@@ -73,11 +80,12 @@ body {
 
 header {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  flex: 0 0 auto;
   padding: 7px 16px;
   background: var(--panel);
   border-bottom: 1px solid var(--line-hot);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--accent) 22%, transparent);
-  position: sticky; top: 0; z-index: 3;
+  z-index: 3;
 }
 h1 {
   font-size: 13px; margin: 0; color: var(--accent);
@@ -121,16 +129,16 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 
 /* Deck: a fixed sector rail beside the consoles. The rail never moves,
    so sector 03 is always in the same place on the screen. */
-#deck { display: flex; align-items: stretch; min-height: calc(100vh - 92px); }
+#deck {
+  display: flex; align-items: stretch;
+  flex: 1 1 auto; min-height: 0; overflow: hidden;
+}
 
 #rail {
   flex: 0 0 138px; background: var(--panel);
   border-right: 1px solid var(--line-hot);
   padding: 12px 0; display: flex; flex-direction: column; gap: 1px;
-  position: sticky; top: 44px; align-self: stretch;
-  /* Full height, not content height: the footer pins to the bottom with
-     margin-top:auto, which needs somewhere to push against. */
-  height: calc(100vh - 44px); overflow-y: auto;
+  align-self: stretch; min-height: 0; overflow-y: auto;
 }
 #rail::before {
   content: "sector";
@@ -158,7 +166,10 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 }
 .sector.on b { opacity: 1; }
 
-main { flex: 1 1 auto; padding: 14px 16px 40px; min-width: 0; }
+main {
+  flex: 1 1 auto; padding: 12px 14px; min-width: 0; min-height: 0;
+  overflow-y: auto;      /* only the working area scrolls */
+}
 
 /* ------------------------------------------------------------ consoles */
 
@@ -396,9 +407,9 @@ th {
 .bar > span.bad  { background: var(--bad); }
 
 footer {
-  padding: 12px 16px 24px; color: var(--dim); font-size: 11.5px;
-  border-top: 1px solid var(--line); margin-top: 22px;
-  letter-spacing: .04em;
+  flex: 0 0 auto;
+  padding: 6px 16px; color: var(--dim); font-size: 11px;
+  border-top: 1px solid var(--line); letter-spacing: .04em;
 }
 
 /* ---------------------------------------------------------- memory map */
@@ -491,7 +502,7 @@ input[type=range] { accent-color: var(--accent); width: 92px; }
 
 /* The deck should reach the bottom of the screen rather than stopping in
    mid-air with a band of empty page under it. */
-main { display: flex; flex-direction: column; min-height: calc(100vh - 92px); }
+main { display: flex; flex-direction: column; }
 #view-overview.on { display: flex; flex-direction: column; flex: 1 1 auto; }
 footer {
   display: flex; gap: 10px; align-items: center;
@@ -575,3 +586,65 @@ footer::before {
 .gauge .gauge-value.bad  { color: var(--bad); text-shadow: 0 0 7px currentColor; }
 .gauge .bar { margin-top: 4px; max-width: none; }
 .gauge .gauge-note { font-size: 10.5px; color: var(--dim); opacity: .8; margin-top: 3px; }
+
+/* ------------------------------------------------- overview: the deck */
+/* Three columns around a hub. The columns are instruments; the hub is the
+   system itself — memories at the core, skills on the ring around them,
+   and a skill lights its own node when it fires. */
+
+.deckgrid {
+  display: grid; gap: 10px; flex: 1 1 auto; min-height: 0;
+  grid-template-columns: minmax(260px, 1fr) minmax(340px, 1.5fr) minmax(300px, 1.15fr);
+}
+.deckcol { display: flex; flex-direction: column; gap: 10px; min-width: 0; min-height: 0; }
+.deckcol > .console { min-height: 0; }
+.deckcol > .console.grow { flex: 1 1 auto; }
+.deckcol > .console .console-body.scrolls { max-height: none; }
+.deckcol > .console:not(.grow) .console-body.scrolls { max-height: 190px; }
+#view-overview > .console { flex: 0 0 auto; }
+
+#view-overview.on {
+  display: flex; flex-direction: column; gap: 10px; flex: 1 1 auto;
+  min-height: 0;
+}
+#view-overview > .console > .console-body.scrolls { max-height: 168px; }
+
+.hub {
+  position: relative; display: flex; flex-direction: column; min-height: 0;
+  border: 1px solid var(--line-hot); background: var(--panel);
+  clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
+  overflow: hidden;
+}
+.hub-title { padding: 14px 0 2px; text-align: center; }
+.hub-name {
+  margin: 0; font-size: 19px; letter-spacing: .42em; text-transform: uppercase;
+  color: var(--accent); text-shadow: 0 0 14px var(--glow);
+}
+.hub-sub {
+  font-size: 9.5px; letter-spacing: .34em; text-transform: uppercase;
+  color: var(--dim); margin-top: 4px;
+}
+#hub-canvas { display: block; width: 100%; flex: 1 1 auto; min-height: 240px; cursor: pointer; }
+#hub-open {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  font-size: 10px; letter-spacing: .22em; padding: 3px 14px;
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+}
+
+/* Routine timeline: status is the column you scan, so it gets the colour. */
+.routine-status {
+  flex: 0 0 auto; min-width: 62px; text-align: right;
+  font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+}
+.routine-status.fired  { color: var(--dim); }
+.routine-status.next   { color: var(--accent); text-shadow: 0 0 7px var(--glow); }
+.routine-status.queued { color: var(--dim); opacity: .75; }
+.routine-status.late   { color: var(--warn); }
+.routine-status.overdue{ color: var(--bad); text-shadow: 0 0 7px currentColor; }
+.routine-status.failed { color: var(--bad); text-shadow: 0 0 7px currentColor; }
+.row.now { border-left: 3px solid var(--accent); }
+
+@media (max-width: 1180px) {
+  .deckgrid { grid-template-columns: minmax(0, 1fr); }
+  .hub { min-height: 340px; }
+}

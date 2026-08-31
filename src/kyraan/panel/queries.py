@@ -26,7 +26,7 @@ from kyraan.control_plane import logging_setup
 # predated `components`). Bump this whenever a response SHAPE changes,
 # and bump EXPECTED_API in app.js with it; the page then says so out loud
 # instead of quietly dropping a panel.
-API_VERSION = 8
+API_VERSION = 9
 
 # A turn is "overdue" for the trigger board on the same slack the
 # scheduler itself uses, so the panel and the bot never disagree about
@@ -944,3 +944,92 @@ def host_history() -> dict:
     from kyraan.panel import host
     host.ensure_sampler()
     return host.history()
+
+
+# --------------------------------------------------------------------------
+# routines — today's timeline: what fired, what is next, what is queued
+
+# Events that mean a scheduled thing actually HAPPENED. The trigger stores
+# only hold what is still pending, so "did the 9am reminder go out?" was
+# unanswerable from them — the store forgets a one-shot the moment it fires.
+_FIRED_KINDS = {
+    "reminder_sent": ("reminder", "fired"),
+    "reminder_recurred": ("reminder", "fired"),
+    "reminder_send_failed": ("reminder", "failed"),
+    "reminder_overdue": ("reminder", "late"),
+    "agent_task_ran": ("agent_task", "fired"),
+    "brief_sent": ("brief", "fired"),
+    "evening_brief_sent": ("brief", "fired"),
+    "goal_cycle_ran": ("goal", "fired"),
+}
+
+
+def routines(hours: float = 24) -> dict:
+    """Today's schedule as one timeline: fired, next, queued.
+
+    The trigger board answers "what is coming". This answers "what
+    happened", which is the question after a machine sleeps through
+    something — and the stores cannot answer it, because a one-shot
+    reminder leaves them the moment it fires.
+    """
+    from kyraan.control_plane.dnd import local_now
+
+    # The fired events carry ids, not text. A timeline of uuids is not a
+    # timeline — resolve what the stores still know, and say so plainly
+    # when they no longer do (a one-shot is gone the moment it fires).
+    names = {}
+    try:
+        from kyraan.triggers import agent_tasks
+        from kyraan.triggers import store as reminder_store
+        for reminder in reminder_store.list_pending():
+            names[reminder.id] = reminder.text
+        for task in agent_tasks.list_active():
+            names[task.id] = task.instruction
+    except (OSError, ValueError, TypeError, KeyError):
+        pass
+
+    rows = []
+    for record in _iter_records(_event_files(), since=_since_iso(hours)):
+        entry = _FIRED_KINDS.get(record.get("kind", ""))
+        if not entry:
+            continue
+        kind, status = entry
+        ref = record.get("reminder_id") or record.get("task_id") or ""
+        label = (record.get("text") or record.get("instruction")
+                 or names.get(ref) or "")
+        if not label:
+            label = ("the morning brief" if "morning" in record.get("kind", "")
+                     else "the evening brief" if "evening" in record.get("kind", "")
+                     else kind + " " + (ref[:8] or "—"))
+        rows.append({
+            "at": record.get("ts", ""), "type": kind, "status": status,
+            "text": _clip(label, 120), "id": ref[:8],
+        })
+
+    upcoming = []
+    for item in triggers()["triggers"]:
+        if not item.get("id"):
+            continue
+        fire = item["fire"]
+        upcoming.append({
+            "at": fire["iso"], "type": item["type"],
+            "status": "overdue" if fire["overdue"] else "queued",
+            "text": item["text"], "id": item["id"][:8],
+            "in_seconds": fire["in_seconds"],
+        })
+    # Soonest pending is NEXT; everything behind it is queued. Overdue keeps
+    # its own status — it is not "next", it is late.
+    pending = sorted((u for u in upcoming if u["status"] == "queued"),
+                     key=lambda u: u["in_seconds"] if u["in_seconds"] is not None else 1e12)
+    if pending:
+        pending[0]["status"] = "next"
+
+    rows.sort(key=lambda r: r["at"])
+    upcoming.sort(key=lambda r: r["at"] or "")
+    counts: Counter = Counter(r["status"] for r in rows + upcoming)
+    return {
+        "fired": rows, "upcoming": upcoming,
+        "timeline": rows + upcoming,
+        "counts": dict(counts),
+        "now": local_now().isoformat(),
+    }

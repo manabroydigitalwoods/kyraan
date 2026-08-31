@@ -49,41 +49,56 @@
   <main>
     <!-- 00 — the deck itself: every console at once. -->
     <section id="view-overview" class="view on">
-      <div class="grid">
-        <!-- Row 1: a lamp strip. It is one line of content and was
-             occupying a quarter of the deck as empty panel. -->
-        <section class="console span4 strip" data-index="00">
-          <h2 data-index="00">Systems <span class="verdict" id="system-verdict">—</span></h2>
-          <div class="console-body" id="system-body"></div>
-        </section>
+      <div class="deckgrid">
 
-        <!-- Row 2: the three numbers you check first. -->
-        <section class="console" data-index="01">
-          <h2 data-index="01">Budget <span class="verdict" id="budget-verdict">—</span></h2>
-          <div class="console-body" id="budget-body"></div>
-        </section>
+        <!-- LEFT: what is scheduled and what it costs. -->
+        <div class="deckcol">
+          <section class="console" data-index="00">
+            <h2 data-index="00">Routines <span class="verdict" id="routines-verdict">—</span></h2>
+            <div class="console-body tight scrolls" id="routines-body"></div>
+          </section>
+          <section class="console" data-index="01">
+            <h2 data-index="01">Budget <span class="verdict" id="budget-verdict">—</span></h2>
+            <div class="console-body" id="budget-body"></div>
+          </section>
+        </div>
 
-        <section class="console" data-index="02">
-          <h2 data-index="02">Schedule <span class="verdict" id="schedule-verdict">—</span></h2>
-          <div class="console-body tight scrolls" id="schedule-body"></div>
-        </section>
+        <!-- CENTRE: the hub. Memories are the core, skills orbit it, and a
+             skill that fires lights up on its own ring. -->
+        <div class="hub">
+          <div class="hub-title">
+            <h1 class="hub-name">Kyraan</h1>
+            <div class="hub-sub" id="hub-sub">second brain</div>
+          </div>
+          <canvas id="hub-canvas"></canvas>
+          <button id="hub-open" type="button">open the brain</button>
+        </div>
 
-        <section class="console span2" data-index="03">
-          <h2 data-index="03">Anomalies <span class="verdict" id="anomaly-verdict">—</span></h2>
-          <div class="console-body tight scrolls" id="anomaly-body"></div>
-        </section>
-
-        <!-- Row 3: the two long lists, side by side and equal. -->
-        <section class="console span2 tall" data-index="04">
-          <h2 data-index="04">Activity <span class="verdict" id="ticker-verdict">—</span></h2>
-          <div class="console-body tight scrolls" id="ticker-body"></div>
-        </section>
-
-        <section class="console span2 tall" data-index="05">
-          <h2 data-index="05">Top consumers <span class="verdict">24h · by tokens</span></h2>
-          <div class="console-body tight scrolls" id="consumers-body"></div>
-        </section>
+        <!-- RIGHT: is it healthy, is it misbehaving, what is it doing. -->
+        <div class="deckcol">
+          <section class="console" data-index="02">
+            <h2 data-index="02">Systems <span class="verdict" id="system-verdict">—</span></h2>
+            <div class="console-body" id="system-body"></div>
+          </section>
+          <section class="console" data-index="03">
+            <h2 data-index="03">Anomalies <span class="verdict" id="anomaly-verdict">—</span></h2>
+            <div class="console-body tight scrolls" id="anomaly-body"></div>
+          </section>
+          <section class="console grow" data-index="04">
+            <h2 data-index="04">Activity <span class="verdict" id="ticker-verdict">—</span></h2>
+            <div class="console-body tight scrolls" id="ticker-body"></div>
+          </section>
+        </div>
       </div>
+
+      <!-- Full width under the three columns. -->
+      <section class="console" data-index="05">
+        <h2 data-index="05">Top consumers <span class="verdict">24h · by tokens</span></h2>
+        <div class="console-body tight scrolls" id="consumers-body"></div>
+      </section>
+      <section class="console" data-index="06" hidden>
+        <div class="console-body" id="schedule-body"></div>
+      </section>
     </section>
 
     <section id="view-stream" class="view">
@@ -160,6 +175,8 @@
      <section class="console sector-console" data-index="06">
       <h2 data-index="06">Brain <span class="verdict" id="mem-note"></span></h2>
       <div class="controls">
+        <input id="mem-search" type="search" placeholder="search neurons"
+               autocomplete="off">
         <label>colour
           <select id="mem-colour">
             <option value="lobe">lobe</option>

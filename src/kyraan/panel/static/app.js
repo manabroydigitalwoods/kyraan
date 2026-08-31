@@ -9,7 +9,7 @@
    files from disk but loads its Python once, so an edited-then-not-
    restarted panel would otherwise render new consoles against old JSON
    and simply drop whatever is missing. Must match queries.API_VERSION. */
-const EXPECTED_API = 8;
+const EXPECTED_API = 9;
 
 const $ = (id) => document.getElementById(id);
 
@@ -363,32 +363,38 @@ function renderBudgetConsole() {
   verdictInto("budget-verdict", pct == null ? "—" : pct + "% of cap", level);
 }
 
-/* -- schedule console -- */
+/* -- routines console -- */
+/* The trigger board answers "what is coming". This answers "what
+   happened", which is the question after the machine sleeps through
+   something — and the stores cannot answer it, because a one-shot leaves
+   them the moment it fires. */
 
-function renderScheduleConsole(data) {
-  const body = $("schedule-body");
+function renderRoutines(data) {
+  const body = $("routines-body");
   clear(body);
+  const timeline = data.timeline;
+  if (!timeline.length) { empty(body, "nothing scheduled today"); return; }
+
   const rows = el("div", "rows");
-  const shown = data.triggers.slice(0, 5);
-  if (!shown.length) {
-    empty(body, "nothing scheduled");
-  } else {
-    for (const item of shown) {
-      const fire = item.fire || {};
-      const row = el("div", "row" + (fire.overdue ? " bad" : ""));
-      row.appendChild(el("span", "ts", relative(fire.in_seconds)));
-      row.appendChild(el("span", "body", item.text));
-      row.appendChild(el("span", "tag", item.type));
-      rows.appendChild(row);
-    }
-    body.appendChild(rows);
+  for (const item of timeline) {
+    const row = el("div", "row" + (item.status === "next" ? " now" : ""));
+    row.appendChild(el("span", "ts", hhmmss(item.at).slice(0, 5) || "--:--"));
+    row.appendChild(el("span", "body", item.text));
+    row.appendChild(el("span", "tag", item.type));
+    row.appendChild(el("span", "routine-status " + item.status, item.status));
+    rows.appendChild(row);
   }
-  verdictInto("schedule-verdict",
-    data.overdue ? `${data.overdue} overdue` : `${data.triggers.length} queued`,
-    data.overdue ? "bad" : "ok");
+  body.appendChild(rows);
+
+  const counts = data.counts || {};
+  const late = (counts.overdue || 0) + (counts.late || 0) + (counts.failed || 0);
+  verdictInto("routines-verdict",
+    `${counts.fired || 0} fired · ${(counts.queued || 0) + (counts.next || 0)} ahead`
+    + (late ? ` · ${late} late` : ""),
+    late ? "warn" : "ok");
 }
 
-/* -- top consumers console -- */
+/* -- top consumers console -- *//* -- top consumers console -- */
 
 function renderConsumersConsole(data) {
   const body = $("consumers-body");
@@ -443,6 +449,77 @@ function renderAnomalyConsole(data) {
   verdictInto("anomaly-verdict", `${total} in 24h`, "warn");
 }
 
+/* -- the hub ---------------------------------------------------------- */
+/* Memories are the core, skills orbit them. Not decoration: ring position
+   is stable per tool (hashed from its name, so a tool keeps its seat),
+   node size is its call count, and a firing tool lights its own seat off
+   the same SSE the stream uses. The core's particle count IS the fact
+   count. Click it and you are in sector 06 with the real graph. */
+
+const hub = { view: { x: 0, y: 0, scale: 1 }, raf: null, fitted: 0 };
+
+/* One fetch, one graph. Both the hub and sector 06 read brain.nodes, so
+   whichever the reader opens first pays for it and the other is instant —
+   and, more importantly, they can never disagree about what the brain
+   contains. */
+let graphPromise = null;
+
+function ensureGraph(force) {
+  if (graphPromise && !force) return graphPromise;
+  graphPromise = (async () => {
+    const graph = await api("/api/brain?floor=" + brain.floor.toFixed(2));
+    brain.nodes = graph.nodes;
+    brain.edges = graph.edges;
+    brain.byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    seedPositions();
+    buildPalette();
+    reheat(1);
+    hub.fitted = 0;                 // reframe once the layout has settled
+    return graph;
+  })();
+  return graphPromise;
+}
+
+async function loadHub() {
+  try {
+    const graph = await ensureGraph();
+    const counts = graph.counts || {};
+    $("hub-sub").textContent =
+      `${counts.memory || 0} memories · ${counts.skill || 0} skills · `
+      + `${counts.task || 0} queued · live`;
+  } catch (err) {
+    $("hub-sub").textContent = "brain unavailable";
+  }
+  // The force layout needs a moment before the framing is worth keeping.
+  setTimeout(() => { hub.fitted = 0; }, 1600);
+  if (hub.raf) cancelAnimationFrame(hub.raf);
+  drawHub();
+}
+
+function wireHub() {
+  const canvas = $("hub-canvas");
+  if (!canvas) return;
+  // Hover names a neuron; clicking one opens sector 06 with it selected,
+  // so the hub is a way IN rather than a picture to admire.
+  canvas.addEventListener("mousemove", (event) => {
+    brain.hover = nodeAt(canvas, event, hub.view);
+    canvas.style.cursor = brain.hover ? "pointer" : "default";
+  });
+  canvas.addEventListener("mouseleave", () => { brain.hover = null; });
+  canvas.addEventListener("click", (event) => {
+    const hit = nodeAt(canvas, event, hub.view);
+    if (hit) {
+      brain.selection = new Set([hit.id]);
+      showView("memory");
+      renderSelection();
+    } else {
+      showView("memory");
+    }
+  });
+  const open = $("hub-open");
+  if (open) open.addEventListener("click", () => showView("memory"));
+}
+
 /* -- the ticker shares the stream's buffer, so one SSE feeds both -- */
 
 function renderTicker() {
@@ -470,7 +547,7 @@ async function refreshDeck() {
      "system-body", "system-verdict"],
     ["/api/usage?days=7", (d) => { deckState.usage = d; renderBudgetConsole(); },
      "budget-body", "budget-verdict"],
-    ["/api/triggers", renderScheduleConsole, "schedule-body", "schedule-verdict"],
+    ["/api/routines", renderRoutines, "routines-body", "routines-verdict"],
     ["/api/turns?limit=6&sort=tokens&hours=24", renderConsumersConsole,
      "consumers-body", null],
     ["/api/event_kinds?hours=24", renderAnomalyConsole, "anomaly-body",
@@ -488,7 +565,7 @@ async function refreshDeck() {
 
 async function loadOverview() {
   renderBudgetConsole();
-  await Promise.all([refreshDeck(), loadStream()]);
+  await Promise.all([refreshDeck(), loadStream(), loadHub()]);
   renderTicker();
 }
 
@@ -804,7 +881,102 @@ const brain = {
   fired: new Map(),        // node id -> performance.now() of its last firing
   floor: 0.45,             // synapse threshold; a control, not a constant
   findings: { orphans: [], dead: [], contested: [] },
+  signals: [],             // action potentials in flight
+  query: "",               // search: dims what does not match
+  matches: new Set(),
 };
+
+/* Search dims rather than hides. Removing the misses would leave the hits
+   floating with nothing around them — and in a graph the answer to "where
+   is this" is mostly "next to what", so the context has to stay on screen. */
+function runSearch(text) {
+  brain.query = (text || "").trim().toLowerCase();
+  brain.matches = new Set();
+  if (!brain.query) { renderLegend(); return; }
+  for (const node of brain.nodes) {
+    const hay = `${node.label} ${node.type} ${node.group || ""} `
+              + `${node.subject || ""} ${node.kind || ""}`;
+    if (hay.toLowerCase().includes(brain.query)) brain.matches.add(node.id);
+  }
+  const note = $("mem-note");
+  if (note) {
+    note.textContent = brain.matches.size
+      ? `${brain.matches.size} of ${brain.nodes.length} match "${brain.query}"`
+      : `nothing matches "${brain.query}"`;
+  }
+}
+
+function matchAlpha(node) {
+  if (!brain.query) return 1;
+  return brain.matches.has(node.id) ? 1 : 0.12;
+}
+
+/* Signalling. A firing tool does not just light its own soma — it sends a
+   pulse down every edge it actually has, and each neuron the pulse
+   reaches re-fires along ITS edges, twice, decaying.
+
+   This is still evidence, not decoration: the edges are the real ones
+   (co-activation from the audit log, synapses from the embeddings), and a
+   pulse only starts when a real event arrives on the stream. Nothing
+   fires on a timer, so a quiet assistant shows a quiet brain — which is
+   the truthful picture and the one worth being able to see. */
+const SIGNAL_SPEED = { coactivation: 1.7, synapse: 1.25, subject: 1.0,
+                       relation: 1.1, owns: 0.9, managed_by: 0.8 };
+const MAX_SIGNALS = 240;
+const MAX_HOPS = 2;
+
+function emitFrom(nodeId, hop, strength) {
+  if (hop > MAX_HOPS || strength < 0.18) return;
+  for (const edge of brain.edges) {
+    let from = null, to = null;
+    if (edge.a === nodeId) { from = edge.a; to = edge.b; }
+    else if (edge.b === nodeId) { from = edge.b; to = edge.a; }
+    else continue;
+    if (!brain.showEdge[edge.kind]) continue;
+    const a = brain.byId.get(from), b = brain.byId.get(to);
+    if (!a || !b || !brain.showType[a.type] || !brain.showType[b.type]) continue;
+    if (brain.signals.length >= MAX_SIGNALS) return;
+    brain.signals.push({
+      from, to, kind: edge.kind, t: 0, hop,
+      strength: strength,
+      speed: (SIGNAL_SPEED[edge.kind] || 1) * (0.75 + Math.random() * 0.4),
+    });
+  }
+}
+
+function advanceSignals(dt) {
+  if (!brain.signals.length) return;
+  const arrived = [];
+  brain.signals = brain.signals.filter((signal) => {
+    signal.t += signal.speed * dt;
+    if (signal.t < 1) return true;
+    arrived.push(signal);
+    return false;
+  });
+  for (const signal of arrived) {
+    // Arriving lights the far neuron, dimmer than a real firing so the
+    // difference between "this ran" and "this is connected" stays visible.
+    const now = performance.now();
+    const existing = brain.fired.get(signal.to);
+    if (existing === undefined || now - existing > FIRE_MS * 0.6) {
+      brain.fired.set(signal.to, now - FIRE_MS * (1 - signal.strength * 0.55));
+    }
+    emitFrom(signal.to, signal.hop + 1, signal.strength * 0.5);
+  }
+}
+
+/* The same quadratic the edges are DRAWN with, so a pulse rides the wire
+   instead of cutting across near it. */
+function edgeControl(pa, pb) {
+  return { x: (pa.x + pb.x) / 2 - (pb.y - pa.y) * 0.12,
+           y: (pa.y + pb.y) / 2 + (pb.x - pa.x) * 0.12 };
+}
+
+function bezierAt(pa, c, pb, t) {
+  const u = 1 - t;
+  return { x: u * u * pa.x + 2 * u * t * c.x + t * t * pb.x,
+           y: u * u * pa.y + 2 * u * t * c.y + t * t * pb.y };
+}
 
 // How long a neuron stays lit after it fires. Long enough to catch out of
 // the corner of your eye, short enough that a busy turn does not leave the
@@ -822,7 +994,10 @@ function brainActivate(event) {
   } else if (event.reminder_id) {
     id = "t:reminder:" + event.reminder_id;
   }
-  if (id && brain.byId.has(id)) brain.fired.set(id, performance.now());
+  if (id && brain.byId.has(id)) {
+    brain.fired.set(id, performance.now());
+    emitFrom(id, 1, 1);
+  }
 }
 
 const REDUCED_MOTION = window.matchMedia
@@ -881,6 +1056,7 @@ function buildPalette() {
 }
 
 function nodeColour(node, alpha) {
+  alpha *= matchAlpha(node);
   const hsl = brain.palette.get(groupKey(node)) || { h: 40, s: 80, l: 50 };
   // Superseded memories stay in the brain — they are part of what it
   // holds — but they no longer speak, so they are dimmed.
@@ -973,11 +1149,12 @@ function reheat(to = 1) { brain.alpha = to; }
 
 /* -- projection to screen ---------------------------------------------- */
 
-function toScreen(canvas, node) {
+function toScreen(canvas, node, view) {
+  view = view || brain.view;
   const size = Math.min(canvas.width, canvas.height) * 0.42;
   return {
-    x: canvas.width / 2 + (node.x * size + brain.view.x) * brain.view.scale,
-    y: canvas.height / 2 + (node.y * size + brain.view.y) * brain.view.scale,
+    x: canvas.width / 2 + (node.x * size + view.x) * view.scale,
+    y: canvas.height / 2 + (node.y * size + view.y) * view.scale,
   };
 }
 
@@ -998,18 +1175,14 @@ function canvasPoint(canvas, event) {
 
 /* -- draw -------------------------------------------------------------- */
 
-function drawBrain() {
-  const canvas = $("mem-canvas");
-  if (!canvas || currentView !== "memory") return;
+/* ONE renderer, two canvases. The overview's hub is not a second
+   metaphor for the brain — it is the SAME graph, the same nodes, edges,
+   lobes and colours, drawn small. Two drawings of one system that do not
+   match teach the reader that neither is the system. */
+function drawGraph(canvas, view, opts) {
+  opts = opts || {};
   const ctx = canvas.getContext("2d");
   const ratio = window.devicePixelRatio || 1;
-  const box = canvas.getBoundingClientRect();
-  if (canvas.width !== Math.round(box.width * ratio)) {
-    canvas.width = Math.round(box.width * ratio);
-    canvas.height = Math.round(box.height * ratio);
-  }
-
-  simulate();
 
   const styles = getComputedStyle(document.documentElement);
   const dim = styles.getPropertyValue("--dim").trim() || "#888";
@@ -1026,7 +1199,7 @@ function drawBrain() {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
       if (members.length < 2) continue;
-      const points = members.map((n) => toScreen(canvas, n));
+      const points = members.map((n) => toScreen(canvas, n, view));
       const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
       const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
       const spread = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)))
@@ -1060,10 +1233,12 @@ function drawBrain() {
     const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.synapse;
     const touched = brain.selection.has(edge.a) || brain.selection.has(edge.b)
                  || (brain.hover && (brain.hover.id === edge.a || brain.hover.id === edge.b));
-    const pa = toScreen(canvas, a), pb = toScreen(canvas, b);
+    // A wire is only as visible as the dimmer of its two ends.
+    const lit = Math.min(matchAlpha(a), matchAlpha(b));
+    const pa = toScreen(canvas, a, view), pb = toScreen(canvas, b, view);
     ctx.strokeStyle = edge.contested ? bad
       : (styles.getPropertyValue(style.key).trim() || dim);
-    ctx.globalAlpha = touched ? Math.min(1, style.alpha * 2.4) : style.alpha;
+    ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha) * lit;
     ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio;
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
@@ -1074,14 +1249,42 @@ function drawBrain() {
   }
   ctx.globalAlpha = 1;
 
+  // Action potentials in flight. Drawn after the wires and before the
+  // somas: a pulse rides over its edge but passes behind the neurons.
+  for (const signal of brain.signals) {
+    const a = brain.byId.get(signal.from), b = brain.byId.get(signal.to);
+    if (!a || !b || !shown.has(signal.from) || !shown.has(signal.to)) continue;
+    const pa = toScreen(canvas, a, view), pb = toScreen(canvas, b, view);
+    const control = edgeControl(pa, pb);
+    const head = bezierAt(pa, control, pb, Math.min(1, signal.t));
+    // A short trail behind the head reads as direction; a bare dot does not.
+    const tail = bezierAt(pa, control, pb, Math.max(0, signal.t - 0.13));
+    const alpha = signal.strength * (0.35 + 0.65 * Math.sin(Math.PI * signal.t));
+
+    const trail = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
+    trail.addColorStop(0, "transparent");
+    trail.addColorStop(1, nodeColour(b, alpha));
+    ctx.strokeStyle = trail;
+    ctx.lineWidth = 1.8 * ratio * (opts.nodeScale || 1);
+    ctx.beginPath();
+    ctx.moveTo(tail.x, tail.y);
+    ctx.lineTo(head.x, head.y);
+    ctx.stroke();
+
+    ctx.fillStyle = nodeColour(b, Math.min(1, alpha + 0.25));
+    ctx.beginPath();
+    ctx.arc(head.x, head.y, 1.9 * ratio * (opts.nodeScale || 1), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   // Somas.
   for (const node of nodes) {
-    const p = toScreen(canvas, node);
+    const p = toScreen(canvas, node, view);
     const selected = brain.selection.has(node.id);
     const seed = node.id.charCodeAt(2) % 13;
     const breath = REDUCED_MOTION ? 1 : 1 + Math.sin(performance.now() / 1400 + seed) * 0.08;
-    const radius = nodeRadius(node) * ratio * breath
-                 * Math.max(0.6, Math.min(brain.view.scale, 2.4));
+    const radius = nodeRadius(node) * (opts.nodeScale || 1) * ratio * breath
+                 * Math.max(0.6, Math.min(view.scale, 2.4));
 
     const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 3.6);
     halo.addColorStop(0, nodeColour(node, selected ? 0.75 : 0.42));
@@ -1147,8 +1350,9 @@ function drawBrain() {
       ctx.beginPath(); ctx.arc(p.x, p.y, radius + 6 * ratio, 0, Math.PI * 2); ctx.stroke();
     }
     // Labels appear when zoomed in, or for the big structural nodes.
-    if (brain.view.scale > 1.7 || node.type === "person"
-        || (node.type === "skill" && (node.uses || 0) > 200)) {
+    if (opts.labels !== false
+        && (view.scale > 1.7 || node.type === "person"
+            || (node.type === "skill" && (node.uses || 0) > 200))) {
       ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim;
       ctx.fillText(node.label.slice(0, 26), p.x + radius + 4 * ratio, p.y + 3 * ratio);
@@ -1156,7 +1360,7 @@ function drawBrain() {
   }
 
   // Rubber band.
-  if (brain.band) {
+  if (brain.band && opts.band !== false) {
     const { x0, y0, x1, y1 } = brain.band;
     ctx.strokeStyle = text; ctx.globalAlpha = 0.8;
     ctx.setLineDash([5 * ratio, 4 * ratio]);
@@ -1166,8 +1370,8 @@ function drawBrain() {
     ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  if (brain.hover) {
-    const p = toScreen(canvas, brain.hover);
+  if (brain.hover && opts.hover !== false) {
+    const p = toScreen(canvas, brain.hover, view);
     const label = brain.hover.label.slice(0, 76);
     ctx.font = `${12 * ratio}px ui-monospace, monospace`;
     const width = ctx.measureText(label).width + 14 * ratio;
@@ -1184,17 +1388,66 @@ function drawBrain() {
     ctx.fillText(label, bx + 7 * ratio, by + 14 * ratio);
   }
 
+}
+
+/* Sector 06: interactive, labelled, simulated. */
+let lastFrame = 0;
+
+/* Signals advance on WALL time, once per frame, not per canvas — two
+   views advancing the same pulses would run them at double speed. */
+function tickSignals() {
+  const now = performance.now();
+  const dt = lastFrame ? Math.min(0.05, (now - lastFrame) / 1000) : 0;
+  lastFrame = now;
+  advanceSignals(dt);
+}
+
+function drawBrain() {
+  const canvas = $("mem-canvas");
+  if (!canvas || currentView !== "memory") return;
+  sizeCanvas(canvas);
+  simulate();
+  tickSignals();
+  drawGraph(canvas, brain.view, {});
   brain.raf = requestAnimationFrame(drawBrain);
+}
+
+/* The overview hub: same graph, no labels, no band, its own framing. */
+function drawHub() {
+  const canvas = $("hub-canvas");
+  if (!canvas || currentView !== "overview") return;
+  sizeCanvas(canvas);
+  simulate();
+  tickSignals();
+  // Keep it framed while the simulation is still moving, then stop: a
+  // hub that re-fits forever never sits still, and one that fits once
+  // frames the seed positions instead of the result.
+  if (brain.nodes.length && (brain.alpha > 0.12 || !hub.fitted)) {
+    focusOn(canvas, visibleNodes(), hub.view);
+    hub.fitted = performance.now();
+  }
+  drawGraph(canvas, hub.view, { labels: false, band: false, nodeScale: 0.8 });
+  hub.raf = requestAnimationFrame(drawHub);
+}
+
+function sizeCanvas(canvas) {
+  const ratio = window.devicePixelRatio || 1;
+  const box = canvas.getBoundingClientRect();
+  if (canvas.width !== Math.round(box.width * ratio)
+      || canvas.height !== Math.round(box.height * ratio)) {
+    canvas.width = Math.round(box.width * ratio);
+    canvas.height = Math.round(box.height * ratio);
+  }
 }
 
 /* -- picking ----------------------------------------------------------- */
 
-function nodeAt(canvas, event) {
+function nodeAt(canvas, event, view) {
   const point = canvasPoint(canvas, event);
   const ratio = window.devicePixelRatio || 1;
   let best = null, bestDistance = 16 * ratio;
   for (const node of visibleNodes()) {
-    const p = toScreen(canvas, node);
+    const p = toScreen(canvas, node, view);
     const distance = Math.hypot(p.x - point.x, p.y - point.y);
     if (distance < bestDistance) { best = node; bestDistance = distance; }
   }
@@ -1207,7 +1460,7 @@ function nodesInBand(canvas) {
   const left = Math.min(x0, x1), right = Math.max(x0, x1);
   const top = Math.min(y0, y1), bottom = Math.max(y0, y1);
   return visibleNodes().filter((node) => {
-    const p = toScreen(canvas, node);
+    const p = toScreen(canvas, node, brain.view);
     return p.x >= left && p.x <= right && p.y >= top && p.y <= bottom;
   });
 }
@@ -1229,15 +1482,16 @@ function fitWhenSettled(delay = 1400) {
 }
 
 /* Zoom to fit a set of nodes — the "zoom into a cluster" gesture. */
-function focusOn(canvas, nodes) {
+function focusOn(canvas, nodes, view) {
+  view = view || brain.view;
   if (!nodes.length) return;
   const size = Math.min(canvas.width, canvas.height) * 0.42;
   const ratio = window.devicePixelRatio || 1;
   const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
-  brain.view.x = -((minX + maxX) / 2) * size;
-  brain.view.y = -((minY + maxY) / 2) * size;
+  view.x = -((minX + maxX) / 2) * size;
+  view.y = -((minY + maxY) / 2) * size;
   // Solve the projection for scale rather than guessing a constant: the
   // renderer places a node at W/2 + (x*size + view.x)*scale, so the fit
   // is (half the canvas, less padding) over (half the span, in pixels).
@@ -1246,7 +1500,7 @@ function focusOn(canvas, nodes) {
   const pad = 56 * ratio;
   const halfX = Math.max(0.05, (maxX - minX) / 2) * size;
   const halfY = Math.max(0.05, (maxY - minY) / 2) * size;
-  brain.view.scale = Math.max(0.3, Math.min(6,
+  view.scale = Math.max(0.3, Math.min(6,
     Math.min((canvas.width / 2 - pad) / halfX,
              (canvas.height / 2 - pad) / halfY)));
 }
@@ -1507,15 +1761,8 @@ async function loadMemory() {
   loadStream();
   try {
     const [graph, review] = await Promise.all([
-      api("/api/brain?floor=" + brain.floor.toFixed(2)),
-      api("/api/memory/review"),
+      ensureGraph(), api("/api/memory/review"),
     ]);
-    brain.nodes = graph.nodes;
-    brain.edges = graph.edges;
-    brain.byId = new Map(graph.nodes.map((n) => [n.id, n]));
-    seedPositions();
-    buildPalette();
-    reheat(1);
     brain.selection.clear();
     renderGate(review);
     renderCensus(graph);
@@ -1528,6 +1775,7 @@ async function loadMemory() {
       + ` · mesh ${brain.floor.toFixed(2)}`
       + (graph.contested.length ? ` · ${graph.contested.length} contested` : "")
       + (graph.degraded ? ` · degraded: ${graph.degraded}` : "");
+    if (brain.query) runSearch(brain.query);   // note and matches survive a reload
     restartBrain();
   } catch (err) {
     note.textContent = "could not load the brain: " + err.message;
@@ -1629,6 +1877,19 @@ function wireMemory() {
     if (event.key === "Escape") { brain.selection.clear(); renderSelection(); }
   });
 
+  const search = $("mem-search");
+  if (search) {
+    search.addEventListener("input", (e) => { runSearch(e.target.value); syncUrl(false); });
+    search.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { search.value = ""; runSearch(""); syncUrl(false); }
+      if (e.key !== "Enter" || !brain.matches.size) return;
+      // Enter commits the search: select the hits and frame them.
+      brain.selection = new Set(brain.matches);
+      renderSelection();
+      focusOn(canvas, [...brain.matches].map((id) => brain.byId.get(id)).filter(Boolean));
+      syncUrl(false);
+    });
+  }
   $("mem-colour").addEventListener("change", (e) => {
     brain.colour = e.target.value;
     buildPalette(); renderLegend();
@@ -1666,6 +1927,7 @@ function wireMemory() {
     floor.addEventListener("change", (e) => {
       brain.floor = parseFloat(e.target.value);
       loaded.delete("memory");
+      ensureGraph(true);
       loadMemory();
       syncUrl(false);
     });
@@ -2037,6 +2299,7 @@ function collectState(view) {
     params.set("days", $("cost-days").value);
   } else if (view === "memory") {
     params.set("colour", brain.colour);
+    if (brain.query) params.set("q", brain.query);
     if (brain.floor !== 0.45) params.set("floor", brain.floor.toFixed(2));
     const lobes = Object.entries(brain.showType)
       .filter(([, on]) => on).map(([type]) => type);
@@ -2081,6 +2344,14 @@ function applyState(view, params) {
       const slider = $("mem-floor");
       if (slider) { slider.value = brain.floor; $("mem-floor-value").textContent = brain.floor.toFixed(2); }
     }
+    // The query text can be restored now, but MATCHING it cannot: the
+    // nodes do not exist until the fetch resolves. Running it here set a
+    // query with zero hits and dimmed the entire graph.
+    const query = params.get("q");
+    if (query) {
+      const box = $("mem-search");
+      if (box) box.value = query;
+    }
     if (params.get("colour")) brain.colour = params.get("colour");
     const colourSelect = $("mem-colour");
     if (colourSelect) colourSelect.value = brain.colour;
@@ -2116,10 +2387,13 @@ function applyState(view, params) {
 function applyLoadedState(view, params) {
   if (view === "turns" && params.get("turn")) {
     showTurn(params.get("turn"));
-  } else if (view === "memory" && params.get("sel")) {
-    const ids = params.get("sel").split(",").filter((id) => brain.byId.has(id));
-    brain.selection = new Set(ids);
-    renderSelection();
+  } else if (view === "memory") {
+    if (params.get("q")) runSearch(params.get("q"));
+    if (params.get("sel")) {
+      const ids = params.get("sel").split(",").filter((id) => brain.byId.has(id));
+      brain.selection = new Set(ids);
+      renderSelection();
+    }
   }
 }
 
@@ -2169,6 +2443,8 @@ function showView(name, options = {}) {
   // burn — the deck is meant to be left open for hours.
   if (name === "memory") restartBrain();
   else if (brain.raf) { cancelAnimationFrame(brain.raf); brain.raf = null; }
+  if (name === "overview") { drawHub(); }
+  else if (hub.raf) { cancelAnimationFrame(hub.raf); hub.raf = null; }
   if (name === "host") { drawHostGraph(); }
   else if (hostState.raf) { cancelAnimationFrame(hostState.raf); hostState.raf = null; }
 }
@@ -2201,6 +2477,7 @@ $("health-refresh").addEventListener("click", () => loadHealth(true));
 
 initPhosphor();
 wireMemory();
+wireHub();
 refreshStatus();
 setInterval(refreshStatus, 10000);
 // The deck's slower consoles refresh on their own clock — schedule and

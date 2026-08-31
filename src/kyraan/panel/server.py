@@ -225,6 +225,8 @@ class _Handler(BaseHTTPRequestHandler):
             elif path == "/api/turn":
                 self._json(queries.turn_detail(
                     arg("id", ""), full=arg("full", "") == "1"))
+            elif path == "/api/routines":
+                self._json(queries.routines(hours=arg("hours", 24, float)))
             elif path == "/api/host":
                 self._json(queries.host_now())
             elif path == "/api/host/history":

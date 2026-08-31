@@ -756,3 +756,56 @@ def test_workload_ranks_models_by_wall_time(seeded_logs):
     assert slowest["calls"] == 1 and slowest["avg_ms"] == 16000
     assert slowest["ms_share"] > 50
     assert result["models"][1]["cost_usd"] > 0 and slowest["cost_usd"] == 0
+
+
+# --------------------------------------------------------------- routines
+
+
+def test_routines_timeline_answers_what_already_fired(seeded_logs, monkeypatch,
+                                                      tmp_path):
+    """The trigger board says what is COMING. After a machine sleeps
+    through something the question is what HAPPENED — and the stores
+    cannot answer it, because a one-shot leaves them the moment it fires."""
+    from kyraan.triggers import goals
+    from kyraan.triggers import store as reminder_store
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+
+    _write_log(logging_setup.EVENT_LOG, [
+        {"ts": _ago(minutes=90), "kind": "reminder_sent", "reminder_id": "r1"},
+        {"ts": _ago(minutes=60), "kind": "reminder_overdue", "reminder_id": "r1"},
+        {"ts": _ago(minutes=30), "kind": "brief_sent"},
+        {"ts": _ago(minutes=20), "kind": "reminder_send_failed", "reminder_id": "r1"},
+    ])
+    reminder_store.add(42, "drink water",
+                       (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat())
+    reminder_store.add(42, "call mum",
+                       (datetime.now(timezone.utc) + timedelta(hours=5)).isoformat())
+
+    board = queries.routines()
+    counts = board["counts"]
+    assert counts["fired"] == 2          # reminder_sent + brief_sent
+    assert counts["late"] == 1 and counts["failed"] == 1
+    # Exactly one pending item is NEXT — the soonest — and the rest queue.
+    assert counts["next"] == 1 and counts["queued"] == 1
+    nxt = [r for r in board["upcoming"] if r["status"] == "next"]
+    assert nxt[0]["text"] == "drink water"
+
+
+def test_fired_rows_are_named_not_just_identified(seeded_logs, monkeypatch, tmp_path):
+    """A timeline of uuids is not a timeline. Ids resolve against the
+    stores; a brief names itself; anything genuinely gone says so."""
+    from kyraan.triggers import goals
+    from kyraan.triggers import store as reminder_store
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+
+    kept = reminder_store.add(42, "take the medicine",
+                              (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat())
+    _write_log(logging_setup.EVENT_LOG, [
+        {"ts": _ago(minutes=40), "kind": "reminder_recurred", "reminder_id": kept.id},
+        {"ts": _ago(minutes=20), "kind": "evening_brief_sent"},
+        {"ts": _ago(minutes=10), "kind": "reminder_sent", "reminder_id": "gone1234"},
+    ])
+    fired = {r["text"] for r in queries.routines()["fired"]}
+    assert "take the medicine" in fired
+    assert "the evening brief" in fired
+    assert any(t.startswith("reminder gone1234") for t in fired)
