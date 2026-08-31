@@ -81,6 +81,19 @@ _DEFLECTION_RE = re.compile(
 
 _MAX_STEPS = 5  # decision calls per message; kernel's own rails cap tool runs
 
+# Termination taxonomy (adopted from the 2026-08-31 external review — its
+# one cheap, real observability delta): every turn's ending has a NAME in
+# the turn_end trace. Values: replied | replied_after_correction |
+# tier_failed:<why> (per-tier, the orchestrator then falls onward) —
+# deterministic branches that never enter the loop record "deterministic".
+import contextvars as _term_ctx
+
+_termination = _term_ctx.ContextVar("kyraan_termination", default="deterministic")
+
+
+def termination() -> str:
+    return _termination.get()
+
 # Undoable tools that execute WITHOUT a confirm gate and whose inverse
 # needs pre-write observation. Gated tools capture in confirmed_handler.
 _PRIOR_AT_DISPATCH: frozenset = frozenset()
@@ -556,6 +569,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         _logs.new_turn()  # scheduled runs enter here without a chat turn
 
     loop_tools.reset_turn_urls()  # provenance rail: fresh URL set per turn
+    _termination.set("tier_failed:aborted_mid_loop")  # overwritten by every named exit
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", skill="agent.loop", args={"chat_id": chat_id})
         raise kernel.KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
@@ -620,6 +634,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             response = await router.acall(prompt=transcript, system=system,
                                            tier=tier, force_json=True)
         except router.ModelProviderError as exc:
+            _termination.set("tier_failed:model_error")
             raise AgentUnavailable(str(exc)) from exc
 
         try:
@@ -628,6 +643,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         except (json.JSONDecodeError, KeyError, TypeError):
             malformed_retries += 1
             if malformed_retries > 1:
+                _termination.set("tier_failed:unparseable_decision")
                 raise AgentUnavailable(f"unparseable decision: {response.text[:200]}")
             transcript += "\nSYSTEM: that was not valid decision JSON — one JSON object only."
             continue
@@ -637,6 +653,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         if action == "reply":
             reply = str(decision.get("text", "")).strip()
             if not reply:
+                _termination.set("tier_failed:empty_reply")
                 raise AgentUnavailable("empty reply")
             # THE REPLY CONTRACT (2026-08-28, the concrete resolver):
             # the model DECLARES whether this reply fulfills the message;
@@ -794,11 +811,14 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                 orchestrator._skip_extraction.set(True)
             log_event("agent_reply", chat_id=chat_id, steps=step + 1,
                       tier=tier, consider=consider)
+            _termination.set("replied_after_correction"
+                             if contract_corrections else "replied")
             return reply
 
         if action != "call" or decision.get("tool") not in TOOLS:
             malformed_retries += 1
             if malformed_retries > 1:
+                _termination.set("tier_failed:unknown_action")
                 raise AgentUnavailable(f"unknown action/tool: {response.text[:200]}")
             transcript += ("\nSYSTEM: unknown action or tool — use "
                            "{\"action\": \"reply\"|\"call\"} with a listed tool.")
@@ -841,6 +861,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             # Third identical call: the model is stuck — the classifier
             # fallback beats burning the whole step cap (seen live:
             # usage.report called 5x in a row past its own results).
+            _termination.set("tier_failed:stuck_repeating")
             raise AgentUnavailable(f"stuck repeating {tool}")
         if repeats == 1:
             calls_seen[signature] = 2
@@ -913,6 +934,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         rendered = json.dumps(result, ensure_ascii=False)
         transcript += f"\nTOOL {tool} -> {rendered[:2000]}"
 
+    _termination.set("tier_failed:step_cap")
     raise AgentUnavailable("step cap reached without a reply")
 
 

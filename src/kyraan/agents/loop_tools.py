@@ -72,6 +72,49 @@ async def _calendar_list(chat_id: int, args: dict, raw_text: str):
 from kyraan.agents.guards import normalized_event_times as _normalized_event_times
 
 
+def _same_moment(a: str, b: str) -> bool:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(str(a)) == datetime.fromisoformat(str(b))
+    except (ValueError, TypeError):
+        return str(a) == str(b)
+
+
+async def _verified(result: dict, read_call: "kernel.ToolCall",
+                    checks: dict) -> dict:
+    """Read-after-write verification (adopted 2026-08-31 — the external
+    review's one real execution-loop gap): re-READ the thing just
+    written and compare. Fail-soft by design: the WRITE already
+    happened, so a failed verification read attaches honesty, never an
+    error — the receipt says verified true/false/unchecked and the
+    model relays reality either way."""
+    try:
+        observed = await kernel.run_tool(read_call)
+    except Exception as exc:
+        log_event("write_verify_unchecked", tool=read_call.tool_name,
+                  error=str(exc)[:100])
+        return {**result, "verified": None,
+                "verify_note": "wrote OK but could not re-read to "
+                               "confirm — say the action was sent, not "
+                               "that it is confirmed"}
+    if not isinstance(observed, dict):
+        return {**result, "verified": None}
+    for field, expected in checks.items():
+        got = observed.get(field)
+        ok = _same_moment(got, expected) if field in ("start", "end") \
+            else str(got) == str(expected)
+        if not ok:
+            log_event("write_verify_mismatch", tool=read_call.tool_name,
+                      field=field, expected=str(expected)[:60],
+                      observed=str(got)[:60])
+            return {**result, "verified": False,
+                    "verify_note": (f"re-read shows {field}={got!r}, not "
+                                    f"{expected!r} — tell the user what "
+                                    "actually stands, never claim success")}
+    log_event("write_verified", tool=read_call.tool_name)
+    return {**result, "verified": True}
+
+
 async def _calendar_create(chat_id: int, args: dict, raw_text: str):
     start_iso, end_iso = _normalized_event_times(args, raw_text)
     if scheduler._parse_when(start_iso) < local_now():
@@ -82,6 +125,12 @@ async def _calendar_create(chat_id: int, args: dict, raw_text: str):
     result = await kernel.run_tool(kernel.ToolCall("calendar.create_event", call_args))
     if isinstance(result, dict):
         result = {**result, "start": start_iso}  # the receipt shows what EXECUTED
+        if result.get("id"):
+            result = await _verified(
+                result,
+                kernel.ToolCall("calendar.get_event",
+                                {"event_id": str(result["id"])}),
+                {"start": start_iso})
     return result
 
 
@@ -120,10 +169,17 @@ async def _calendar_reschedule(chat_id: int, args: dict, raw_text: str):
     if scheduler._parse_when(start_iso) < local_now():
         raise kernel.ToolFailed("that new start is in the past — ask the user "
                                 "for the intended date")
-    return await kernel.run_tool(kernel.ToolCall(
+    result = await kernel.run_tool(kernel.ToolCall(
         "calendar.update_event",
         {"event_id": args["event_id"], "title": known_title,
          "start": start_iso, "end": end_iso}))
+    if isinstance(result, dict):
+        result = await _verified(
+            result,
+            kernel.ToolCall("calendar.get_event",
+                            {"event_id": str(args["event_id"])}),
+            {"start": start_iso})
+    return result
 
 
 async def _email_unread(chat_id: int, args: dict, raw_text: str):
@@ -2181,11 +2237,18 @@ async def record_action(chat_id: int, tool: str, args: dict, result,
 
 
 def _register_home_switches() -> None:
+    async def _switch(tool, args, expect):
+        result = await kernel.run_tool(kernel.ToolCall(tool, {"entity": args["entity"]}))
+        base = result if isinstance(result, dict) else {"ok": result}
+        return await _verified(
+            base, kernel.ToolCall("home.get_state", {"entity": args["entity"]}),
+            {"state": expect})
+
     async def on(chat_id, args, raw_text):
-        return await kernel.run_tool(kernel.ToolCall("home.turn_on", {"entity": args["entity"]}))
+        return await _switch("home.turn_on", args, "on")
 
     async def off(chat_id, args, raw_text):
-        return await kernel.run_tool(kernel.ToolCall("home.turn_off", {"entity": args["entity"]}))
+        return await _switch("home.turn_off", args, "off")
 
     TOOLS["home.turn_on"] = {
         "params": '{"entity": "switch.ac"}',

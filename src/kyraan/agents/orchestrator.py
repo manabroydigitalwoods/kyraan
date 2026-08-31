@@ -513,7 +513,9 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     log_chat(chat_id, "assistant", reply,
              **({"cloud_text": redacted} if redacted else {}))
     from kyraan.control_plane.logging_setup import turn_summary
+    from kyraan.agents import agent_loop as _al
     log_trace("turn_end", chat_id=chat_id, reply=reply,
+              termination=_al.termination(),
               total_ms=round((time.monotonic() - turn_started) * 1000),
               **turn_summary())
     return reply

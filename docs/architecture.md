@@ -1,5 +1,16 @@
 # Kyraan 2.0 Architecture
 
+> **Kyraan 2.0 is a bounded, safety-governed cognitive execution
+> system.** It uses engineered loops for reasoning, tool execution,
+> read-after-write verification, permissions, recovery, and
+> post-turn learning — with named terminations in every turn trace.
+> Reflection (nightly self-review), curiosity (daily gap questions),
+> consolidation (nightly memory dedup), and goal continuity (daily
+> read-only research cycles) exist as governed v1 loops; their
+> deepening — and any autonomy beyond research-and-propose — remains
+> deliberate, gated work. (Positioning adopted from the 2026-08-31
+> external review, corrected to what is actually built.)
+
 The end-to-end turn pipeline as built — a self-hosted personal assistant on
 Telegram: one frontier brain, deterministic rails on every side of it, memory
 the owner governs. Snapshot of 2026-08-28 · 677 tests · eval gate 21/21 hard +

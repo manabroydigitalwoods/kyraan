@@ -139,6 +139,10 @@ def contracts() -> dict:
                      else "read_only"),
             "requires_confirmation": spec.permission == "confirm",
             "taint": _taint.source_class(name),
+            # read-after-write executors exist for these (2026-08-31)
+            "verification": ("read_after_write" if name in (
+                "calendar.create_event", "calendar.reschedule",
+                "home.turn_on", "home.turn_off") else None),
         }
     return out
 

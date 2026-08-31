@@ -33,7 +33,8 @@ def test_contracts_derive_and_every_write_is_confirm_gated():
     contracts = registry.contracts()
     assert contracts  # non-empty
     for name, c in contracts.items():
-        assert set(c) == {"effect", "risk", "requires_confirmation", "taint"}
+        assert set(c) == {"effect", "risk", "requires_confirmation",
+                          "taint", "verification"}
         if c["effect"] == "write":
             # The invariant the whole derivation rests on: no write-effect
             # registry tool may ever be permission auto.
