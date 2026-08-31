@@ -396,6 +396,26 @@ Two bugs worth keeping the note for:
   requestAnimationFrame loop fails silently — no console error the user
   would ever see, just an empty canvas. It is a shared helper again.
 
+**The brain holds all of memory, not the curated half.** It was showing 43
+reviewed facts while the store also held 179 episodes, 10 documents (65
+chunks) and 7 face templates — all with embeddings, all part of what the
+thing remembers. Seven lobes now: facts, recall, documents, faces, people,
+work, skills. New edges, each grounded: `spoke` (an episode's
+participants), `recalls` (an episode citing the fact it produced — the
+strongest link in the store, it says WHY a fact is known), `about` (a
+document's subject people), `recognises` (a face template to its person).
+
+Two things fell out of building it. People are now taken from the
+REGISTRY rather than from fact subjects, because Kamal and Titu have
+enrolled faces and no facts — keyed off subjects alone their faces floated
+unlinked. And one face, "Akansha (employee)", links to nobody: enrolled
+without a person record, which is a finding rather than a bug in the view.
+
+Cost: the cold graph went to 2.45s, almost all of it an O(n²) set rebuilt
+inside the episode loop. 0.55s once that was hoisted, and memoised for
+30s — keyed on demo mode, because without that the cache served whichever
+graph was built first under the wrong label.
+
 **Memories are readable, not just plottable.** Owner's question, and a
 fair one: memory was the ONE node type the graph never labelled. People
 were named, busy skills were named, and the 43 facts — the actual content

@@ -108,11 +108,22 @@ def _fill(rng, template: str) -> str:
     return text
 
 
-def facts(count: int = 240) -> tuple:
+def size() -> int:
+    """KYRAAN_PANEL_DEMO_N — how many synthetic facts to generate. Exists
+    so capacity can be MEASURED rather than argued about: point the panel
+    at 2000 and watch what the layout actually does."""
+    try:
+        return max(10, min(int(os.environ.get("KYRAAN_PANEL_DEMO_N", "240")), 20000))
+    except ValueError:
+        return 240
+
+
+def facts(count: int | None = None) -> tuple:
     """(facts, vectors). Vectors are synthetic but STRUCTURED: one centre
     per topic plus jitter, so neighbours are genuinely near each other and
     the projection, clustering and mesh behave as they do on real data.
     Random noise would have made every layout look the same — a blob."""
+    count = size() if count is None else count
     rng = random.Random(SEED)
     dims = 24
     centres = {topic: [rng.uniform(-1, 1) for _ in range(dims)]

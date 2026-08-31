@@ -18,6 +18,16 @@ from kyraan.panel import queries, server
 # ---------------------------------------------------------------- fixtures
 
 
+@pytest.fixture(autouse=True)
+def _fresh_graph_cache():
+    """brain_graph memoises for 30s. Without clearing it a test that
+    patches Postgres to raise happily passes on the PREVIOUS test's graph,
+    which is the one way this suite could lie to us."""
+    queries._graph_cache.clear()
+    yield
+    queries._graph_cache.clear()
+
+
 def _write_log(path, records):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as handle:
@@ -862,3 +872,37 @@ def test_demo_clusters_are_separable(monkeypatch):
     facts = [n for n in queries.brain_graph()["nodes"] if n["type"] == "memory"]
     clusters = {f["group"] for f in facts}
     assert len(clusters) >= 3, clusters
+
+
+def test_the_brain_carries_recall_documents_and_faces(monkeypatch, tmp_path,
+                                                      seeded_logs):
+    """The brain was showing the SMALLER half of memory: 43 curated facts,
+    while the store also holds the episodes, the documents and the face
+    templates. All three carry embeddings, so they belong on the mesh."""
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+
+    graph = queries.brain_graph()
+    counts = graph["counts"]
+    for lobe in ("memory", "person", "episode", "document", "face"):
+        assert counts.get(lobe, 0) > 0, f"{lobe} lobe is empty"
+    # Faces and documents name people in their own spelling; the edges must
+    # land on a real person node, not dangle.
+    ids = {n["id"] for n in graph["nodes"]}
+    for kind in ("recognises", "about", "spoke"):
+        for edge in (e for e in graph["edges"] if e["kind"] == kind):
+            assert edge["a"] in ids and edge["b"] in ids
+
+
+def test_people_come_from_the_registry_not_only_from_facts(monkeypatch, tmp_path,
+                                                           seeded_logs):
+    """Kamal and Titu have enrolled FACES and no facts. Keyed off fact
+    subjects alone they had nowhere to attach and their faces floated."""
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+
+    graph = queries.brain_graph()
+    people = {n["label"] for n in graph["nodes"] if n["type"] == "person"}
+    subjects = {n["subject"] for n in graph["nodes"] if n["type"] == "memory"}
+    assert people - subjects, "registry adds nobody — the join is fact-only again"
+    assert any(n.get("registered") for n in graph["nodes"] if n["type"] == "person")

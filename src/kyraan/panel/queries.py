@@ -26,7 +26,7 @@ from kyraan.control_plane import logging_setup
 # predated `components`). Bump this whenever a response SHAPE changes,
 # and bump EXPECTED_API in app.js with it; the page then says so out loud
 # instead of quietly dropping a panel.
-API_VERSION = 9
+API_VERSION = 10
 
 # A turn is "overdue" for the trigger board on the same slack the
 # scheduler itself uses, so the panel and the bot never disagree about
@@ -743,6 +743,19 @@ def _tool_activity() -> tuple:
     return usage, pairs
 
 
+def _as_vector(value):
+    """pgvector hands back its own type or a string depending on adapter
+    registration; parse defensively rather than assume."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return list(value)
+
+
 def _synapses(ids: list, vectors: list, floor: float = _SYNAPSE_FLOOR) -> list:
     """Top-k cosine neighbours per fact — the memory mesh.
 
@@ -789,6 +802,10 @@ _TASK_TOOLS = {
 }
 
 
+_graph_cache: dict = {}
+GRAPH_TTL_S = 30
+
+
 def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
     """One graph over the whole second brain: memories, the people they
     are about, the scheduled work, and the skills that act.
@@ -801,6 +818,15 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
       managed_by   the tool family that operates on this kind of task
       coactivation these two tools fired in the same turn, N times
     """
+    # The key includes demo mode: without it, flipping KYRAAN_PANEL_DEMO
+    # served whichever graph was cached first — the live brain labelled as
+    # demo, or worse, the reverse.
+    from kyraan.panel import demo as _demo_mode
+    cache_key = (round(synapse_floor, 3), _demo_mode.enabled())
+    cached = _graph_cache.get(cache_key)
+    if cached and time.monotonic() - cached[0] < GRAPH_TTL_S:
+        return cached[1]
+
     nodes, edges = [], []
 
     # --- memory lobe ------------------------------------------------------
@@ -849,9 +875,19 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
                       "kind": "synapse", "weight": edge["weight"]})
 
     # --- people -----------------------------------------------------------
-    for person in sorted(subjects):
+    # The registry, not just whoever a fact happens to be about. Kamal and
+    # Titu have enrolled FACES and no facts; keyed off subjects alone they
+    # had nowhere to attach and their faces floated unlinked.
+    registry_people = set()
+    try:
+        from kyraan.store import persons as _persons
+        registry_people = {row[0] for row in _persons.list_persons()}
+    except Exception:
+        pass
+    for person in sorted(subjects | registry_people):
         nodes.append({"id": f"p:{person}", "type": "person", "label": person,
-                      "lobe": "memory", "group": person})
+                      "lobe": "memory", "group": person,
+                      "registered": person in registry_people})
     for fact in memory["facts"]:
         edges.append({"a": f"m:{fact['id']}", "b": f"p:{fact['subject']}",
                       "kind": "subject", "weight": 0.5})
@@ -877,6 +913,111 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
             "contested": link.get("contested", False),
             "variant": link.get("variant", False)}
     edges.extend(relation_edges.values())
+
+    # --- recall, documents, faces ----------------------------------------
+    # The brain was showing the SMALLER half of memory: 43 curated facts,
+    # while the store also holds 179 episodes, 10 documents and the face
+    # templates. All three carry embeddings, so they belong on the same
+    # mesh rather than in a list somewhere else.
+    from kyraan.panel import demo as _demo
+    episodes, documents, faces = [], [], []
+    if not _demo.enabled():
+        try:
+            with pg.connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, day, participants, fact_refs, text, embedding "
+                    "FROM episode ORDER BY created_at DESC LIMIT 400")
+                episodes = cur.fetchall()
+                cur.execute(
+                    "SELECT d.id, d.kind, d.caption, d.filename, "
+                    "       d.subject_persons, d.created_at, "
+                    "       (SELECT count(*) FROM document_chunk c "
+                    "        WHERE c.document_id = d.id) "
+                    "FROM document d ORDER BY d.created_at DESC")
+                documents = cur.fetchall()
+                cur.execute("SELECT slug, name, created_at FROM face_template "
+                            "ORDER BY slug")
+                faces = cur.fetchall()
+        except Exception:
+            pass
+
+    person_ids = {n["id"] for n in nodes if n["type"] == "person"}
+    memory_node_ids = {n["id"] for n in nodes if n["type"] == "memory"}
+
+    def _person_node(name: str) -> str | None:
+        """Faces and documents name people in their own spelling. Resolve
+        through the registry so an edge lands on THE person node."""
+        if not name:
+            return None
+        candidate = str(name).strip().lower().replace("-", "_")
+        try:
+            from kyraan.store import persons
+            candidate = persons.resolve(candidate) or candidate
+        except Exception:
+            pass
+        return f"p:{candidate}" if f"p:{candidate}" in person_ids else None
+
+    episode_ids, episode_vectors = [], []
+    for row in episodes:
+        (episode_id, day, participants, fact_refs, text, embedding) = row
+        node_id = f"e:{episode_id}"
+        episode_ids.append(str(episode_id))
+        episode_vectors.append(_as_vector(embedding))
+        nodes.append({
+            "id": node_id, "type": "episode", "lobe": "recall",
+            "label": _clip((text or "").replace("\n", " · "), 220),
+            "group": str(day) if day else "undated",
+            "day": str(day) if day else "",
+            "participants": list(participants or []),
+            "created": str(day or ""),
+        })
+        for who in (participants or []):
+            target = _person_node(who)
+            if target:
+                edges.append({"a": node_id, "b": target, "kind": "spoke",
+                              "weight": 0.35})
+        # An episode that cites facts is the strongest link in the store:
+        # it says this conversation is WHY that fact is known.
+        for ref in (fact_refs or []):
+            if f"m:{ref}" in memory_node_ids:
+                edges.append({"a": node_id, "b": f"m:{ref}", "kind": "recalls",
+                              "weight": 0.9})
+
+    for edge in _synapses(episode_ids, episode_vectors, floor=synapse_floor):
+        edges.append({"a": f"e:{edge['a']}", "b": f"e:{edge['b']}",
+                      "kind": "synapse", "weight": edge["weight"]})
+
+    for (doc_id, kind, caption, filename, subjects, created, chunks) in documents:
+        node_id = f"d:{doc_id}"
+        nodes.append({
+            "id": node_id, "type": "document", "lobe": "docs",
+            "label": caption or filename or str(doc_id)[:8],
+            "group": kind or "file", "doc_kind": kind or "file",
+            "chunks": chunks, "filename": filename or "",
+            "created": created.isoformat() if created else "",
+        })
+        for who in (subjects or []):
+            target = _person_node(who)
+            if target:
+                edges.append({"a": node_id, "b": target, "kind": "about",
+                              "weight": 0.6})
+
+    seen_faces: dict = {}
+    for (slug, name, created) in faces:
+        # Several templates per person is normal (multiple enrolments);
+        # one node per PERSON carrying the count is the useful reading.
+        entry = seen_faces.setdefault(slug, {
+            "id": f"f:{slug}", "type": "face", "lobe": "faces",
+            "label": name or slug, "group": "face", "templates": 0,
+            "created": created.isoformat() if created else "",
+        })
+        entry["templates"] += 1
+    for entry in seen_faces.values():
+        nodes.append(entry)
+        target = _person_node(entry["id"][2:])
+        if target:
+            edges.append({"a": entry["id"], "b": target, "kind": "recognises",
+                          "weight": 0.8})
 
     # --- task lobe --------------------------------------------------------
     board = triggers()
@@ -945,7 +1086,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
 
     counts: Counter = Counter(n["type"] for n in nodes)
     edge_counts: Counter = Counter(e["kind"] for e in edges)
-    return {
+    result = {
         "nodes": nodes, "edges": edges,
         "counts": dict(counts), "edge_counts": dict(edge_counts),
         "contested": links.get("contested", []),
@@ -956,6 +1097,8 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
         "degraded": memory.get("degraded", ""),
         "demo": bool(memory.get("demo")),
     }
+    _graph_cache[cache_key] = (time.monotonic(), result)
+    return result
 
 
 # --------------------------------------------------------------------------

@@ -9,7 +9,7 @@
    files from disk but loads its Python once, so an edited-then-not-
    restarted panel would otherwise render new consoles against old JSON
    and simply drop whatever is missing. Must match queries.API_VERSION. */
-const EXPECTED_API = 9;
+const EXPECTED_API = 10;
 
 const $ = (id) => document.getElementById(id);
 
@@ -853,11 +853,17 @@ async function loadCost() {
 /* Lobe anchors. People sit near the CENTRE on purpose: memories are
    about them and work belongs to them, so they are the hub the other
    lobes hang off, not a fourth island. */
+/* Seven lobes. People sit near the CENTRE on purpose: memories are about
+   them, conversations happen with them, documents concern them and faces
+   recognise them — they are the hub the rest hangs off. */
 const LOBES = {
-  memory: { anchor: [-0.95, 0.10], label: "memory" },
-  person: { anchor: [0.0, -0.10], label: "people" },
-  task:   { anchor: [0.55, -0.75], label: "work" },
-  skill:  { anchor: [0.80, 0.45], label: "skills" },
+  memory:   { anchor: [-1.05, -0.30], label: "facts" },
+  person:   { anchor: [0.0, 0.0], label: "people" },
+  episode:  { anchor: [-0.60, 0.95], label: "recall" },
+  face:     { anchor: [0.30, 0.55], label: "faces" },
+  document: { anchor: [0.85, 0.85], label: "documents" },
+  task:     { anchor: [0.45, -0.90], label: "work" },
+  skill:    { anchor: [1.10, 0.05], label: "skills" },
 };
 
 const EDGE_STYLE = {
@@ -867,12 +873,19 @@ const EDGE_STYLE = {
   owns:        { alpha: 0.4,  width: 1.1, rest: 150, key: "--dim" },
   managed_by:  { alpha: 0.22, width: 0.9, rest: 210, key: "--dim" },
   coactivation:{ alpha: 0.4,  width: 1.2, rest: 80,  key: "--accent" },
+  // A conversation that cites a fact is the strongest link in the store:
+  // it says this exchange is WHY that fact is known.
+  recalls:     { alpha: 0.8,  width: 1.7, rest: 70,  key: "--ok" },
+  spoke:       { alpha: 0.10, width: 0.7, rest: 260, key: "--dim" },
+  about:       { alpha: 0.45, width: 1.1, rest: 140, key: "--dim" },
+  recognises:  { alpha: 0.6,  width: 1.3, rest: 90,  key: "--warn" },
 };
 
 const brain = {
   nodes: [], edges: [], byId: new Map(),
   colour: "lobe",
-  showType: { memory: true, person: true, task: true, skill: true },
+  showType: { memory: true, person: true, episode: true, face: true,
+              document: true, task: true, skill: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
   pan: null, nodeDrag: null, band: null,
@@ -1068,6 +1081,10 @@ function nodeColour(node, alpha) {
 function nodeRadius(node) {
   if (node.type === "person") return 7.5;
   if (node.type === "task") return 6.5;
+  // An episode is one exchange — small and numerous by nature.
+  if (node.type === "episode") return 2.8;
+  if (node.type === "document") return 4 + Math.min(4, (node.chunks || 1) * 0.6);
+  if (node.type === "face") return 5.5 + (node.templates || 1) * 0.7;
   if (node.type === "skill") {
     // Log scale: home.get_state ran 1236 times and calendar.list_events 69.
     // Linear would make one node the size of the lobe.
@@ -1134,10 +1151,18 @@ function simulate() {
     b.vx -= (dx / d) * pull; b.vy -= (dy / d) * pull;
   }
 
+  // A big lobe generates far more internal repulsion than a small one, so
+  // a flat anchor let the 179-node recall lobe blow across the whole
+  // canvas and swallow the 43-node fact lobe. Scale the pull with the
+  // crowd it has to hold together.
+  const lobeSize = {};
+  for (const node of nodes) lobeSize[node.type] = (lobeSize[node.type] || 0) + 1;
+
   for (const node of nodes) {
     const anchor = (LOBES[node.type] || LOBES.memory).anchor;
-    node.vx += (anchor[0] - node.x) * ANCHOR;
-    node.vy += (anchor[1] - node.y) * ANCHOR;
+    const pull = ANCHOR * (1 + 0.55 * Math.log10(lobeSize[node.type] || 1));
+    node.vx += (anchor[0] - node.x) * pull;
+    node.vy += (anchor[1] - node.y) * pull;
     if (node.pinned) { node.vx = 0; node.vy = 0; continue; }
     node.vx *= DAMP; node.vy *= DAMP;
     node.x += node.vx * brain.alpha;
@@ -1196,6 +1221,7 @@ function drawGraph(canvas, view, opts) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Lobe halos — the brain has regions, and they should read as regions.
+  const drawnLabels = [];
   {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
@@ -1218,8 +1244,17 @@ function drawGraph(canvas, view, opts) {
       // its own label with it and the regions went unnamed.
       const lx = Math.min(Math.max(cx - captionWidth / 2, 8 * ratio),
                           canvas.width - captionWidth - 8 * ratio);
-      const ly = Math.min(Math.max(cy - spread - 8 * ratio, 16 * ratio),
-                          canvas.height - 8 * ratio);
+      let ly = Math.min(Math.max(cy - spread - 8 * ratio, 16 * ratio),
+                        canvas.height - 8 * ratio);
+      // Two lobes whose centres are close printed their captions on top of
+      // each other — "FACTRECALL 179". Stack them instead of overprinting.
+      for (const placed of drawnLabels) {
+        if (Math.abs(placed.y - ly) < 13 * ratio
+            && lx < placed.x + placed.w && placed.x < lx + captionWidth) {
+          ly = placed.y - 14 * ratio;
+        }
+      }
+      drawnLabels.push({ x: lx, y: ly, w: captionWidth });
       ctx.fillText(caption, lx, ly);
       ctx.globalAlpha = 1;
     }
@@ -1295,8 +1330,9 @@ function drawGraph(canvas, view, opts) {
 
     ctx.fillStyle = nodeColour(node, node.active === false ? 0.55 : 0.98);
     ctx.beginPath();
-    if (node.type === "task") {
-      // Work is square: shape carries type even when colour carries group.
+    if (node.type === "task" || node.type === "document") {
+      // Square things are ARTEFACTS — a queued job, a stored file. Shape
+      // carries type even when colour is carrying group.
       ctx.rect(p.x - radius, p.y - radius, radius * 2, radius * 2);
     } else if (node.type === "skill") {
       ctx.moveTo(p.x, p.y - radius);
@@ -1330,6 +1366,13 @@ function drawGraph(canvas, view, opts) {
       }
     }
 
+    if (node.type === "face") {
+      ctx.strokeStyle = nodeColour(node, 0.85);
+      ctx.lineWidth = 1.2 * ratio;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius + 3.5 * ratio, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     if (node.overdue) {
       ctx.strokeStyle = bad; ctx.lineWidth = 1.6 * ratio;
       ctx.beginPath(); ctx.arc(p.x, p.y, radius + 4 * ratio, 0, Math.PI * 2); ctx.stroke();
@@ -1596,6 +1639,17 @@ function renderSelection() {
     kvRow(list, "calls", String(node.uses));
     kvRow(list, "registered", node.registered ? "yes" : "no — loop tool",
           !node.registered);
+  } else if (node.type === "episode") {
+    kvRow(list, "day", node.day);
+    kvRow(list, "with", (node.participants || []).join(", "));
+  } else if (node.type === "document") {
+    kvRow(list, "kind", node.doc_kind);
+    kvRow(list, "chunks", String(node.chunks));
+    kvRow(list, "file", node.filename || "—");
+  } else if (node.type === "face") {
+    kvRow(list, "templates", String(node.templates));
+    const linked = neighboursOf(node.id).some((n) => n.edge.kind === "recognises");
+    kvRow(list, "person", linked ? "linked" : "no person record", !linked);
   } else if (node.type === "task") {
     kvRow(list, "task", node.task_type);
     kvRow(list, "repeat", node.repeat || "once");
@@ -1681,25 +1735,30 @@ function renderMemories() {
   const body = $("memories-body");
   if (!body) return;
   clear(body);
-  let facts = brain.nodes.filter((n) => n.type === "memory");
+  const REMEMBERED = { memory: "fact", episode: "recall",
+                       document: "doc", face: "face" };
+  let facts = brain.nodes.filter((n) => REMEMBERED[n.type]
+                                     && brain.showType[n.type]);
   if (brain.query) facts = facts.filter((n) => brain.matches.has(n.id));
   // Newest first: the thing you are looking for is usually the thing it
   // just learned.
   facts.sort((a, b) => (b.created || "").localeCompare(a.created || ""));
 
   if (!facts.length) {
-    empty(body, brain.query ? "no memory matches that" : "no memories");
+    empty(body, brain.query ? "nothing remembered matches that" : "no memories");
     verdictInto("memories-verdict", "0");
     return;
   }
   const rows = el("div", "rows");
   for (const fact of facts) {
-    const row = el("div", "row clickable" + (fact.active ? "" : " warn"));
+    const row = el("div", "row clickable"
+                   + (fact.active === false ? " warn" : ""));
     row.appendChild(el("span", "body", fact.content || fact.label));
+    row.appendChild(el("span", "tag", REMEMBERED[fact.type]));
     if (fact.subject && fact.subject !== "owner") {
       row.appendChild(el("span", "tag", fact.subject));
     }
-    if (!fact.active) row.appendChild(el("span", "tag", "superseded"));
+    if (fact.active === false) row.appendChild(el("span", "tag", "superseded"));
     if (fact.orphan) row.appendChild(el("span", "tag", "orphan"));
     row.title = (fact.created || "").slice(0, 10) + " · " + fact.kind;
     // Clicking a line selects the neuron and flies to it, so the list and
@@ -1713,9 +1772,9 @@ function renderMemories() {
     rows.appendChild(row);
   }
   body.appendChild(rows);
+  const total = brain.nodes.filter((n) => REMEMBERED[n.type]).length;
   verdictInto("memories-verdict",
-    brain.query ? `${facts.length} of ${brain.nodes.filter((n) => n.type === "memory").length}`
-                : String(facts.length));
+    brain.query ? `${facts.length} of ${total}` : String(facts.length));
 }
 
 function renderLegend() {
@@ -1942,6 +2001,8 @@ function wireMemory() {
     buildPalette(); renderLegend();
   });
   for (const [id, type] of [["show-memory", "memory"], ["show-person", "person"],
+                            ["show-episode", "episode"], ["show-document", "document"],
+                            ["show-face", "face"],
                             ["show-task", "task"], ["show-skill", "skill"]]) {
     const box = $(id);
     if (box) box.addEventListener("change", (e) => {
@@ -1955,7 +2016,10 @@ function wireMemory() {
     const box = $(id);
     if (box) box.addEventListener("change", (e) => {
       if (kind === "structure") {
-        for (const k of ["subject", "owns", "managed_by"]) brain.showEdge[k] = e.target.checked;
+        for (const k of ["subject", "owns", "managed_by", "spoke", "about",
+                         "recognises", "recalls"]) {
+          brain.showEdge[k] = e.target.checked;
+        }
       } else {
         brain.showEdge[kind] = e.target.checked;
       }
