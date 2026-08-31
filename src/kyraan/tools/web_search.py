@@ -90,7 +90,134 @@ def _search(query: str, count: int) -> dict:
     return {"query": query, "results": results}
 
 
+# --- web.open (governance round 2026-08-31, plan §3c gate lifted) ----------
+# Owner's conditions, all deterministic:
+# - provenance: the LOOP enforces that only URLs from this turn's search
+#   results or the user's own message are openable (loop_tools) — a URL
+#   found inside a fetched page is not
+# - taint: fetched text is WEB_UNTRUSTED (control_plane/taint.py) — the
+#   write-lockout covers it the moment it enters the turn
+# - SSRF: http/https only, no credentials in the URL, every redirect
+#   hop re-validated against private/loopback/link-local/reserved
+#   ranges — Home Assistant and Postgres do not exist for this tool
+# - direct fetch accepted (ordinary browsing exposure), size/time caps
+
+_MAX_BYTES = 500_000
+_MAX_TEXT = 6_000
+_MAX_HOPS = 3
+
+
+def _assert_public(url: str) -> "urllib.parse.SplitResult":
+    import ipaddress
+    import socket
+    import urllib.parse
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise ToolError("only http(s) pages can be opened")
+    if parts.username or parts.password:
+        raise ToolError("URLs with credentials are refused")
+    host = parts.hostname or ""
+    if not host:
+        raise ToolError("no host in that URL")
+    try:
+        infos = socket.getaddrinfo(host, parts.port or
+                                   (443 if parts.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise TransientToolError(f"cannot resolve {host}: {exc}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            raise ToolError(f"{host} resolves into a private network — "
+                            "refused (SSRF guard)")
+    return parts
+
+
+class _TextExtract(__import__("html.parser", fromlist=["HTMLParser"]).HTMLParser):
+    _SKIP = {"script", "style", "noscript", "template", "svg", "head",
+             "nav", "footer", "iframe"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.chunks, self._skipping, self.title = [], 0, ""
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self._SKIP:
+            self._skipping += 1
+        if tag == "title":
+            self._in_title = True
+        if tag in ("p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4"):
+            self.chunks.append("\n")
+
+    def handle_endtag(self, tag):
+        if tag in self._SKIP and self._skipping:
+            self._skipping -= 1
+        if tag == "title":
+            self._in_title = False
+
+    def handle_data(self, data):
+        if self._in_title and not self.title.strip():
+            self.title = data.strip()[:200]
+        if not self._skipping and data.strip():
+            self.chunks.append(data)
+
+
+def _open(url: str) -> dict:
+    import re as _re
+    import urllib.request
+    seen = 0
+    for _hop in range(_MAX_HOPS + 1):
+        _assert_public(url)   # EVERY hop — a public host may redirect inward
+        req = urllib.request.Request(url, method="GET", headers={
+            "User-Agent": "Mozilla/5.0 (Kyraan personal assistant; reads text)",
+            "Accept": "text/html,application/xhtml+xml,text/plain"})
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *a, **k):
+                return None
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            resp = opener.open(req, timeout=12)
+        except urllib.error.HTTPError as exc:
+            if exc.code in (301, 302, 303, 307, 308):
+                target = exc.headers.get("Location", "")
+                if not target:
+                    raise ToolError("redirect with no target")
+                url = urllib.parse.urljoin(url, target)
+                continue
+            raise ToolError(f"the page answered {exc.code}")
+        except OSError as exc:
+            raise TransientToolError(f"fetch failed: {exc}")
+        ctype = (resp.headers.get("Content-Type") or "").lower()
+        if not any(t in ctype for t in ("text/html", "text/plain", "xml")):
+            raise ToolError(f"not a readable page ({ctype.split(';')[0] or 'unknown type'})")
+        raw = resp.read(_MAX_BYTES)
+        charset = "utf-8"
+        m = _re.search(r"charset=([\w-]+)", ctype)
+        if m:
+            charset = m.group(1)
+        text = raw.decode(charset, errors="replace")
+        if "html" in ctype or text.lstrip()[:1] == "<":
+            parser = _TextExtract()
+            try:
+                parser.feed(text)
+            except Exception:
+                pass
+            body = _re.sub(r"\n{3,}", "\n\n",
+                           " ".join(parser.chunks).replace(" \n ", "\n")).strip()
+            title = parser.title
+        else:
+            body, title = text.strip(), ""
+        return {"url": url, "title": title, "text": body[:_MAX_TEXT],
+                "truncated": len(body) > _MAX_TEXT}
+    raise ToolError("too many redirects")
+
+
 async def call(tool_name: str, args: dict) -> object:
     if tool_name == "web.search":
         return await asyncio.to_thread(_search, args.get("query", ""), args.get("count", 5))
+    if tool_name == "web.open":
+        return await asyncio.to_thread(_open, str(args.get("url", "")).strip())
     raise ToolError(f"web_search adapter does not provide {tool_name!r}")

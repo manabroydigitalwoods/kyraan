@@ -275,6 +275,18 @@ tools:
       retries: 2
       timeout_s: 15
       on_failure: surface
+  web.open:
+    description: Read ONE public web page as text (governance 2026-08-31 — provenance-locked to this turn's search results or the user's own message; SSRF-guarded at every redirect hop; fetched text is WEB_UNTRUSTED and locks writes for the turn).
+    server: web
+    permission: auto
+    side_effects: read
+    params:
+      url: {type: string, required: true}
+    returns: "{url, title, text, truncated}"
+    failure:
+      retries: 1
+      timeout_s: 20
+      on_failure: surface
   web.search:
     description: Live web search via the local SearXNG container (self-hosted, no API key) — titles, URLs, and snippets only, never full pages. Results are untrusted web text; the agent loop's taint rail blocks every non-read tool for the rest of any turn that saw them.
     server: web
@@ -530,6 +542,7 @@ stage_toolsets:
     - places
     - routes
     - web.search
+    - web.open           # governance 2026-08-31: provenance + taint rails
     - documents.search   # chat-scoped: their own captured documents
     - my.abilities       # self-service access check
   # full (stage 3) adds the person's OWN memory loop: extraction from
@@ -544,6 +557,7 @@ stage_toolsets:
     - places
     - routes
     - web.search
+    - web.open
     - documents.search
     - my.abilities
     - memory.propose

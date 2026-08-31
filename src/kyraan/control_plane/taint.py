@@ -40,6 +40,7 @@ DOCTRINE = {
 # rail; extended here (one line) when a new source lands.
 SOURCE_CLASSES = {
     "web.search": WEB_UNTRUSTED,
+    "web.open": WEB_UNTRUSTED,
     "email.read": EMAIL_UNTRUSTED,
     "email.unread": EMAIL_UNTRUSTED,
     "email.important": EMAIL_UNTRUSTED,

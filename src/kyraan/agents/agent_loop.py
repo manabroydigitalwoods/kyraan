@@ -555,6 +555,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
     if _logs.turn_id() is None:
         _logs.new_turn()  # scheduled runs enter here without a chat turn
 
+    loop_tools.reset_turn_urls()  # provenance rail: fresh URL set per turn
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", skill="agent.loop", args={"chat_id": chat_id})
         raise kernel.KillSwitchEngaged("Kill switch is engaged — all autonomous action halted")
