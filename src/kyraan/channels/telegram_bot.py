@@ -1230,7 +1230,15 @@ def run() -> None:
     from kyraan.channels import voice as _voice_probe
     _voice_probe.start_probe()  # verdict ready before the first voice note
     token = os.environ["TELEGRAM_BOT_TOKEN"]
-    app = Application.builder().token(token).concurrent_updates(True).build()
+    from telegram import LinkPreviewOptions
+    from telegram.ext import Defaults
+    app = (Application.builder().token(token).concurrent_updates(True)
+           # No link-preview cards (owner: "this is not convenient",
+           # 2026-08-31 — one headline reply ballooned into a giant
+           # site banner). URLs stay clickable; the chat stays a chat.
+           .defaults(Defaults(
+               link_preview_options=LinkPreviewOptions(is_disabled=True)))
+           .build())
     app.add_handler(CommandHandler(["start", "help"], _on_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _on_message))
     app.add_handler(MessageHandler(filters.VOICE, _on_voice))
