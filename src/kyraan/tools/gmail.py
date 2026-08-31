@@ -285,6 +285,22 @@ def find_message(query: str) -> dict:
     raise ToolError(f"no email matches {query!r} in the inbox")
 
 
+def message_labels(message_id: str) -> list:
+    """Current labelIds of one message — the read half of
+    read-after-write verification for the modify tools."""
+    meta = _api(f"/messages/{message_id}?format=minimal")
+    return list(meta.get("labelIds") or [])
+
+
+def draft_exists(draft_id: str) -> bool:
+    """Does the draft stand in Gmail? Verification read for email.draft."""
+    try:
+        _api(f"/drafts/{draft_id}?format=minimal")
+        return True
+    except ToolError:
+        return False
+
+
 def set_labels(message_id: str, add: list, remove: list) -> None:
     _api_post(f"/messages/{message_id}/modify",
              {"addLabelIds": add, "removeLabelIds": remove})

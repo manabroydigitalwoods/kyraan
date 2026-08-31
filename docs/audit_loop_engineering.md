@@ -155,8 +155,14 @@ the false-success rail (claims of done-ness without a write this turn)
 and listing grounding. NOT covered: calendar.delete/update-title,
 email mark/archive/drafts, faces writes, persons writes,
 reminder/task/goal store writes (local file writes — lower risk).
-Rating: MODERATE (was WEAK before 08-31; STRONG requires covering the
-remaining write families).
+Rating at audit time: MODERATE. SAME-DAY UPDATE (the recommended
+milestone was built hours later): calendar.delete verifies by ABSENCE
+(a 404 is the success proof), Gmail modify tools verify label state,
+drafts verify existence, and every write tool now declares its
+verification class (read_after_write / same_store / undo_path) in
+loop_tools.VERIFICATION_CLASS — pinned by
+tests/test_verification_completeness.py, surfaced in
+registry.contracts(). Rating now: STRONG for external writes.
 
 ## 8. Retry/repair map
 
@@ -382,7 +388,7 @@ Reason 🟢 Plan 🟡 (implicit) Authorize 🟢 Act 🟢 Verify 🟡 Reflect �
 ```
 Bounded execution      9   Planning               6 (implicit; fine at 5 steps)
 Tool orchestration     8   Permissions            9
-Confirmation safety    9   Outcome verification   6 (3 write families covered)
+Confirmation safety    9   Outcome verification   8 (all external writes; same-day)
 Retry/repair           7   Loop detection         7 (exact-signature only)
 Progress detection     5   Context resolution     6 (scattered, no coreference)
 Memory feedback        8   Memory arbitration     7
@@ -390,7 +396,7 @@ Reflection             5   Curiosity              4
 Dream/consolidation    4   Persistent goals       6 (continuity, not execution)
 Event-driven autonomy  8   Idempotency            7 (honest at-most/least-once)
 Observability          8   Testing                9
-Overall loop engineering: 7.5
+Overall loop engineering: 7.5 (8 after the same-day milestone)
 Cognitive-loop completeness: 6
 ```
 

@@ -71,7 +71,7 @@ def test_contracts_name_the_verified_writes():
     c = registry.contracts()
     assert c["calendar.create_event"]["verification"] == "read_after_write"
     assert c["home.turn_on"]["verification"] == "read_after_write"
-    assert c["calendar.delete_event"]["verification"] is None
+    assert c["calendar.delete_event"]["verification"] == "read_after_write"
 
 
 async def test_termination_is_named_on_a_reply(monkeypatch):

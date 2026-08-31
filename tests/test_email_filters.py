@@ -142,9 +142,10 @@ async def test_mark_read_confirms_then_writes(monkeypatch):
         await loop_tools._email_mark_read(7, {"query": "statement"}, "")
     assert calls == []
     monkeypatch.setattr(kernel, "confirmed_context", lambda: True)
+    monkeypatch.setattr(gmail, "message_labels", lambda mid: ["INBOX"])
     out = await loop_tools._email_mark_read(7, {"query": "statement"}, "")
     assert out == {"changed": True, "id": "m1", "from": "Bank <b@x.com>",
-                   "subject": "Statement"}
+                   "subject": "Statement", "verified": True}
     assert calls == [("m1", [], ["UNREAD"])]
 
 

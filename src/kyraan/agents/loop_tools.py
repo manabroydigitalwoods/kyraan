@@ -80,6 +80,56 @@ def _same_moment(a: str, b: str) -> bool:
         return str(a) == str(b)
 
 
+async def _verified_gone(result: dict, read_call: "kernel.ToolCall") -> dict:
+    """Deletion verification: the re-read must FAIL to find it — a 404
+    is the success proof. Fail-soft like _verified."""
+    try:
+        observed = await kernel.run_tool(read_call)
+    except kernel.ToolFailed:
+        log_event("write_verified", tool=read_call.tool_name, gone=True)
+        return {**result, "verified": True}
+    except Exception as exc:
+        log_event("write_verify_unchecked", tool=read_call.tool_name,
+                  error=str(exc)[:100])
+        return {**result, "verified": None,
+                "verify_note": "deleted, but could not re-check — say it "
+                               "was requested, not confirmed gone"}
+    if isinstance(observed, dict) and observed.get("id"):
+        log_event("write_verify_mismatch", tool=read_call.tool_name,
+                  field="existence", expected="gone",
+                  observed=str(observed.get("id"))[:40])
+        return {**result, "verified": False,
+                "verify_note": "the event STILL EXISTS on re-read — tell "
+                               "the user the deletion did not stick"}
+    return {**result, "verified": True}
+
+
+async def _email_label_verified(result: dict, message_id: str,
+                                absent: str = "", present: str = "") -> dict:
+    """Label-state verification for the Gmail modify tools."""
+    import asyncio as _aio
+
+    from kyraan.tools import gmail as _gmail
+    try:
+        labels = await _aio.to_thread(_gmail.message_labels, message_id)
+    except Exception as exc:
+        log_event("write_verify_unchecked", tool="gmail.labels",
+                  error=str(exc)[:100])
+        return {**result, "verified": None,
+                "verify_note": "changed, but could not re-read the labels "
+                               "to confirm"}
+    ok = (absent not in labels if absent else True) and \
+         (present in labels if present else True)
+    if not ok:
+        log_event("write_verify_mismatch", tool="gmail.labels",
+                  field=absent or present, observed=",".join(labels)[:80])
+        return {**result, "verified": False,
+                "verify_note": "the label change did not stick on re-read "
+                               "— tell the user honestly"}
+    log_event("write_verified", tool="gmail.labels")
+    return {**result, "verified": True}
+
+
 async def _verified(result: dict, read_call: "kernel.ToolCall",
                     checks: dict) -> dict:
     """Read-after-write verification (adopted 2026-08-31 — the external
@@ -150,9 +200,14 @@ async def _calendar_delete(chat_id: int, args: dict, raw_text: str):
         raise kernel.ToolFailed(
             f"id/title mismatch: that id belongs to {known_title!r}, not "
             f"{args.get('title')!r} — the confirmation must name the real event")
-    return await kernel.run_tool(kernel.ToolCall(
-        "calendar.delete_event",
-        {"event_id": args["event_id"], "title": known_title}))
+    result = await kernel.run_tool(kernel.ToolCall(
+        "calendar.delete_event", {"event_id": str(args["event_id"]),
+                                  "title": known_title}))
+    if isinstance(result, dict) and result.get("deleted"):
+        result = await _verified_gone(
+            result, kernel.ToolCall("calendar.get_event",
+                                    {"event_id": str(args["event_id"])}))
+    return result
 
 
 async def _calendar_reschedule(chat_id: int, args: dict, raw_text: str):
@@ -308,8 +363,10 @@ async def _email_mark_read(chat_id: int, args: dict, raw_text: str):
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("email.mark_read", dict(args))
     await _aio.to_thread(_gmail.set_labels, match["id"], [], ["UNREAD"])
-    return {"changed": True, "id": match["id"],
-            "from": match["from"], "subject": match["subject"]}
+    return await _email_label_verified(
+        {"changed": True, "id": match["id"],
+         "from": match["from"], "subject": match["subject"]},
+        match["id"], absent="UNREAD")
 
 
 async def _email_archive(chat_id: int, args: dict, raw_text: str):
@@ -328,8 +385,10 @@ async def _email_archive(chat_id: int, args: dict, raw_text: str):
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("email.archive", dict(args))
     await _aio.to_thread(_gmail.set_labels, match["id"], [], ["INBOX"])
-    return {"changed": True, "id": match["id"],
-            "from": match["from"], "subject": match["subject"]}
+    return await _email_label_verified(
+        {"changed": True, "id": match["id"],
+         "from": match["from"], "subject": match["subject"]},
+        match["id"], absent="INBOX")
 
 
 _EMAIL_SUMMARY_SYSTEM = (
@@ -1448,7 +1507,18 @@ async def _email_draft(chat_id: int, args: dict, raw_text: str):
                                       body, reply_to)
     except gmail.ToolError as exc:
         raise kernel.ToolFailed(str(exc))
-    return {"drafted": True, **result}
+    out = {"drafted": True, **result}
+    draft_id = str(result.get("draft_id") or result.get("id") or "")
+    if draft_id:
+        try:
+            exists = await _aio.to_thread(gmail.draft_exists, draft_id)
+        except Exception:
+            exists = None
+        out["verified"] = exists
+        if exists is False:
+            out["verify_note"] = ("the draft is NOT in Gmail on re-read — "
+                                  "tell the user it did not stick")
+    return out
 
 
 async def _documents_rename(chat_id: int, args: dict, raw_text: str):
@@ -2086,6 +2156,42 @@ def _undo_reminders_reschedule(args, result, prior):
                 {"reminder_id": result["id"], "when_iso": result["prior_when"]})
     return None
 
+
+# Verification completeness (audit milestone, 2026-08-31): every WRITE
+# tool declares HOW its outcome is checked — pinned by test, so a new
+# write cannot ship unclassified.
+#   read_after_write — an external re-read confirms/refutes the write
+#   same_store       — the write and the read are the same local store
+#                      (file/PG on this machine); a re-read adds nothing
+#   undo_path        — executes only inside the orchestrator's undo
+#                      replay of a verified original
+VERIFICATION_CLASS = {
+    "calendar.create_event": "read_after_write",
+    "calendar.reschedule": "read_after_write",
+    "calendar.delete_event": "read_after_write",
+    "home.turn_on": "read_after_write",
+    "home.turn_off": "read_after_write",
+    "email.mark_read": "read_after_write",
+    "email.archive": "read_after_write",
+    "email.draft": "read_after_write",
+    "email.draft_delete": "read_after_write",
+    "reminders.create": "same_store", "reminders.cancel": "same_store",
+    "reminders.reschedule": "same_store", "reminders.snooze": "same_store",
+    "reminders.recreate": "same_store",
+    "tasks.schedule": "same_store", "tasks.cancel": "same_store",
+    "tasks.recreate": "same_store",
+    "rules.create": "same_store", "rules.cancel": "same_store",
+    "rules.reactivate": "same_store",
+    "goals.create": "same_store", "goals.update": "same_store",
+    "goals.set_status": "same_store",
+    "memory.forget": "same_store", "memory.unforget": "same_store",
+    "documents.rename": "same_store",
+    "faces.remember": "same_store", "faces.forget": "same_store",
+    "persons.add": "same_store", "persons.alias": "same_store",
+    "persons.set_access": "same_store", "persons.set_tools": "same_store",
+    "files.send": "same_store",
+    "documents.show": "same_store",
+}
 
 UNDO_MAP = {
     "calendar.create_event": _undo_calendar_create,

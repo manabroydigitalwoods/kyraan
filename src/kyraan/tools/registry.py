@@ -123,6 +123,18 @@ def load() -> dict:
     return specs
 
 
+def _verification_class(name: str, spec: "ToolSpec") -> str | None:
+    """From the loop's declared map (the executors own verification);
+    reads need none."""
+    if spec.side_effects == "read":
+        return None
+    try:
+        from kyraan.agents.loop_tools import VERIFICATION_CLASS
+        return VERIFICATION_CLASS.get(name)
+    except Exception:
+        return None
+
+
 def contracts() -> dict:
     """Capability-contract metadata (plan §3c, adopted 2026-08-28): per
     tool, {effect, risk, requires_confirmation, taint} as auditable DATA
@@ -139,10 +151,7 @@ def contracts() -> dict:
                      else "read_only"),
             "requires_confirmation": spec.permission == "confirm",
             "taint": _taint.source_class(name),
-            # read-after-write executors exist for these (2026-08-31)
-            "verification": ("read_after_write" if name in (
-                "calendar.create_event", "calendar.reschedule",
-                "home.turn_on", "home.turn_off") else None),
+            "verification": _verification_class(name, spec),
         }
     return out
 
