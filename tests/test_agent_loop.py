@@ -1247,3 +1247,26 @@ async def test_third_search_is_refused_and_the_answer_ordered(scripted_model, mo
     assert len(searches) == 2                      # third never executed
     assert "no more searches this turn" in prompts[-1]
     assert "Two leads found" in reply
+
+
+def test_the_decision_schema_shows_the_answers_request_false_shape():
+    """Live 2026-08-30/31: 48 contract corrections in two days, EVERY one
+    logged reason="undeclared" and not one declared a valid reason. The
+    prose documented `reason`; the JSON skeleton the model copies did not
+    show it, so the model flipped the boolean and omitted a key it had
+    never seen in the shape. Both drafts sampled were behaving correctly
+    ("I can't open news pages" = capability_missing, "9 PM already passed,
+    what time instead?" = missing_user_fact) — only the label was missing,
+    and each correction cost an extra round trip out of a 5-step budget.
+
+    The example is the contract. Keep the false shape in it."""
+    import pathlib
+
+    from kyraan.agents import agent_loop
+    source = pathlib.Path(agent_loop.__file__).read_text()
+    block = source[source.index("DECIDE with ONE JSON object"):]
+    block = block[:block.index("THE REPLY CONTRACT")]
+    assert '"answers_request": true' in block
+    assert '"answers_request": false' in block, "the false shape must be shown, not only described"
+    for reason in ("ambiguous_referent", "missing_user_fact", "capability_missing"):
+        assert reason in block, reason

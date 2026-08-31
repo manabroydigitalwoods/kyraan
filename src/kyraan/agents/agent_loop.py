@@ -270,6 +270,7 @@ doctrine, in order:
 
 DECIDE with ONE JSON object, nothing else:
   {{"action": "reply", "consider": "<one short line: WANT/HAVE/NEED verdict>", "answers_request": true, "text": "<your reply>"}}
+  {{"action": "reply", "consider": "<one short line: why this is not an answer>", "answers_request": false, "reason": "<ambiguous_referent|missing_user_fact|capability_missing>", "text": "<your reply>"}}
   {{"action": "call", "consider": "<one short line: why this tool now>", "tool": "<tool name>", "args": {{...}}}}
 
 THE REPLY CONTRACT: "answers_request" declares whether your reply
