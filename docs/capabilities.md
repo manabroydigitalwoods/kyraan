@@ -148,6 +148,7 @@ fire late rather than never (sleep-proof since 2026-08-30).
 | SearXNG (local Docker) | web search | none | only the query leaves the machine |
 | Open-Meteo | weather | none | coordinates only |
 | Google Routes / TomTom | live-traffic ETAs | API keys | origin/destination only |
+| Any MCP stdio server | mountable via config (none mounted yet) | per-server env | behind our registry: confirm-gated writes, optional untrusted taint, owner-only until granted |
 | Postgres (Docker) | facts, persons, documents, episodes, triples, mirrors | local | fully local |
 | Redis (Docker) | working state / KV | local | fully local |
 

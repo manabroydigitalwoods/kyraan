@@ -272,7 +272,12 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
    the gap entry here is a reason to run that governance round, not a
    bypass of it. Email sending and acting rules remain owner-held by
    decision: deliberate, not gaps.
-3. **Connector breadth via MCP-as-client.** Claude lists 950+ MCP
+3. **Connector breadth via MCP-as-client — machinery BUILT
+   2026-08-31** (stdio client, yaml mounts behind the permission
+   registry, generated menu entries, per-server untrusted taint,
+   no-auto-writes enforced at load, stage-invisible until granted).
+   Remaining per-server: a governance data-destination row for each
+   actual mount — none mounted yet. Claude lists 950+ MCP
    servers; we have 11 hand-built adapters. We will never match breadth
    by hand — one MCP client adapter mounting external servers behind
    our own permission registry (capability names, confirm gates, taint

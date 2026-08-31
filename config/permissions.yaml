@@ -249,6 +249,21 @@ tool_servers:
     write_entities:
       - switch.ac
 
+  # --- Mounting an MCP server (client built 2026-08-31, §3d #3) ---------
+  # Any MCP stdio server mounts behind the SAME permission registry as
+  # builtin tools. Each mount is a governance data-destination decision
+  # FIRST (what leaves the machine, to whom). Then: declare the server
+  # here, declare each tool under tools: with our namespaced name +
+  # mcp_name for the wire, and restart. Writes require confirm (the
+  # validator refuses auto), untrusted: true taints every result like a
+  # web snippet, mounted tools join no family stage until granted.
+  # Example (commented until a real mount is decided):
+  # github:
+  #   transport: mcp-stdio
+  #   command: ["npx", "-y", "@modelcontextprotocol/server-github"]
+  #   env: {GITHUB_TOKEN: "${GITHUB_TOKEN}"}
+  #   untrusted: true
+
 tools:
   calendar.list_events:
     description: List events between two times on the owner's Google Calendar (secret ICS address, read-only).

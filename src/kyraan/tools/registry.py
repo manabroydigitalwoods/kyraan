@@ -45,6 +45,9 @@ class ToolSpec:
     retries: int
     timeout_s: float
     on_failure: str        # surface | fallback:<tool.name> | silent
+    # MCP-mounted tools (2026-08-31): the server's OWN tool name. Ours
+    # stay namespaced ("gh.create_issue"); the wire carries this.
+    mcp_name: str = ""
 
 
 def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:
@@ -105,6 +108,7 @@ def load() -> dict:
             retries=int(failure.get("retries", 0)),
             timeout_s=float(failure.get("timeout_s", 10)),
             on_failure=failure.get("on_failure", "surface"),
+            mcp_name=str(entry.get("mcp_name", "") or ""),
         )
         _validate(name, spec, all_names, servers)
         specs[name] = spec
@@ -171,8 +175,9 @@ class MCPStdioAdapter:
     the child's stdio. One in-flight request at a time — MCP stdio is a
     single ordered stream. A dead child is respawned on the next call."""
 
-    def __init__(self, command: list):
+    def __init__(self, command: list, env: dict | None = None):
         self._command = command
+        self._env = env or {}
         self._proc: asyncio.subprocess.Process | None = None
         self._lock = asyncio.Lock()
         self._ids = itertools.count(1)
@@ -180,11 +185,13 @@ class MCPStdioAdapter:
     async def _ensure_started(self) -> None:
         if self._proc is not None and self._proc.returncode is None:
             return
+        import os as _os
         self._proc = await asyncio.create_subprocess_exec(
             *self._command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            env={**_os.environ, **self._env},
         )
         await self._request("initialize", {
             "protocolVersion": "2024-11-05",
@@ -243,7 +250,8 @@ def _adapter(server: str):
     if transport == "builtin":
         return importlib.import_module(entry["module"])
     if transport == "mcp-stdio":
-        return MCPStdioAdapter(list(entry["command"]))
+        return MCPStdioAdapter(list(entry["command"]),
+                               env=dict(entry.get("env") or {}))
     raise ToolError(f"tool server {server!r}: unknown transport {transport!r} (builtin | mcp-stdio)")
 
 
@@ -253,5 +261,11 @@ _adapter_module = _adapter
 
 async def dispatch(spec: ToolSpec, args: dict):
     """Hand the call to the tool's adapter. Adapters expose one interface:
-    `async def call(tool_name, args)` — builtin or MCP, callers can't tell."""
-    return await _adapter(spec.server).call(spec.name, args)
+    `async def call(tool_name, args)` — builtin or MCP, callers can't tell.
+    MCP servers get their OWN tool name on the wire (mcp_name, defaulting
+    to the part after our namespace dot)."""
+    adapter = _adapter(spec.server)
+    if isinstance(adapter, MCPStdioAdapter):
+        wire = spec.mcp_name or spec.name.split(".", 1)[-1]
+        return await adapter.call(wire, args)
+    return await adapter.call(spec.name, args)

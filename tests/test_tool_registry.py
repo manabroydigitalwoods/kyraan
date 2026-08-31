@@ -262,7 +262,9 @@ async def test_mcp_stdio_transport_round_trip(patched_cfg):
         servers={"mcp": {"transport": "mcp-stdio", "command": _FAKE_MCP}},
     )
     result = await kernel.run_tool(kernel.ToolCall("mcp.echo", {"x": "hello"}))
-    assert result == {"echoed_tool": "mcp.echo", "echoed_args": {"x": "hello"}}
+    # the wire carries the server's OWN tool name (client build
+    # 2026-08-31): ours stay namespaced, the child sees "echo"
+    assert result == {"echoed_tool": "echo", "echoed_args": {"x": "hello"}}
 
 
 async def test_mcp_stdio_serializes_multiple_calls_on_one_process(patched_cfg):

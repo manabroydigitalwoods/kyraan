@@ -51,5 +51,21 @@ SOURCE_CLASSES = {
 
 
 def source_class(tool_name: str) -> str | None:
-    """The taint class a tool's result carries, or None for clean."""
-    return SOURCE_CLASSES.get(tool_name)
+    """The taint class a tool's result carries, or None for clean.
+    Config-aware for mounted MCP servers (2026-08-31): a tool_servers
+    entry declaring `untrusted: true` marks every one of its tools'
+    results as third-party text — the write-lockout covers them the
+    same way it covers web snippets."""
+    fixed = SOURCE_CLASSES.get(tool_name)
+    if fixed:
+        return fixed
+    try:
+        from kyraan.control_plane import config as _config
+        cfg = _config.load()
+        server = (cfg.get("tools", {}) or {}).get(tool_name, {}).get("server")
+        entry = (cfg.get("tool_servers", {}) or {}).get(server) or {}
+        if entry.get("untrusted"):
+            return WEB_UNTRUSTED
+    except Exception:
+        pass
+    return None
