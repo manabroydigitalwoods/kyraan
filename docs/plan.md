@@ -184,8 +184,14 @@ tools — a rule the proposal itself broke for WhatsApp/Slack/GitHub.
   tools are a SEPARATE decision, gated below, not a natural next step of
   this one.
 
-**Adopt next (the one substantial win)**
-- **Google Contacts → IdentityResolver → persons.** Known OAuth model, feeds
+**Adopt next — governance round held 2026-09-01, BUILT same day.**
+Owner's three decisions: names may enter cloud prompts like registry
+names; phones/emails are LOCAL-ONLY (§3a direct-reply pattern,
+contacts.find); scope = My Contacts read-only. Sync is a nightly job,
+never agent-callable, gated on KYRAAN_CONTACTS=on + an OAuth re-run.
+Registry auto-linking deliberately deferred — name collisions make
+alias-writes a separate decision.
+- **Google Contacts → IdentityResolver → persons.** (original entry) Known OAuth model, feeds
   the people-graph directly, no governance conflict. Preconditions: a new
   row in governance §0's data-destinations table first (contact names/
   numbers entering cloud prompts is a policy event per §3), and

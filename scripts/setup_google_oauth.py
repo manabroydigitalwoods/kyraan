@@ -58,6 +58,11 @@ SCOPES = [
     # enforced by code absence exactly as with drafts.
     *(["https://www.googleapis.com/auth/gmail.modify"]
       if os.environ.get("KYRAAN_EMAIL_MODIFY", "").strip() == "on" else []),
+    # KYRAAN_CONTACTS=on (owner governance round, 2026-09-01): read-only
+    # contacts feed the people-resolver. Names may enter cloud prompts;
+    # numbers/emails are LOCAL-ONLY by decision (the §3a pattern).
+    *(["https://www.googleapis.com/auth/contacts.readonly"]
+      if os.environ.get("KYRAAN_CONTACTS", "").strip() == "on" else []),
 ]
 
 

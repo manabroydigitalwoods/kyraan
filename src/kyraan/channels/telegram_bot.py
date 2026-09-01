@@ -1105,6 +1105,19 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
             await _stage("lesson_scan", _lesson_scan)
 
+            async def _contacts_sync():
+                # Nightly-job-only by governance precondition (plan §3c):
+                # sync is never an agent-callable tool.
+                from kyraan.store import contacts as _cstore
+                from kyraan.tools import google_contacts as _gc
+                if not _gc.enabled():
+                    return
+                import asyncio as _aio4
+                fetched = await _aio4.to_thread(_gc.fetch_all)
+                await _aio4.to_thread(_cstore.upsert_all, fetched)
+
+            await _stage("contacts_sync", _contacts_sync)
+
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),
                             name="self_review", job_kwargs=_DAILY_GRACE)

@@ -1565,6 +1565,41 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
             "now": new_name}
 
 
+async def _contacts_find(chat_id: int, args: dict, raw_text: str):
+    """Governance 2026-09-01: numbers/emails are LOCAL-ONLY — this
+    composes the answer itself (__direct_reply__), so contact details
+    reach the OWNER and never a model prompt; history keeps a
+    placeholder for the same reason."""
+    import asyncio as _aio
+
+    from kyraan.store import contacts as _contacts
+    from kyraan.tools import google_contacts as _gc
+    if not _gc.enabled():
+        raise kernel.ToolFailed(
+            "contacts sync is off — set KYRAAN_CONTACTS=on and re-run "
+            "the Google OAuth setup, then it syncs nightly")
+    name = str(args.get("name", "")).strip()
+    if len(name) < 2:
+        raise kernel.ToolFailed("whose contact? give a name")
+    try:
+        hits = await _aio.to_thread(_contacts.find, name)
+    except Exception as exc:
+        raise kernel.ToolFailed(
+            f"the contact store is unreachable ({str(exc)[:80]})")
+    if not hits:
+        return {"__direct_reply__": (
+            f'No contact matching "{name}" in your synced Google '
+            "contacts.")}
+    lines = []
+    for h in hits:
+        parts = [h["name"]]
+        parts += [f"📞 {p}" for p in h["phones"]]
+        parts += [f"✉️ {e}" for e in h["emails"]]
+        lines.append(" — ".join(parts))
+    return {"__direct_reply__": "\n".join(lines),
+            "__history__": f"[showed contact details for {name}]"}
+
+
 async def _memory_search_facts(chat_id: int, args: dict, raw_text: str):
     """Plan §3c (adopted 2026-08-28): direct search over REVIEWED facts.
     Before this, reviewed facts were only reachable via context assembly
@@ -1996,6 +2031,14 @@ TOOLS = {
                   "the doc caption and date. Empty = say no saved document "
                   "matches, never invent one."),
         "run": _documents_search,
+    },
+    "contacts.find": {
+        "params": '{"name": "<person name words>"}',
+        "about": ("Phone number / email from the owner's synced Google "
+                  "contacts — \"what's Suman's number\", \"email for the "
+                  "school\". The reply is composed locally: contact "
+                  "details never pass through you — call it and STOP."),
+        "run": _contacts_find,
     },
     "memory.search_facts": {
         "params": '{"query": "<topic words>"}',
@@ -2552,7 +2595,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
-                    "goals.list", "goals.show", "web.open",
+                    "goals.list", "goals.show", "web.open", "contacts.find",
                     "memory.search_facts",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
