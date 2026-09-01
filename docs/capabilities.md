@@ -68,6 +68,9 @@ scheduled runs get read-only tools by construction.
 - `memory.relations` — the person/fact/document graph (triples).
 - `memory.forget` / `unforget` / `pending_list` — forget is undoable.
 - Nightly memory-dedup scan proposes consolidations; owner applies.
+- **Learned rules** — corrections you repeat become proposed behavior
+  rules (drafted locally, owner-approved into the persona, capped,
+  retirable via "retire learned rule …").
 
 ### Documents & files
 - Uploaded files (photos of cards, PDFs, etc.) are OCR'd/read, titled cleanly,

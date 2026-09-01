@@ -1090,6 +1090,21 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
             await _stage("memory_dedup_scan", _dedup_scan)
 
+            async def _lesson_scan():
+                # Correction→behavior loop (2026-09-01): cluster the
+                # owner's repeated corrections, draft ONE rule on the
+                # LOCAL tier, queue it for review — nothing changes
+                # without the owner's yes.
+                from kyraan.memory import lessons
+                proposed = await lessons.scan_and_propose()
+                if proposed:
+                    await _send(context, _owner_id(),
+                                f"📐 I keep getting corrected the same way — "
+                                f"{proposed} proposed behavior rule(s) queued. "
+                                'Say "review memory" to see and decide.')
+
+            await _stage("lesson_scan", _lesson_scan)
+
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),
                             name="self_review", job_kwargs=_DAILY_GRACE)

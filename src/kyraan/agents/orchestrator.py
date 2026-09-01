@@ -608,6 +608,16 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         for i in approved_idx:
                             path, target, fact = proposals[i]
                             if path.exists():
+                                if str(target).startswith("persona/"):
+                                    # A learned RULE, not a fact: the
+                                    # owner's yes lands it in the persona
+                                    # block, never the memory tree.
+                                    from kyraan.memory import lessons
+                                    rule = fact.split(":", 1)[-1].strip()
+                                    lessons.apply(rule, [fact])
+                                    path.unlink(missing_ok=True)
+                                    saved.append(f"rule adopted — {rule}")
+                                    continue
                                 if memory_store.dispute_meta(path) is not None:
                                     # P3.5d: approving a dispute = the new
                                     # claim stands, under THIS reviewer's
@@ -623,6 +633,11 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         for i in rejected_idx:
                             path, target, fact = proposals[i]
                             if path.exists():
+                                if str(target).startswith("persona/"):
+                                    path.unlink(missing_ok=True)
+                                    discarded.append(fact)
+                                    log_event("lesson_rejected", fact=fact[:80])
+                                    continue
                                 if memory_store.dispute_meta(path) is not None:
                                     outcome = memory_store.resolve_dispute(path, keep_new=False)
                                     discarded.append(f"dispute resolved — {outcome}")
@@ -729,6 +744,30 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        if (_re.match(r"^\s*list\s+learned\s+rules\s*[?!.]?\s*$",
+                      raw_text, _re.IGNORECASE)
+                and kernel.viewer_person() == "owner"):
+            from kyraan.memory import lessons as _lessons
+            _skip_extraction.set(True)
+            rules = _lessons.active_rules()
+            if not rules:
+                return ("No learned rules yet — when you correct me the "
+                        "same way a few times, I'll propose one for your "
+                        "review.")
+            return "Learned rules (owner-approved):\n" + "\n".join(
+                f"{i+1}. {r['rule']}  [{r['id'][:6]}]"
+                for i, r in enumerate(rules)) + \
+                '\n\nSay "retire learned rule <words or id>" to drop one.'
+        retire_m = _re.match(r"^\s*retire\s+learned\s+rule\s+(.+?)\s*$",
+                             raw_text, _re.IGNORECASE)
+        if retire_m and kernel.viewer_person() == "owner":
+            from kyraan.memory import lessons as _lessons
+            _skip_extraction.set(True)
+            try:
+                gone = _lessons.retire(retire_m.group(1))
+            except ValueError as exc:
+                return str(exc)
+            return f"Retired: \"{gone['rule']}\" — it no longer shapes my replies."
         if _re.match(r"^\s*healt?h?\s+(?:report|check|status)\s*[?!.]?\s*$"
                      r"|^\s*health\s*[?!.]?\s*$",
                      raw_text, _re.IGNORECASE) and kernel.viewer_person() == "owner":

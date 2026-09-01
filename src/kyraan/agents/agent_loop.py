@@ -504,6 +504,13 @@ def _persona_block() -> str:
                      "owner's.")
     for trait in (p.get("voice") or [])[:8]:
         lines.append(f"- {trait}")
+    from kyraan.memory import lessons as _lessons
+    try:
+        learned = _lessons.block()
+        if learned:
+            lines.append(learned)
+    except Exception:
+        pass  # a broken rules file must never break prompt build
     return "\n".join(lines)
 
 

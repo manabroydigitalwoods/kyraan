@@ -295,12 +295,14 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
    are mute. A second channel (CLI first: zero governance surface)
    proves the `channels/` abstraction. WhatsApp remains gated (§3c:
    ban risk on the owner's personal number).
-6. **Self-improvement loop.** Hermes' agent-curated skills grow with
-   use. Our analog is thinner: self-review → corrections → eval suite,
-   by hand, weekly. Modest version: promote repeated confirmed
-   corrections into persona/prompt rules through the same
-   owner-review-queue pattern facts already use. Never self-modifying
-   weights (§1).
+6. **Self-improvement loop — BUILT 2026-09-01** (memory/lessons.py):
+   nightly deterministic clustering of repeated corrections (3+ over
+   2+ days), ONE rule drafted on the LOCAL tier, queued in the same
+   owner review flow as facts; approval renders it into the PERSONA
+   block (capped 10, each rule citing its source corrections);
+   "list/retire learned rule" phrases manage them. Never
+   self-modifying weights (§1) — the artifact is a visible line in a
+   data file behind the owner's yes.
 
 **Build order (proposed 2026-08-31, owner not yet committed)**
 1. Web page reading — small, closes a live user-visible failure
