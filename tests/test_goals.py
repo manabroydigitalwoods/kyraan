@@ -224,3 +224,51 @@ def test_reopen_step_unchecks():
     goals.update(7, "birthday", step_done="venue")
     goals.update(7, "birthday", reopen_step="venue")
     assert all(not s["done"] for s in goals.get(g.id).steps)
+
+
+async def test_cycle_step_markers_keep_the_goals_own_books(cycling, monkeypatch):
+    """Owner "go" 2026-09-01: a cycle's findings can settle or reveal
+    steps — applied deterministically, bounded, never guessed."""
+    sent, _ = cycling
+    g = _goal()
+
+    async def run(goal):
+        return ("- Sharma Garden confirmed: 8k, holds 40, free on the 12th\n"
+                "STEP_DONE: venue\n"
+                "STEP_ADD: visit Sharma Garden Saturday\n"
+                "STEP_ADD: pay booking advance\n"
+                "STEP_ADD: a third add beyond the cap")
+
+    monkeypatch.setattr(goals, "_run_fn", run)
+    await goals.fire(g.id)
+    got = goals.get(g.id)
+    assert [s["text"] for s in got.steps if s["done"]] == ["venue"]
+    added = [s["text"] for s in got.steps[3:]]
+    assert added == ["visit Sharma Garden Saturday", "pay booking advance"]
+    ping = sent[0][1]
+    assert "✔ step done: venue" in ping and "step added: visit" in ping
+    assert "STEP_DONE" not in ping          # markers never reach the owner
+
+
+async def test_ambiguous_or_unknown_step_done_is_ignored(cycling, monkeypatch):
+    sent, _ = cycling
+    g = _goal(steps=["book venue A", "book venue B"])
+
+    async def run(goal):
+        return "- looked around\nSTEP_DONE: book venue"   # matches two
+
+    monkeypatch.setattr(goals, "_run_fn", run)
+    await goals.fire(g.id)
+    assert all(not s["done"] for s in goals.get(g.id).steps)  # untouched
+
+
+async def test_duplicate_step_add_is_skipped(cycling, monkeypatch):
+    sent, _ = cycling
+    g = _goal()
+
+    async def run(goal):
+        return "- news\nSTEP_ADD: cake"    # already a step
+
+    monkeypatch.setattr(goals, "_run_fn", run)
+    await goals.fire(g.id)
+    assert len(goals.get(g.id).steps) == 3

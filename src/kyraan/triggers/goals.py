@@ -256,8 +256,12 @@ def cycle_instruction(goal: Goal) -> str:
         "Research the OPEN steps with your read-only tools (web, "
         "calendar, weather, places). Report ONLY genuinely new, "
         "concrete findings as short bullets; you may end with ONE "
-        "suggested next action for the user to approve. If nothing "
-        "new was found, reply exactly NOTHING_NEW.")
+        "suggested next action for the user to approve. If a finding "
+        "FULLY SETTLES an open step, add a final line 'STEP_DONE: "
+        "<words of that step>'; if it reveals a concrete new step, add "
+        "'STEP_ADD: <short step>' (max 2). Never invent progress — a "
+        "step is done only when the finding proves it. If nothing new "
+        "was found, reply exactly NOTHING_NEW.")
 
 
 async def fire(goal_id: str) -> None:
@@ -292,6 +296,51 @@ async def fire(goal_id: str) -> None:
         log_event("goal_cycle_failed", goal_id=goal_id, error=str(exc)[:150])
         return
     finding = "" if (not result or "NOTHING_NEW" in result[:400]) else result
+    step_notes = []
+    if finding:
+        # The cycle keeps the goal's own books (owner "go", 2026-09-01):
+        # structured STEP_DONE/STEP_ADD lines are parsed and applied
+        # DETERMINISTICALLY through the same machinery conversational
+        # updates use — bounded (1 done, 2 adds per cycle), matched
+        # against real open steps, ignored-and-logged on any mismatch,
+        # never guessed. Internal goal state only; the outside world
+        # still sees zero writes from a cycle.
+        import re as _re
+        done = _re.findall(r"^STEP_DONE:\s*(.+)$", finding, _re.MULTILINE)[:1]
+        adds = _re.findall(r"^STEP_ADD:\s*(.+)$", finding, _re.MULTILINE)[:2]
+        finding = _re.sub(r"^STEP_(?:DONE|ADD):.*$", "", finding,
+                          flags=_re.MULTILINE).strip()
+        for wanted in done:
+            wanted_l = wanted.strip().lower()
+
+            def _check(row, w=wanted_l):
+                hits = [st for st in row["steps"]
+                        if not st["done"] and w in st["text"].lower()]                     or [st for st in row["steps"]
+                        if not st["done"]
+                        and st["text"].lower() in w]
+                if len(hits) != 1:
+                    raise ValueError("no unique open step")
+                hits[0]["done"] = True
+                step_notes.append(f"✔ step done: {hits[0]['text']}")
+            try:
+                _mutate(goal_id, _check)
+            except ValueError:
+                log_event("goal_cycle_step_ignored", goal_id=goal_id,
+                          step_done=wanted[:60])
+        for new_step in adds:
+            text = new_step.strip()[:200]
+            if len(text) < 4:
+                continue
+            existing = {st["text"].lower() for st in
+                        (get(goal_id) or goal).steps}
+            if text.lower() in existing:
+                continue
+            _mutate(goal_id, lambda r, t=text: r["steps"].append(
+                {"text": t, "done": False, "note": ""}))
+            step_notes.append(f"+ step added: {text}")
+        if step_notes:
+            log_event("goal_cycle_steps", goal_id=goal_id,
+                      applied=len(step_notes))
     carry = goal.unreported
     if finding:
         digest = hashlib.sha256(finding.encode()).hexdigest()[:16]
@@ -302,7 +351,8 @@ async def fire(goal_id: str) -> None:
         else:
             _mutate(goal_id, lambda r: r["journal"].append(
                 {"ts": local_now().isoformat(), "text": finding[:1500]}))
-    to_report = "\n".join(t for t in (carry, finding) if t)
+    to_report = "\n".join(t for t in (carry, finding,
+                                       "\n".join(step_notes)) if t)
     if not to_report:
         log_event("goal_cycle_quiet", goal_id=goal_id)
         return
