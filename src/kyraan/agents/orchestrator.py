@@ -1045,14 +1045,23 @@ async def _undo_command(chat_id: int, tool_prefix: str | None) -> str:
                 if not await _aio.to_thread(
                         _gmail._delete_draft, str(ua.get("draft_id", ""))):
                     raise kernel.ToolFailed("that draft is already gone")
-            elif ut == "email.mark_unread":
+            elif ut in ("email.mark_unread", "email.unarchive"):
+                # The undo inverse gets the same read-after-write check
+                # as its forward twin (verification completeness,
+                # 2026-08-31): the label must actually be back.
                 from kyraan.tools import gmail as _gmail
+                label = "UNREAD" if ut == "email.mark_unread" else "INBOX"
                 await _aio.to_thread(_gmail.set_labels,
-                                     ua["message_id"], ["UNREAD"], [])
-            elif ut == "email.unarchive":
-                from kyraan.tools import gmail as _gmail
-                await _aio.to_thread(_gmail.set_labels,
-                                     ua["message_id"], ["INBOX"], [])
+                                     ua["message_id"], [label], [])
+                try:
+                    labels = await _aio.to_thread(_gmail.message_labels,
+                                                  ua["message_id"])
+                except Exception:
+                    labels = None
+                if labels is not None and label not in labels:
+                    raise kernel.ToolFailed(
+                        "the undo did not stick on re-read — check the "
+                        "email in Gmail")
             elif ut == "persons.set_tools":
                 from kyraan.store import persons as _persons
                 pid = _persons.resolve(ua["name"]) or ua["name"]

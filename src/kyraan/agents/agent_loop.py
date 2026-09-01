@@ -813,6 +813,28 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                 orchestrator._skip_extraction.set(True)
             log_event("agent_reply", chat_id=chat_id, steps=step + 1,
                       tier=tier, consider=consider)
+            if web_tainted:
+                # Relay rail (audit P0 #2, 2026-08-31): the taint
+                # lockout stops ACTIONS from web content; this stops
+                # the reply from carrying a link the web content
+                # injected. Deterministic: in a tainted turn, a reply
+                # URL must come from this turn's search results/opened
+                # pages or the user's own message — anything else is
+                # stripped, never relayed. (Scheme-bearing URLs only:
+                # that is what a page can weaponize as a click.)
+                allowed = set(loop_tools._TURN_URLS.get() or ())
+                allowed |= {u.rstrip("/.,)") for u in
+                            re.findall(r"https?://[^\s<>\"'\)\]]+", raw_text)}
+                stripped = 0
+                for url in set(re.findall(r"https?://[^\s<>\"'\)\]]+", reply)):
+                    if url.rstrip("/.,)") not in allowed:
+                        reply = reply.replace(
+                            url, "[link removed — not from this turn's "
+                                 "search results]")
+                        stripped += 1
+                if stripped:
+                    log_event("web_relay_link_stripped", chat_id=chat_id,
+                              count=stripped)
             _termination.set("replied_after_correction"
                              if contract_corrections else "replied")
             return reply
