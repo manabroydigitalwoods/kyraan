@@ -494,6 +494,30 @@ nodes carry their chat id server-side for this; `model_call` events carry
 no chat, and fall back to the owner, who it is nearly every time. Nothing
 fires on a timer — a quiet assistant shows a quiet brain.
 
+**Signals ride visible wires, and the log says what was fetched and what
+came back** (owner: "signal should pass in the connected string", "what is
+Kyraan trying to fetch and what did he get"). The structural wires (spoke,
+subject) sit at 10–16% alpha, so a pulse riding one looked like it was
+crossing empty space — the string was there, just invisible. A wire now
+draws bright for exactly as long as it carries a pulse.
+
+The live feed is the real one: the same SSE tail of `events.jsonl` sector
+01 shows. And the events carry the answer to the second question, which
+the page was throwing away: `agent_tool_call.consider` is the model's own
+stated intent — its WANT / HAVE / NEED line; `tool_call.args` is the
+literal query; `tool_result` is ok-or-failed with duration; `episode_rag`
+is how many memories came back and how close the best was; `model_call`
+is the model and the tokens in. A Live console, first in the side column
+because it is the point of watching, keeps the last twelve as a sequence:
+TRY, then GOT. What the events do NOT carry is the result body — it only
+enters the next prompt, in `traces.jsonl` — so the log reads "ok · 1493ms"
+and never pretends to know what came back.
+
+Zoom is about the cursor now. The renderer places a node at
+`W/2 + (c·size + view.x)·scale`, so holding a screen offset K fixed across
+a scale change means shifting the view by `K·(1/s₁ − 1/s₀)`. Measured: a
+node 47px off-centre drifted 0.4px through a 0.30 → 0.49 zoom.
+
 Verification note for whoever reads this later: `requestAnimationFrame`
 does not fire in a hidden browser pane, so the idle spin cannot be
 measured there. It was proven by driving `advanceCamera()` by hand — 100

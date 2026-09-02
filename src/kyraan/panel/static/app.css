@@ -704,3 +704,15 @@ footer::before {
    when nothing is happening — a quiet assistant shows a quiet line. */
 .note.live { color: var(--accent); text-shadow: 0 0 7px var(--glow); min-width: 160px; }
 .note.live::after { content: none; }
+
+/* Live log phases: TRY is what it reached for, GOT is what came back. */
+.live-phase {
+  flex: 0 0 auto; min-width: 38px; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--dim);
+}
+.row.live-try .live-phase   { color: var(--accent); }
+.row.live-got .live-phase   { color: var(--ok); }
+.row.live-think .live-phase { color: var(--warn); }
+.row.live-reply .live-phase { color: var(--ok); }
+.row.live-detail { padding-top: 0; border-top: none; }
+.row.live-detail .body { color: var(--dim); font-size: 11px; white-space: normal; opacity: .85; }

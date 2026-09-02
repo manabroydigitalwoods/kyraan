@@ -246,6 +246,12 @@
           <div class="legend" id="mem-legend"></div>
         </div>
         <div class="memory-side">
+          <!-- The live sequence: what it is trying to fetch, then what it
+               got. First in the column because it is the point of watching. -->
+          <section class="console">
+            <h2>Live <span class="verdict" id="live-verdict">—</span></h2>
+            <div class="console-body tight scrolls" id="live-body"></div>
+          </section>
           <section class="console">
             <h2>Review gate <span class="verdict" id="gate-verdict">—</span></h2>
             <div class="console-body" id="gate-body"></div>

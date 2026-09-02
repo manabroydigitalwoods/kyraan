@@ -898,6 +898,7 @@ const brain = {
   lastTouch: -1e12, dragMode: "orbit",
   lobeFired: new Map(),    // lobe type -> time it last received activity
   live: null,              // the last live event, for the ticker
+  liveLog: [],             // the recent sequence: trying → got
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -1052,43 +1053,99 @@ function fireNode(id) {
      any other tool is its own skill firing, as before;
      the REPLY is the person's node closing the loop.
    Nothing here fires on a timer. A quiet assistant shows a quiet brain. */
+function compactArgs(args) {
+  return Object.entries(args || {})
+    .filter(([k]) => k !== "chat_id")
+    .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`)
+    .join(" ");
+}
+
+/* The live log is the sequence, not just the latest line: TRYING (the
+   model's stated intent, the exact query) followed by GOT (the outcome).
+   The events carry all of it — consider, args, ok/duration/error, how
+   many episodes recall returned and how close the best was. What they do
+   NOT carry is the result body; that only enters the next prompt, so the
+   log says "ok · 1493ms" and never pretends to know what came back. */
+const LIVE_LOG_MAX = 12;
+
+function logLive(phase, text, detail) {
+  brain.liveLog.unshift({ at: performance.now(), clock: new Date(), phase, text, detail: detail || "" });
+  if (brain.liveLog.length > LIVE_LOG_MAX) brain.liveLog.length = LIVE_LOG_MAX;
+  brain.live = { text, at: performance.now() };
+  const line = $("mem-live");
+  if (line) { line.textContent = "● " + text; line.style.opacity = "1"; }
+  renderLiveLog();
+}
+
 function brainActivate(event) {
   const kind = event.kind || "";
-  let note = null;
 
   if (kind === "model_call") {
     const who = personForChat(event.chat_id);
     if (who) fireNode(who.id);
     lightLobe("memory");
-    note = `thinking · ${event.model || event.provider || "model"}`;
+    logLive("think", `thinking · ${event.model || event.provider || "model"}`,
+      `${event.input_tokens ?? "?"} tokens in · ${event.latency_ms ?? "?"}ms`);
   } else if (kind === "episode_rag") {
     lightLobe("episode");
     const who = personForChat(event.chat_id);
     if (who) fireNode(who.id);
-    note = `recalling · ${event.injected ?? "?"} episodes`;
-  } else if (kind === "tool_call" || kind === "agent_tool_call") {
-    if (event.tool) {
-      fireNode("s:" + event.tool);
-      if (event.tool.startsWith("memory.")) lightLobe("memory");
-      if (event.tool.startsWith("memory.recall")) lightLobe("episode");
-      if (event.tool.startsWith("documents.")) lightLobe("document");
-      if (event.tool.startsWith("faces.") || event.tool.startsWith("persons.")) lightLobe("face");
-      note = `${event.tool} fired`;
-    }
+    logLive("got", `recall → ${event.injected ?? 0} episodes`,
+      event.best_sim != null ? `best match ${Number(event.best_sim).toFixed(2)}` : "");
+  } else if (kind === "agent_tool_call" && event.tool) {
+    // The model's own reason for reaching for the tool — its WANT/HAVE/
+    // NEED line — is the truest "what is it trying to do" there is.
+    fireNode("s:" + event.tool);
+    logLive("try", `${event.tool}`, String(event.consider || "").slice(0, 140));
+  } else if (kind === "tool_call" && event.tool) {
+    fireNode("s:" + event.tool);
+    if (event.tool.startsWith("memory.")) lightLobe("memory");
+    if (event.tool.startsWith("memory.recall")) lightLobe("episode");
+    if (event.tool.startsWith("documents.")) lightLobe("document");
+    if (event.tool.startsWith("faces.") || event.tool.startsWith("persons.")) lightLobe("face");
+    logLive("try", `${event.tool} ${compactArgs(event.args)}`.trim());
+  } else if (kind === "tool_result" && event.tool) {
+    // The answer arriving: the skill fires again, and the asker lights.
+    fireNode("s:" + event.tool);
+    const who = personForChat(event.chat_id);
+    if (who) brain.fired.set(who.id, performance.now());
+    logLive("got", event.ok
+      ? `${event.tool} → ok · ${event.duration_ms ?? "?"}ms`
+      : `${event.tool} → failed`,
+      event.ok ? "" : String(event.error || "").slice(0, 140));
   } else if (kind === "agent_reply" || kind === "turn_health") {
     const who = personForChat(event.chat_id);
     if (who) brain.fired.set(who.id, performance.now());
-    note = kind === "agent_reply" ? "replied" : null;
+    if (kind === "agent_reply") logLive("reply", "replied",
+      `${event.steps ?? "?"} steps · ${event.tier || ""}`.trim());
   } else if (event.reminder_id) {
     fireNode("t:reminder:" + event.reminder_id);
-    note = "reminder fired";
+    logLive("got", "reminder fired");
   }
+}
 
-  if (note) {
-    brain.live = { text: note, at: performance.now() };
-    const line = $("mem-live");
-    if (line) line.textContent = "● " + note;
+function renderLiveLog() {
+  const body = $("live-body");
+  if (!body) return;
+  clear(body);
+  if (!brain.liveLog.length) { empty(body, "waiting — nothing is happening"); return; }
+  const rows = el("div", "rows");
+  for (const entry of brain.liveLog) {
+    const row = el("div", "row live-" + entry.phase);
+    row.appendChild(el("span", "ts", entry.clock.toLocaleTimeString([], { hour12: false })));
+    row.appendChild(el("span", "live-phase", entry.phase));
+    const body_ = el("span", "body", entry.text);
+    if (entry.detail) body_.title = entry.detail;
+    row.appendChild(body_);
+    rows.appendChild(row);
+    if (entry.detail) {
+      const detail = el("div", "row live-detail");
+      detail.appendChild(el("span", "body", entry.detail));
+      rows.appendChild(detail);
+    }
   }
+  body.appendChild(rows);
+  verdictInto("live-verdict", brain.liveLog.length + " recent", "ok");
 }
 
 const REDUCED_MOTION = window.matchMedia
@@ -1399,6 +1456,16 @@ function drawGraph(canvas, view, opts) {
     }
   }
 
+  // A wire carrying a pulse is drawn bright for as long as it carries it.
+  // The structural wires (spoke, subject) sit at 10-16% alpha, so a pulse
+  // riding one looked like it was crossing empty space — the string it
+  // was on was there, just invisible.
+  const carrying = new Set();
+  for (const signal of brain.signals) {
+    carrying.add(signal.from < signal.to ? signal.from + "|" + signal.to
+                                         : signal.to + "|" + signal.from);
+  }
+
   // Axons. A selected node's edges are drawn bright so "what is this
   // wired to" is answered by clicking rather than by squinting.
   for (const edge of brain.edges) {
@@ -1407,7 +1474,9 @@ function drawGraph(canvas, view, opts) {
     const a = brain.byId.get(edge.a), b = brain.byId.get(edge.b);
     const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.synapse;
     const touched = brain.selection.has(edge.a) || brain.selection.has(edge.b)
-                 || (brain.hover && (brain.hover.id === edge.a || brain.hover.id === edge.b));
+                 || (brain.hover && (brain.hover.id === edge.a || brain.hover.id === edge.b))
+                 || carrying.has(edge.a < edge.b ? edge.a + "|" + edge.b
+                                                 : edge.b + "|" + edge.a);
     // A wire is only as visible as the dimmer of its two ends.
     const lit = Math.min(matchAlpha(a), matchAlpha(b));
     const pa = proj.get(edge.a), pb = proj.get(edge.b);
@@ -2040,6 +2109,7 @@ async function loadMemory() {
     renderCensus(graph);
     renderFindings(graph);
     renderMemories();
+    renderLiveLog();
     renderSelection();
     renderLegend();
     fitWhenSettled();
@@ -2166,8 +2236,16 @@ function wireMemory() {
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     brain.lastTouch = performance.now();
-    brain.view.scale = Math.max(0.35, Math.min(6,
-      brain.view.scale * Math.exp(-event.deltaY * 0.0012)));
+    // Zoom about the cursor: the point under the pointer stays under the
+    // pointer. The renderer puts a node at W/2 + (c*size + view.x)*scale,
+    // so for a fixed screen offset K the view must shift by K*(1/s1 - 1/s0).
+    const point = canvasPoint(canvas, event);
+    const kx = point.x - canvas.width / 2, ky = point.y - canvas.height / 2;
+    const s0 = brain.view.scale;
+    const s1 = Math.max(0.35, Math.min(6, s0 * Math.exp(-event.deltaY * 0.0012)));
+    brain.view.x += kx * (1 / s1 - 1 / s0);
+    brain.view.y += ky * (1 / s1 - 1 / s0);
+    brain.view.scale = s1;
   }, { passive: false });
 
   window.addEventListener("keydown", (event) => {
