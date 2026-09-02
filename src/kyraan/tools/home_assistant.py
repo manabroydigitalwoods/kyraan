@@ -81,21 +81,28 @@ def _switch(entity: str, turn_on: bool) -> dict:
             f"entity {entity!r} is not write-allowlisted — switchable "
             "entities are EXACTLY: " + (", ".join(writes) or "(none)"))
     domain = entity.split(".")[0]
-    if domain not in ("switch", "fan"):
-        # fan joined 2026-09-02 (the Philips purifier): HA's fan domain
-        # has the identical turn_on/turn_off service shape.
-        raise ToolError(f"only switch/fan entities are switchable; {entity!r} is a {domain}")
+    if domain not in ("switch", "fan", "media_player"):
+        # fan joined 2026-09-02 (the Philips purifier); media_player the
+        # same day (the Fire TV) — identical turn_on/turn_off services.
+        raise ToolError(f"only switch/fan/media_player entities are "
+                        f"switchable; {entity!r} is a {domain}")
     _api(f"/api/services/{domain}/turn_{'on' if turn_on else 'off'}", {"entity_id": entity})
     # Read back — report what the device actually did, never assume. HA
     # applies service calls asynchronously, so the immediate read returns
     # the PRE-switch state (seen live: confirmed ON, reply said OFF). Poll
     # briefly until the state converges; an unconverged result is returned
     # as-is with converged=False so the caller can be honest about it.
-    expected = "on" if turn_on else "off"
+    # media_player states aren't binary: a woken Fire TV reports
+    # idle/playing, a sleeping one standby — judge by state FAMILY.
+    on_family = {"on", "idle", "playing", "paused", "buffering"}
+    def _matches(value: str) -> bool:
+        if domain == "media_player":
+            return (value in on_family) == turn_on
+        return value == ("on" if turn_on else "off")
     state = {}
     for _ in range(10):
         state = _get_state(entity)
-        if state["state"] == expected:
+        if _matches(state["state"]):
             state["converged"] = True
             return state
         time.sleep(0.6)

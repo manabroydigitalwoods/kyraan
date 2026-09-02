@@ -1641,7 +1641,9 @@ async def _music_play(chat_id: int, args: dict, raw_text: str):
         raise kernel.ToolFailed(
             f"no matching Spotify device (online: {names}) — open Spotify "
             "on a device or name one of those")
-    match = await _aio.to_thread(_sp.search_uri, query)
+    match = await _aio.to_thread(
+        _sp.search_uri, query,
+        "playlist" if str(args.get("kind", "")) == "playlist" else "")
     if match is None:
         raise kernel.ToolFailed(f"Spotify found nothing for {query!r} — "
                                 "say so, offer a rephrase")
@@ -2179,12 +2181,15 @@ TOOLS = {
         "run": _home_announce,
     },
     "music.play": {
-        "params": '{"query": "<song / artist / playlist words>", "device": "<optional device name words, e.g. bedroom>"}',
+        "params": '{"query": "<song / artist / playlist words>", "kind": "playlist when they want SEVERAL songs", "device": "<optional device name words>"}',
         "about": ("Play music on the user's Spotify devices (Echos "
                   "included) — \"play Kishore Kumar\", \"play my sleep "
                   "playlist in the bedroom\". Plays immediately, no "
-                  "confirm. The receipt names what ACTUALLY started — "
-                  "relay that, never assume."),
+                  "confirm. \"Play all/some/one by one/mix of X\" means "
+                  "kind: playlist with X as the query — a playlist IS "
+                  "one-by-one; NEVER ask which songs or what order. The "
+                  "receipt names what ACTUALLY started — relay that, "
+                  "never assume."),
         "run": _music_play,
     },
     "music.pause": {

@@ -256,10 +256,14 @@ tool_servers:
       - sensor.air_purifier_nanoprotect_filter
       - sensor.air_purifier_pre_filter
       - switch.air_purifier_child_lock
+      # Alexa media devices (2026-09-02)
+      - media_player.manab_s_firetvstick
+      - media_player.manab_s_echo_dot
     write_entities:
       - switch.ac
       - fan.air_purifier                  # purifier on/off (confirm-gated)
       - switch.air_purifier_child_lock    # Kiaan-proofing (confirm-gated)
+      - media_player.manab_s_firetvstick  # wake/sleep the Fire TV
     # Alexa announcements (governance 2026-09-02): allowlisted speakers
     # for home.announce — the notify.alexa_media_<target> services.
     announce_targets:

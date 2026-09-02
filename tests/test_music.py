@@ -33,8 +33,9 @@ async def test_play_resolves_device_and_verifies(monkeypatch):
     monkeypatch.setattr(spotify, "resolve_device",
                         lambda hint: {"id": "d1", "name": "Bedroom Echo"})
     monkeypatch.setattr(spotify, "search_uri",
-                        lambda q: {"uri": "spotify:track:t1", "kind": "track",
-                                   "label": "Pal Pal — Kishore Kumar"})
+                        lambda q, prefer="": {"uri": "spotify:track:t1",
+                                              "kind": "track",
+                                              "label": "Pal Pal — Kishore Kumar"})
     played = []
     monkeypatch.setattr(spotify, "play",
                         lambda uri, kind, dev: played.append((uri, dev)))
@@ -127,3 +128,30 @@ def test_speaker_volume_undo_restores_prior():
     assert UNDO_MAP["home.speaker_volume"](
         {}, {"volume": 70, "prior": 50}, None) == \
         ("home.speaker_volume", {"percent": 50})
+
+
+def test_playlist_preference_reorders_the_search(monkeypatch):
+    pages = {"playlists": {"items": [{"uri": "spotify:playlist:p1",
+                                      "name": "Kids Hindi Hits"}]},
+             "tracks": {"items": [{"uri": "spotify:track:t1", "name": "One",
+                                   "artists": [{"name": "A"}]}]}}
+    monkeypatch.setattr(spotify, "_api", lambda path: pages)
+    assert spotify.search_uri("kids hindi songs")["kind"] == "track"
+    got = spotify.search_uri("kids hindi songs", prefer="playlist")
+    assert got == {"uri": "spotify:playlist:p1", "kind": "playlist",
+                   "label": "Kids Hindi Hits"}
+
+
+async def test_play_kind_playlist_reaches_the_search(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(spotify, "resolve_device",
+                        lambda hint: {"id": "d1", "name": "Echo"})
+    monkeypatch.setattr(spotify, "search_uri",
+                        lambda q, prefer="": seen.update(prefer=prefer) or
+                        {"uri": "u", "kind": "playlist", "label": "L"})
+    monkeypatch.setattr(spotify, "play", lambda *a: None)
+    monkeypatch.setattr(spotify, "player_state",
+                        lambda: {"is_playing": True, "track": "x"})
+    await loop_tools._music_play(7, {"query": "kids songs",
+                                     "kind": "playlist"}, "")
+    assert seen["prefer"] == "playlist"

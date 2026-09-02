@@ -119,3 +119,19 @@ def test_write_wall_refusal_lists_the_allowlist(monkeypatch):
                         lambda: ([], ["fan.air_purifier", "switch.ac"]))
     with pytest.raises(ha.ToolError, match="EXACTLY: fan.air_purifier, switch.ac"):
         ha._switch("switch.air_purifier", True)
+
+
+def test_media_player_domain_converges_by_state_family(monkeypatch):
+    monkeypatch.setattr(ha, "_allowlists",
+                        lambda: ([], ["media_player.manab_s_firetvstick"]))
+    calls = []
+    monkeypatch.setattr(ha, "_api", lambda path, payload: calls.append(path))
+    monkeypatch.setattr(ha, "_get_state",
+                        lambda e: {"entity": e, "state": "idle"})
+    out = ha._switch("media_player.manab_s_firetvstick", True)
+    assert calls == ["/api/services/media_player/turn_on"]
+    assert out["converged"] is True      # idle IS on for a media player
+    monkeypatch.setattr(ha, "_get_state",
+                        lambda e: {"entity": e, "state": "standby"})
+    out = ha._switch("media_player.manab_s_firetvstick", False)
+    assert out["converged"] is True      # standby IS off

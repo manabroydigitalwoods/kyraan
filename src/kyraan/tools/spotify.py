@@ -115,11 +115,15 @@ def resolve_device(name_hint: str) -> dict | None:
     return next((d for d in online if d["active"]), online[0])
 
 
-def search_uri(query: str) -> dict | None:
-    """Best playable match: track first, then playlist, then artist."""
+def search_uri(query: str, prefer: str = "") -> dict | None:
+    """Best playable match: track first, then playlist, then artist —
+    unless the caller prefers playlists ("play all the kids songs" is
+    a playlist ask, not a which-track interrogation)."""
     q = urllib.parse.quote(query)
     found = _api(f"/search?q={q}&type=track,playlist,artist&limit=3")
-    for kind in ("tracks", "playlists", "artists"):
+    order = (("playlists", "tracks", "artists") if prefer == "playlist"
+             else ("tracks", "playlists", "artists"))
+    for kind in order:
         for item in (found.get(kind) or {}).get("items") or []:
             if not item:
                 continue
