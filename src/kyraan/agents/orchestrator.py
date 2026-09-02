@@ -839,20 +839,29 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             # the PREVIOUS turn's trace + events; never a model call.
             _skip_extraction.set(True)
             return _describe_last_turn(chat_id)
-        if (_re.match(r"^\s*(?:re)?index\s+(?:my\s+)?(?:vault|notes|obsidian)\s*[?!.]?\s*$",
-                      raw_text, _re.IGNORECASE)
-                and kernel.viewer_person() == "owner"):
+        vault_m = _re.match(
+            r"^\s*(re-?index|index|force\s+index)\s+(?:my\s+)?(?:vault|notes|obsidian)\s*[?!.]?\s*$",
+            raw_text, _re.IGNORECASE)
+        if vault_m and kernel.viewer_person() == "owner":
             # Deterministic, owner-only: a vault sync on demand (nightly
-            # otherwise). Read-only against the vault by construction.
+            # otherwise). "index" is change-aware — unchanged files are
+            # skipped by hash; "reindex"/"force index" re-applies the
+            # indexer's CURRENT rules to every file (live 2026-09-02: the
+            # owner re-indexed after a linking fix and nothing re-linked,
+            # because the notes themselves hadn't changed). Read-only
+            # against the vault by construction.
             _skip_extraction.set(True)
             import asyncio as _aio_v
 
             from kyraan.store import notes as _notes
-            counts = await _aio_v.to_thread(_notes.sync, chat_id)
+            force = vault_m.group(1).lower() != "index"
+            counts = await _aio_v.to_thread(_notes.sync, chat_id, None, force)
             if "error" in counts:
                 return ("Vault indexing isn't set up — put your vault path "
                         "in KYRAAN_VAULT_ROOT (.env) and restart me.")
-            return (f"Vault indexed: {counts['indexed']} new/changed notes, "
+            return ((f"Vault re-indexed (all rules re-applied): " if force
+                     else "Vault indexed: ")
+                    + f"{counts['indexed']} {'notes' if force else 'new/changed notes'}, "
                     f"{counts['unchanged']} unchanged, {counts['removed']} "
                     f"removed, {counts['skipped']} skipped. Ask me anything "
                     "from your notes.")

@@ -237,3 +237,19 @@ def test_resolve_name_never_guesses_between_two(monkeypatch):
     nm3 = {"ruma": "ruma", "kiaan": "kiaan", "owner": "owner"}
     assert notes._resolve_name(nm3, "Ruma Roy") == "ruma"     # one Ruma: resolves
     assert notes._resolve_name({"owner": "owner"}, "Manab Roy") is None
+
+
+@pytest.mark.parametrize("phrase,forced", [
+    ("index my vault", False), ("reindex my vault", True),
+    ("re-index notes", True), ("force index obsidian", True)])
+async def test_reindex_phrase_forces_a_full_pass(monkeypatch, phrase, forced):
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    kernel.set_viewer("owner", "owner")
+    seen = {}
+    monkeypatch.setattr(notes, "sync", lambda chat_id, root=None, force=False:
+                        seen.update(force=force) or
+                        {"indexed": 1, "unchanged": 0, "removed": 0, "skipped": 0})
+    reply = await orchestrator._dispatch(4545, phrase)
+    assert seen["force"] is forced
+    assert ("re-applied" in reply) is forced
