@@ -840,4 +840,4 @@ One `@media (max-width: 720px)` section now holds the phone model: header is a 2
 
 Measured at 375×812: header 60px, rail 43px and 375px wide, overview console bodies 190/141/277/162/200/150px, hub 471px with a one-line caption, turns/stream/schedule/actions/host rows 0 overflowing, spend rows 30px with 5 columns, brain canvas 650px (was 485), graph centre within 2px of canvas centre after fit, host consoles all 363px.
 
-Orbit direction: `ORBIT_GAIN` is negative — a drag turns the graph, not the camera (drag right, near face goes right). One sign covers mouse and touch on both axes.
+Orbit direction, set by hand: `YAW_GAIN` is negative — a sideways drag turns the graph (drag right, near face goes right); `PITCH_GAIN` stays positive — a vertical drag tilts the camera (drag down, look down onto the top). Both signs cover mouse and touch. Proof: a right-and-down touch drag gives yaw −0.132, pitch +0.066.

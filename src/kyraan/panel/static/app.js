@@ -1799,11 +1799,13 @@ function reheat(to = 1) { brain.alpha = to; }
    would be 600KB of vendored script to do two multiplies. */
 const brainCam = { yaw: -0.55, pitch: 0.32, spin: true };
 const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
-// Negative on purpose: a drag turns the GRAPH, not the camera — drag
-// right and the near face goes right, the way a globe spins under a
-// finger. Positive orbited the camera, which reads as the opposite.
-// One sign flips every orbit gesture (mouse, touch) on both axes.
-const ORBIT_GAIN = -0.0022;      // radians per pixel of drag
+// Two gains, opposite signs, both by the owner's hand. Sideways, a drag
+// turns the GRAPH: drag right and the near face goes right, like a globe
+// under a finger (negative). Up and down, a drag tilts the CAMERA: drag
+// down and you look down onto the top (positive). Mouse and touch share
+// both.
+const YAW_GAIN = -0.0022;        // radians per pixel of sideways drag
+const PITCH_GAIN = 0.0022;       // radians per pixel of vertical drag
 const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
 const HOME_CAM = { yaw: -0.55, pitch: 0.32 };
@@ -2852,9 +2854,9 @@ function wireMemory() {
     }
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
     if (brain.orbit) {
-      brainCam.yaw += (point.x - brain.orbit.x) * ORBIT_GAIN;
+      brainCam.yaw += (point.x - brain.orbit.x) * YAW_GAIN;
       brainCam.pitch = Math.max(-1.3, Math.min(1.3,
-        brainCam.pitch + (point.y - brain.orbit.y) * ORBIT_GAIN));
+        brainCam.pitch + (point.y - brain.orbit.y) * PITCH_GAIN));
       brain.orbit = point;
       brain.lastTouch = performance.now();
       return;
@@ -2948,8 +2950,8 @@ function wireMemory() {
       if (brain.dragMode === "pan") {
         brain.view.x += dx / brain.view.scale; brain.view.y += dy / brain.view.scale;
       } else {
-        brainCam.yaw += dx * ORBIT_GAIN;
-        brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * ORBIT_GAIN));
+        brainCam.yaw += dx * YAW_GAIN;
+        brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * PITCH_GAIN));
       }
       touchState.last = p;
     } else if (t.length >= 2) {
