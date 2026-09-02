@@ -22,6 +22,8 @@
   --warn: #ffcf3d;
   --bad: #ff5c4d;
   --glow: rgba(255, 176, 0, 0.45);
+  /* The core's own colour: not a lobe colour, on any tube. Ice on amber. */
+  --core: #8fefff;
 }
 :root[data-phosphor="green"] {
   --bg: #050a06;
@@ -35,6 +37,7 @@
   --warn: #ffe14d;
   --bad: #ff6b5b;
   --glow: rgba(51, 255, 102, 0.4);
+  --core: #d9a3ff;          /* violet on green */
 }
 :root[data-phosphor="blue"] {
   --bg: #04070d;
@@ -48,6 +51,7 @@
   --warn: #ffd76a;
   --bad: #ff7a6b;
   --glow: rgba(127, 220, 255, 0.4);
+  --core: #ff9fbd;          /* rose on blue */
 }
 
 :root {

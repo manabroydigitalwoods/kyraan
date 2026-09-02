@@ -1703,9 +1703,44 @@ function buildPalette() {
   const keys = [...new Set(brain.nodes.map(groupKey))].sort();
   const variants = tubeVariants(keys.length);
   brain.palette = new Map(keys.map((key, i) => [key, variants[i]]));
-  // The core is the tube's own colour whatever the colour mode says.
-  const base = hslFromAccent();
-  brain.palette.set("core", { h: base.h, s: Math.round(base.s * 100), l: 62 });
+  // The core has its own colour (--core, one per tube), whatever the
+  // colour mode says: it is not a lobe, it is the thing that has lobes.
+  brain.palette.set("core", hslFromVar("--core", "#8fefff"));
+}
+
+/* The core's own colour, from the stylesheet's --core (one per tube). */
+function hslFromVar(name, fallback) {
+  const raw = (getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback);
+  const hex = raw.startsWith("#") && raw.length === 7 ? raw : fallback;
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  const l = (max + min) / 2;
+  const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let h = 0;
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return { h, s: Math.round(s * 100), l: Math.round(l * 100) };
+}
+
+/* The heartbeat: lub, dub, rest. 1150ms at rest; 650ms while the core
+   has fired in the last four seconds — it quickens when it is working,
+   which is the one thing the beat says that the wires do not. Returns
+   the beat amplitude 0..1 and the phase 0..1 of the current cycle. */
+function coreBeat() {
+  if (REDUCED_MOTION) return { b: 0, ph: 0, quick: false };
+  const fired = brain.fired.get(CORE);
+  const quick = fired !== undefined && performance.now() - fired < 4000;
+  const period = quick ? 650 : 1150;
+  const ph = (performance.now() % period) / period;
+  const b = Math.exp(-Math.pow(ph - 0.06, 2) / 0.003)
+          + 0.55 * Math.exp(-Math.pow(ph - 0.30, 2) / 0.004);
+  return { b: Math.min(1, b), ph, quick };
 }
 
 function nodeColour(node, alpha) {
@@ -1834,7 +1869,7 @@ function reheat(to = 1) { brain.alpha = to; }
 
    No library. A 3D graph is a rotation matrix and a divide; three.js
    would be 600KB of vendored script to do two multiplies. */
-const brainCam = { yaw: -0.55, pitch: 0.32, spin: true };
+const brainCam = { yaw: -0.55, pitch: 0.32, roll: 0, spin: true };
 const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
 // Two gains, opposite signs, both by the owner's hand. Sideways, a drag
 // turns the GRAPH: drag right and the near face goes right, like a globe
@@ -1858,8 +1893,13 @@ function rotateToCamera(node) {
 
 function toCamera(node) {
   const r = rotateToCamera(node);
+  // Roll: a turn about the viewing axis, the two-finger twist on a
+  // phone. Applied in the camera plane, before the pan offset, so a
+  // pan still follows the finger whichever way the brain is rolled.
+  const cr = Math.cos(brainCam.roll || 0), sr = Math.sin(brainCam.roll || 0);
+  const rx = r.x * cr - r.y * sr, ry = r.x * sr + r.y * cr;
   const p = FOCAL / (FOCAL + r.z);       // perspective factor
-  return { x: r.x * p, y: r.y * p, z: r.z, p };
+  return { x: rx * p, y: ry * p, z: r.z, p };
 }
 
 function toScreen(canvas, node, view) {
@@ -1882,6 +1922,9 @@ function depthOf(z) {
    the rotation above, so a dragged neuron follows the pointer whichever
    way the brain is turned. */
 function screenDeltaToWorld(dx, dy) {
+  // Undo the roll first: the camera plane is rolled, the world is not.
+  const cr = Math.cos(brainCam.roll || 0), sr = Math.sin(brainCam.roll || 0);
+  [dx, dy] = [dx * cr + dy * sr, -dx * sr + dy * cr];
   const cy = Math.cos(brainCam.yaw), sy = Math.sin(brainCam.yaw);
   const cp = Math.cos(brainCam.pitch), sp = Math.sin(brainCam.pitch);
   const y1 = dy * cp, z1 = -dy * sp;           // Rx(-pitch) on (dx, dy, 0)
@@ -2071,7 +2114,9 @@ function drawGraph(canvas, view, opts) {
     const p = proj.get(node.id);
     const selected = brain.selection.has(node.id);
     const seed = node.id.charCodeAt(2) % 13;
-    const breath = REDUCED_MOTION ? 1 : 1 + Math.sin(performance.now() / 1400 + seed) * 0.08;
+    const beat = node.type === "core" ? coreBeat() : null;
+    const breath = beat ? 1 + 0.22 * beat.b
+                 : REDUCED_MOTION ? 1 : 1 + Math.sin(performance.now() / 1400 + seed) * 0.08;
     // Perspective on the radius and a fade on the whole node: the two
     // cues that make a rotating cloud read as depth rather than as a
     // scatter that happens to be moving.
@@ -2103,9 +2148,18 @@ function drawGraph(canvas, view, opts) {
     ctx.fill();
     if (node.type === "core") {
       // The core: a white-hot centre inside two rings — the one neuron
-      // that is the system rather than something it holds.
-      ctx.fillStyle = `rgba(255, 255, 255, ${0.55 * focusAlpha(node)})`;
+      // that is the system rather than something it holds. It beats:
+      // the soma swells with each beat (breath above) and a ring leaves
+      // it once per cycle, wider and faster while it is working.
+      ctx.fillStyle = `rgba(255, 255, 255, ${(0.45 + 0.4 * beat.b) * focusAlpha(node)})`;
       ctx.beginPath(); ctx.arc(p.x, p.y, radius * 0.38, 0, Math.PI * 2); ctx.fill();
+      if (beat.b > 0 || beat.ph > 0) {
+        ctx.strokeStyle = nodeColour(node, 0.5 * (1 - beat.ph));
+        ctx.lineWidth = (beat.quick ? 2.0 : 1.4) * ratio * (1 - beat.ph);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, radius + beat.ph * (beat.quick ? 46 : 34) * ratio, 0, Math.PI * 2);
+        ctx.stroke();
+      }
       ctx.strokeStyle = nodeColour(node, 0.7); ctx.lineWidth = 1.1 * ratio;
       ctx.beginPath(); ctx.arc(p.x, p.y, radius + 5 * ratio, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = nodeColour(node, 0.35); ctx.lineWidth = 0.8 * ratio;
@@ -2987,6 +3041,7 @@ function wireMemory() {
   const touchState = { mode: null, last: null, dist: 0, mid: null, start: null };
   const tp = (t) => canvasPoint(canvas, { clientX: t.clientX, clientY: t.clientY });
   canvas.addEventListener("touchstart", (event) => {
+    touchState.angle = null;
     event.preventDefault();
     brain.lastTouch = performance.now();
     const t = event.touches;
@@ -2998,6 +3053,8 @@ function wireMemory() {
       touchState.mode = "two";
       touchState.dist = Math.hypot(a.x - b.x, a.y - b.y);
       touchState.mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      // The twist needs a starting angle, or the first move is lost.
+      touchState.angle = Math.atan2(b.y - a.y, b.x - a.x);
     }
   }, { passive: false });
   canvas.addEventListener("touchmove", (event) => {
@@ -3018,12 +3075,22 @@ function wireMemory() {
       const a = tp(t[0]), b = tp(t[1]);
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
       if (touchState.mode === "two" && touchState.dist > 0) {
         zoomAbout(canvas, mid, brain.view.scale * (dist / touchState.dist));
         brain.view.x += (mid.x - touchState.mid.x) / brain.view.scale;
         brain.view.y += (mid.y - touchState.mid.y) / brain.view.scale;
+        // Twist: the two fingers' angle turns the brain about the
+        // viewing axis (owner, 2026-09-03). Wrapped, so a finger crossing
+        // the ±π seam does not spin it a full turn.
+        // No previous angle on the first move after touchstart: no twist.
+        let twist = Number.isFinite(touchState.angle) ? angle - touchState.angle : 0;
+        if (twist > Math.PI) twist -= 2 * Math.PI;
+        if (twist < -Math.PI) twist += 2 * Math.PI;
+        brainCam.roll = (brainCam.roll || 0) + twist;
       }
       touchState.mode = "two"; touchState.dist = dist; touchState.mid = mid;
+      touchState.angle = angle;
     }
   }, { passive: false });
   canvas.addEventListener("touchend", (event) => {
@@ -3185,7 +3252,7 @@ function wireMemory() {
   }
   $("mem-reset").addEventListener("click", () => {
     brain.view = { x: 0, y: 0, scale: 1 };
-    brainCam.yaw = HOME_CAM.yaw; brainCam.pitch = HOME_CAM.pitch;
+    brainCam.yaw = HOME_CAM.yaw; brainCam.pitch = HOME_CAM.pitch; brainCam.roll = 0;
     for (const node of brain.nodes) node.pinned = false;
     seedPositions();
     reheat(1);
