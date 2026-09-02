@@ -542,7 +542,7 @@ function mergeGraph(graph) {
   // Seed only the newcomers, at their lobe's edge with a deterministic
   // jitter, so they visibly drift in rather than appear mid-cluster.
   added.forEach((node, i) => {
-    const anchor = (LOBES[node.type] || LOBES.memory).anchor;
+    const anchor = anchorFor(node);
     const angle = (i * 137.508) * Math.PI / 180;
     node.x = anchor[0] + Math.cos(angle) * 0.42;
     node.y = anchor[1] + Math.sin(angle) * 0.42;
@@ -1155,21 +1155,49 @@ async function loadCost() {
 /* Anchors are [x, y, z]. Depth is spread deliberately so the lobes form
    a VOLUME: with every anchor on one plane the orbit only ever showed a
    sheet turning edge-on, which is a flat brain with extra steps. */
+/* Where each lobe lives. The core is at the origin; PEOPLE are a ring
+   around it (anchorFor — each person has its own point on the ring, so
+   nine people are nine neurons rather than one knot); every other lobe
+   is ~1.15 out on the sphere, spread so no two neighbours share a side
+   (owner, 2026-09-03: "the centre is cluttered, use the right spaces
+   and positions for each group"). Before this five lobes anchored
+   within 0.6 of the core and their captions overprinted each other. */
 const LOBES = {
-  // The core is Kyraan itself, pinned at the origin (simulate). People
-  // sit just off it: the owner is who it talks with, not what it is.
   core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
-  memory:   { anchor: [-1.05, -0.30, -0.55], label: "facts" },
-  person:   { anchor: [0.0, 0.32, 0.12], label: "people" },
-  episode:  { anchor: [-0.60, 0.95, 0.65], label: "recall" },
-  face:     { anchor: [0.30, 0.55, -0.45], label: "faces" },
-  document: { anchor: [0.85, 0.85, 0.35], label: "documents" },
-  task:     { anchor: [0.45, -0.90, -0.60], label: "work" },
-  contact:  { anchor: [-0.40, -0.70, 0.45], label: "contacts" },
-  note:     { anchor: [0.55, 0.35, -0.55], label: "notes" },
-  tag:      { anchor: [0.75, 0.10, -0.70], label: "tags" },
-  skill:    { anchor: [1.10, 0.05, 0.30], label: "skills" },
+  person:   { anchor: [0.0, 0.05, 0.0], ring: 0.42, label: "people" },
+  memory:   { anchor: [-1.10, -0.30, -0.35], label: "facts" },
+  episode:  { anchor: [-0.85, 0.75, 0.45], label: "recall" },
+  skill:    { anchor: [1.15, 0.00, 0.25], label: "skills" },
+  document: { anchor: [0.70, 0.85, 0.40], label: "documents" },
+  face:     { anchor: [0.10, 0.95, -0.60], label: "faces" },
+  note:     { anchor: [0.60, -0.80, -0.55], label: "notes" },
+  tag:      { anchor: [0.95, -0.60, -0.65], label: "tags" },
+  task:     { anchor: [0.25, -0.75, 0.75], label: "work" },
+  contact:  { anchor: [-0.55, -0.85, 0.40], label: "contacts" },
 };
+
+/* A node's own anchor: the lobe's point, or its own place on the lobe's
+   ring, evenly spaced by position among its kind. */
+function anchorFor(node) {
+  const lobe = LOBES[node.type] || LOBES.memory;
+  // A phone canvas is taller than wide and the layout is wider than
+  // tall; the fit squeezed the whole brain into the middle third. On a
+  // portrait canvas the layout turns 90° and stands up instead.
+  const a = brain.portrait ? [lobe.anchor[1], -lobe.anchor[0], lobe.anchor[2]] : lobe.anchor;
+  if (!lobe.ring) return a;
+  if (!brain.ringIndex || brain.ringIndex.n !== brain.nodes.length) {
+    const kin = brain.nodes.filter((n) => (LOBES[n.type] || {}).ring);
+    brain.ringIndex = { n: brain.nodes.length, of: new Map(kin.map((n, i) => [n.id, i])),
+                        count: Object.fromEntries(Object.keys(LOBES).filter((t) => LOBES[t].ring)
+                          .map((t) => [t, kin.filter((n) => n.type === t).length])) };
+  }
+  const i = brain.ringIndex.of.get(node.id) || 0;
+  const count = Math.max(1, brain.ringIndex.count[node.type] || 1);
+  const angle = (i / count) * Math.PI * 2 + 0.4;
+  return brain.portrait
+    ? [a[0], a[1] + Math.cos(angle) * lobe.ring, a[2] + Math.sin(angle) * lobe.ring]
+    : [a[0] + Math.cos(angle) * lobe.ring, a[1], a[2] + Math.sin(angle) * lobe.ring];
+}
 
 const EDGE_STYLE = {
   synapse:     { alpha: 0.34, width: 1.0, rest: 90,  key: "--accent" },
@@ -1780,7 +1808,7 @@ function visibleNodes() {
 function seedPositions() {
   const spread = 0.34;
   brain.nodes.forEach((node, i) => {
-    const anchor = (LOBES[node.type] || LOBES.memory).anchor;
+    const anchor = anchorFor(node);
     // Deterministic jitter: the same brain comes back the same way, so
     // the layout is somewhere you can learn rather than a new scatter.
     const angle = (i * 137.508) * Math.PI / 180;      // golden angle
@@ -1844,7 +1872,23 @@ function simulate() {
       node.x = 0; node.y = 0; node.z = 0; node.vx = 0; node.vy = 0; node.vz = 0;
       continue;
     }
-    const anchor = (LOBES[node.type] || LOBES.memory).anchor;
+    const anchor = anchorFor(node);
+    // A ring node is held to its own point a little harder: the ring is
+    // the layout, not a suggestion.
+    const onRing = !!(LOBES[node.type] || {}).ring;
+    const dragged = !!(brain.nodeDrag && brain.nodeDrag.group
+                       && (brain.nodeDrag.group.includes ? brain.nodeDrag.group.includes(node)
+                                                          : brain.nodeDrag.group.has && brain.nodeDrag.group.has(node)));
+    if (onRing && !dragged) {
+      // The ring is the layout, not a suggestion: the owner's 251 wires
+      // pulled it out to 0.94 while the others sat at 0.3–0.5. Ease each
+      // person back to its own point; the wires still bend toward it.
+      node.x += (anchor[0] - node.x) * 0.3;
+      node.y += (anchor[1] - node.y) * 0.3;
+      node.z += (anchor[2] - node.z) * 0.3;
+      node.vx *= 0.5; node.vy *= 0.5; node.vz *= 0.5;
+      continue;
+    }
     const pull = ANCHOR * (1 + 0.55 * Math.log10(lobeSize[node.type] || 1));
     node.vx += (anchor[0] - node.x) * pull;
     node.vy += (anchor[1] - node.y) * pull;
@@ -2374,6 +2418,10 @@ function drawHub() {
 }
 
 function sizeCanvas(canvas) {
+  if (canvas.id === "mem-canvas") {
+    const portrait = canvas.clientHeight > canvas.clientWidth * 1.15;
+    if (portrait !== brain.portrait) { brain.portrait = portrait; brain.ringIndex = null; reheat(1); }
+  }
   const ratio = window.devicePixelRatio || 1;
   const box = canvas.getBoundingClientRect();
   if (canvas.width !== Math.round(box.width * ratio)
