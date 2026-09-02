@@ -1195,6 +1195,8 @@ const EDGE_STYLE = {
   fires:       { alpha: 0.3,  width: 1.0, rest: 170, key: "--warn" },
   received:    { alpha: 0.10, width: 0.7, rest: 230, key: "--dim" },
   talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
+  // A capture and the note it illustrates (server: document.related).
+  illustrates: { alpha: 0.6,  width: 1.3, rest: 90,  key: "--ok" },
 };
 const CORE = "k:kyraan";
 
@@ -1305,14 +1307,23 @@ function focusSetFor(node) {
   return set;
 }
 
+/* What the focus follows: the hovered neuron, else the SELECTION. A
+   phone has no hover, so a tap must do what the mouse does — light the
+   wires of what was tapped and dim the rest (owner, 2026-09-03). On the
+   desktop the same rule means a click keeps its neighbourhood lit after
+   the mouse moves away; Esc clears it. */
 function updateFocus() {
   const hover = brain.hover;
-  if (hover && brain.focusFor !== hover.id) {
-    brain.focusFor = hover.id;
-    brain.focusSet = focusSetFor(hover);
+  const heads = hover ? [hover] : [...brain.selection].map((id) => brain.byId.get(id)).filter(Boolean);
+  const key = heads.map((n) => n.id).sort().join("|");
+  if (heads.length && brain.focusFor !== key) {
+    brain.focusFor = key;
+    brain.focusHeads = new Set(heads.map((n) => n.id));
+    brain.focusSet = new Set();
+    for (const head of heads) for (const id of focusSetFor(head)) brain.focusSet.add(id);
   }
-  if (!hover) brain.focusFor = null;
-  const target = hover ? 1 : 0;
+  if (!heads.length) { brain.focusFor = null; brain.focusHeads = new Set(); }
+  const target = heads.length ? 1 : 0;
   brain.focusMix += (target - brain.focusMix) * (REDUCED_MOTION ? 1 : 0.28);
   if (Math.abs(brain.focusMix - target) < 0.01) brain.focusMix = target;
 }
@@ -1325,8 +1336,8 @@ function focusAlpha(node) {
 
 function focusEdgeAlpha(edge) {
   if (brain.focusMix === 0) return 1;
-  const hovered = brain.focusFor;
-  if (edge.a === hovered || edge.b === hovered) return 1;
+  const heads = brain.focusHeads || new Set();
+  if (heads.has(edge.a) || heads.has(edge.b)) return 1;
   return 1 - (1 - FOCUS_DIM * 0.6) * brain.focusMix;
 }
 
