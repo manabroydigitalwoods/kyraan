@@ -31,8 +31,13 @@ def main() -> None:
                         help="bind address (default loopback — keep it there "
                              "and reach the panel over Tailscale)")
     parser.add_argument("--port", type=int, default=server.DEFAULT_PORT)
+    parser.add_argument("--lan", action="store_true",
+                        help="listen on every interface so a phone on the same "
+                             "network can open the panel (prints the URL; the "
+                             "token then travels in clear over Wi-Fi — prefer "
+                             "Tailscale)")
     args = parser.parse_args()
-    server.serve(host=args.host, port=args.port)
+    server.serve(host="0.0.0.0" if args.lan else args.host, port=args.port)
 
 
 if __name__ == "__main__":

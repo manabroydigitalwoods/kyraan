@@ -618,6 +618,24 @@ when measured), and a link that opens nothing is worse than a path.
 merge-refresh the graph like any other store change. Today: two indexed
 notes, both superseded, one with entities — the vault sync has run once.
 
+**From a phone on the same network** (owner's question). Two answers,
+and they are not equal. The intended path is Tailscale: encrypted,
+device-bound, and the panel stays on loopback. The same-network path is
+`scripts/panel.py --lan` (`--host 0.0.0.0`), which prints the phone-facing
+URL — but over plain Wi-Fi the token travels in clear, on a network that
+also carries the house's IoT and any guest, and the panel reads memory
+facts, contact numbers and mail subjects; the startup banner says so.
+Three things had to change for the LAN path to work at all: the Host
+allowlist added only the bind address, so a phone's `Host:
+192.168.0.166` was a 421 that looked like DNS rebinding — a network bind
+now allows the machine's own addresses (a loopback bind still adds
+nothing); the brain had no touch handlers, so it rendered on a phone and
+could not be turned — one finger orbits (or pans in pan mode), two
+fingers pan and pinch-zoom about their midpoint, a tap selects, and the
+canvas owns its touches so the page never scrolls; and the header could
+not hold four readouts on a phone's width — two lines, still a fixed
+height.
+
 **Hover focus, the way Obsidian's graph does it** (owner: "when I hover a
 point, highlight only the connected points and links and dim the
 others"). The hovered neuron, its neighbours over visible wires, and the
@@ -811,3 +829,5 @@ read-only so they cost no governance round, and they unblock the
 200-review gate family stage-2 is waiting on. **C and D queue behind
 goal continuity and the first MCP mounts**, because managing capabilities
 we have not built yet is premature.
+
+Proof on a 375×812 phone viewport (hidden pane, synthetic TouchEvents, hand-driven because the pane stalls RAF): header wraps to 86px, no horizontal scroll, canvas `touch-action: none`, canvas 485px tall; one-finger drag orbits (yaw +0.264, pitch +0.132), two-finger pinch scales ×2.25 about the midpoint, a tap on a person node selects it; no console errors. LAN bind verified at the wire: phone `Host` → 200, mDNS name → 200, foreign host → 421, and after restarting on loopback the LAN address refuses the connection.

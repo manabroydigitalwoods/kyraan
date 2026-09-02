@@ -818,3 +818,14 @@ footer::before {
 
 .obsidian-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
 .obsidian-link:hover { text-shadow: 0 0 7px var(--glow); }
+
+/* A phone must not scroll or pinch the page when the finger is on the
+   brain; the canvas owns its touches. */
+#mem-canvas, #hub-canvas { touch-action: none; }
+/* On a phone the header cannot hold four readouts on one line. Two lines,
+   still a FIXED height — the jump the desktop rule prevents matters here
+   too. */
+@media (max-width: 720px) {
+  header { height: 86px; flex-wrap: wrap; align-content: center; }
+  .readouts { flex-wrap: wrap; row-gap: 4px; }
+}

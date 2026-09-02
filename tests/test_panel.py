@@ -1209,3 +1209,39 @@ def test_a_note_edited_four_times_is_one_neuron_with_four_versions(monkeypatch, 
     # The query must use the index's own convention for "live".
     import inspect
     assert "coalesce(d.suppressed_by, '{}') <> '{}'" in inspect.getsource(queries.brain_graph)
+
+
+
+# --------------------------------------------------------------- LAN access
+
+
+def test_a_network_bind_allows_the_machines_own_addresses(monkeypatch):
+    """Bound to 0.0.0.0 for a phone on the same network, the Host header
+    carries the Mac's LAN address — and the allowlist used to hold only
+    the (useless) bind address, so every request was a 421 that looked
+    like DNS rebinding. A loopback bind must NOT widen: the tight default
+    stays tight."""
+    monkeypatch.setattr(server, "own_addresses",
+                        lambda: {"192.168.0.166", "manabs-macbook-pro-10.local"})
+    monkeypatch.delenv("KYRAAN_PANEL_ALLOWED_HOSTS", raising=False)
+    lan = server._allowed_hosts("0.0.0.0")
+    assert {"192.168.0.166", "manabs-macbook-pro-10.local", "127.0.0.1"} <= lan
+    tight = server._allowed_hosts("127.0.0.1")
+    assert "192.168.0.166" not in tight and "127.0.0.1" in tight
+
+
+def test_a_lan_bound_panel_answers_the_phone_and_still_refuses_rebinding(monkeypatch,
+                                                                         seeded_logs):
+    monkeypatch.setattr(server, "own_addresses", lambda: {"192.168.0.166"})
+    httpd = server.build(host="0.0.0.0", port=0, token="secret-token")
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ok, _ = request(httpd, "/api/status", headers={
+            "Host": "192.168.0.166:8765", "X-Kyraan-Token": "secret-token"})
+        assert ok.status == 200
+        bad, _ = request(httpd, "/api/status", headers={
+            "Host": "evil.example.com", "X-Kyraan-Token": "secret-token"})
+        assert bad.status == 421
+    finally:
+        httpd.shutdown(); httpd.server_close(); thread.join(timeout=5)

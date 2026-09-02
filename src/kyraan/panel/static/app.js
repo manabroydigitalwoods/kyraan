@@ -2910,6 +2910,70 @@ function wireMemory() {
               brain.view.scale * Math.exp(-event.deltaY * 0.0012));
   }, { passive: false });
 
+  // Touch. A phone sends no mousemove for a drag, so without these the
+  // brain rendered on a phone and could not be turned. One finger turns
+  // (or pans, in pan mode); two fingers pan and pinch-zoom about their
+  // midpoint; a tap selects; nothing here scrolls the page.
+  const touchState = { mode: null, last: null, dist: 0, mid: null, start: null };
+  const tp = (t) => canvasPoint(canvas, { clientX: t.clientX, clientY: t.clientY });
+  canvas.addEventListener("touchstart", (event) => {
+    event.preventDefault();
+    brain.lastTouch = performance.now();
+    const t = event.touches;
+    if (t.length === 1) {
+      const p = tp(t[0]);
+      touchState.mode = "one"; touchState.last = p; touchState.start = p;
+    } else if (t.length >= 2) {
+      const a = tp(t[0]), b = tp(t[1]);
+      touchState.mode = "two";
+      touchState.dist = Math.hypot(a.x - b.x, a.y - b.y);
+      touchState.mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    }
+  }, { passive: false });
+  canvas.addEventListener("touchmove", (event) => {
+    event.preventDefault();
+    brain.lastTouch = performance.now();
+    const t = event.touches;
+    if (touchState.mode === "one" && t.length === 1) {
+      const p = tp(t[0]);
+      const dx = p.x - touchState.last.x, dy = p.y - touchState.last.y;
+      if (brain.dragMode === "pan") {
+        brain.view.x += dx / brain.view.scale; brain.view.y += dy / brain.view.scale;
+      } else {
+        brainCam.yaw += dx * ORBIT_GAIN;
+        brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * ORBIT_GAIN));
+      }
+      touchState.last = p;
+    } else if (t.length >= 2) {
+      const a = tp(t[0]), b = tp(t[1]);
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      if (touchState.mode === "two" && touchState.dist > 0) {
+        zoomAbout(canvas, mid, brain.view.scale * (dist / touchState.dist));
+        brain.view.x += (mid.x - touchState.mid.x) / brain.view.scale;
+        brain.view.y += (mid.y - touchState.mid.y) / brain.view.scale;
+      }
+      touchState.mode = "two"; touchState.dist = dist; touchState.mid = mid;
+    }
+  }, { passive: false });
+  canvas.addEventListener("touchend", (event) => {
+    event.preventDefault();
+    if (touchState.mode === "one" && touchState.start && touchState.last
+        && Math.hypot(touchState.last.x - touchState.start.x,
+                      touchState.last.y - touchState.start.y) < 8 * (window.devicePixelRatio || 1)) {
+      // A tap: select what is under the finger, like a click.
+      const t = event.changedTouches[0];
+      const hit = t ? nodeAt(canvas, { clientX: t.clientX, clientY: t.clientY }) : null;
+      brain.selection = hit ? new Set([hit.id]) : new Set();
+      renderSelection();
+      syncUrl(false);
+    }
+    if (event.touches.length === 0) touchState.mode = null;
+    else if (event.touches.length === 1) {
+      touchState.mode = "one"; touchState.last = tp(event.touches[0]); touchState.start = touchState.last;
+    }
+  }, { passive: false });
+
   // Held modifiers. Space is the hand (pan), Cmd/Ctrl is the lens (zoom).
   // They take precedence over grabbing a neuron, so you can pan across a
   // dense lobe without picking one up. Cleared on blur, or a key held

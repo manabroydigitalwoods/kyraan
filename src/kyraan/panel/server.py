@@ -61,9 +61,41 @@ def resolve_token() -> tuple[str, bool]:
     return secrets.token_urlsafe(24), True
 
 
+def own_addresses() -> set:
+    """Every name and address this machine answers to on its interfaces:
+    what a phone on the same network will put in the Host header."""
+    import socket
+    found = set()
+    try:
+        name = socket.gethostname()
+        found.add(name.lower())
+        if not name.endswith(".local"):
+            found.add(name.lower().split(".")[0] + ".local")
+        for info in socket.getaddrinfo(name, None):
+            found.add(info[4][0].split("%")[0].lower())
+    except OSError:
+        pass
+    # macOS: the Bonjour name can differ from the hostname
+    try:
+        import subprocess
+        local = subprocess.run(["scutil", "--get", "LocalHostName"],
+                               capture_output=True, text=True, timeout=2).stdout.strip()
+        if local:
+            found.add(local.lower() + ".local")
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return {h for h in found if h}
+
+
 def _allowed_hosts(bind_host: str) -> set:
     hosts = set(_LOOPBACK_HOSTS)
     hosts.add(bind_host)
+    # Bound to the network on purpose? Then the machine's own addresses
+    # are what a phone will send as Host — allow them, or every LAN request
+    # is a 421 that looks like DNS rebinding. A loopback bind adds nothing:
+    # the tight default stays tight.
+    if bind_host not in _LOOPBACK_HOSTS:
+        hosts |= own_addresses()
     extra = os.environ.get("KYRAAN_PANEL_ALLOWED_HOSTS", "")
     hosts |= {h.strip().lower() for h in extra.split(",") if h.strip()}
     return hosts
@@ -377,9 +409,18 @@ def serve(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
         print("(ephemeral token: this URL stops working when the panel "
               "restarts. Set KYRAAN_PANEL_TOKEN to keep one.)", flush=True)
     if host not in _LOOPBACK_HOSTS:
-        print(f"WARNING: bound to {host}, not loopback. The panel reads the "
-              "audit log, memory facts, and mail subjects — put it behind "
-              "Tailscale rather than a forwarded port.", flush=True)
+        # The phone-facing URLs, and the honest price of them.
+        lan = sorted(a for a in own_addresses()
+                     if a[0].isdigit() and not a.startswith("127."))
+        for addr in lan:
+            print(f"  on this network:  http://{addr}:{server.server_port}/?token={token}",
+                  flush=True)
+        print("WARNING: bound to the network, not loopback. The panel reads the "
+              "audit log, memory facts, contact numbers and mail subjects, and "
+              "over plain Wi-Fi the token travels in clear — anyone on this "
+              "network who can sniff it can open the panel. Tailscale keeps it "
+              "encrypted and device-bound; a forwarded port is never right.",
+              flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
