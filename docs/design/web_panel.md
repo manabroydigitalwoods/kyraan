@@ -595,6 +595,21 @@ control's state listener, so it read the previous state: hiding wrote
 nothing, restoring wrote "hidden" — one step late, for every control in
 that list. It defers a tick now.
 
+**New memories appear without a reload** (owner: "do I need to reload the
+page to see new memories?"). The answer was yes: the graph was fetched
+once per page load and the server memoised it for 30s, so a fact promoted
+or an episode ingested after the page opened did not exist in the brain
+until a refresh. Now a store-changing event on the stream — the same
+stream that lights the neurons: `memory_promoted_via_chat`,
+`memory_forgotten`, `episodes_ingested`, `document_ingested`,
+`face_enrolled`, `person_enrolled` and their kin — schedules one refetch
+2.5s later (the write lands, a burst coalesces) with `fresh=1`, which
+bypasses the memo. The result is MERGED, not reloaded: every neuron the
+reader can already see keeps its exact position, new ones are seeded at
+their lobe's edge and lit as they arrive, gone ones leave the selection.
+A reload would have re-seeded the whole layout — the "reset" just asked
+to be rid of.
+
 **Search by key** (owner: "use cmd+space to search"): Cmd+Space, Ctrl+Space
 or `/` focus the neuron search and reveal the controls row if it is
 hidden. Bound honestly: on a Mac the OS owns Cmd+Space (Spotlight) and the

@@ -806,7 +806,7 @@ _graph_cache: dict = {}
 GRAPH_TTL_S = 30
 
 
-def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
+def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> dict:
     """One graph over the whole second brain: memories, the people they
     are about, the scheduled work, and the skills that act.
 
@@ -824,7 +824,9 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
     from kyraan.panel import demo as _demo_mode
     cache_key = (round(synapse_floor, 3), _demo_mode.enabled())
     cached = _graph_cache.get(cache_key)
-    if cached and time.monotonic() - cached[0] < GRAPH_TTL_S:
+    # `fresh` is the page saying "the stream just told me the store
+    # changed" — the one caller that knows better than a 30s memo.
+    if cached and not fresh and time.monotonic() - cached[0] < GRAPH_TTL_S:
         return cached[1]
 
     nodes, edges = [], []

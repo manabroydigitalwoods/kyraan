@@ -248,7 +248,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(queries.workload(hours=arg("hours", 24, float)))
             elif path == "/api/brain":
                 self._json(queries.brain_graph(
-                    synapse_floor=arg("floor", queries._SYNAPSE_FLOOR, float)))
+                    synapse_floor=arg("floor", queries._SYNAPSE_FLOOR, float),
+                    fresh=arg("fresh", "") == "1"))
             elif path == "/api/memory/map":
                 self._json(queries.memory_map(
                     limit=arg("limit", 400, int),

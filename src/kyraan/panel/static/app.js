@@ -486,6 +486,119 @@ function ensureGraph(force) {
   return graphPromise;
 }
 
+/* Live memory. The graph was fetched once per page load, so a fact
+   promoted or an episode ingested after you opened the page did not
+   exist in the brain until a reload. Now a store-changing event on the
+   stream — the same stream that lights the neurons — schedules one
+   refetch, and the result is MERGED: every neuron you can already see
+   keeps its exact position, only the new ones are seeded, at their
+   lobe's edge, lit as they arrive. A reload would have re-seeded the
+   whole layout, which is the "reset" the owner just asked to be rid of. */
+const STORE_CHANGE_KINDS = new Set([
+  "memory_promoted_via_chat", "memory_auto_approved", "memory_forgotten",
+  "memory_unforgotten", "memory_superseded", "memory_consolidated",
+  "memory_short_term_expired", "episodes_ingested", "episodes_suppressed",
+  "triples_extracted", "document_ingested", "document_renamed",
+  "face_enrolled", "person_enrolled", "person_episodes_deleted",
+]);
+const REFRESH_SETTLE_MS = 2500;      // let the write land; coalesce a burst
+let refreshTimer = null;
+// (brain.refreshes lives in the brain literal. A top-level assignment here
+// ran before `const brain` was declared, threw in the temporal dead zone,
+// and took the entire script down with it — "brain is not defined" on a
+// page where nothing worked. node --check cannot see that; a loaded page
+// can.)
+
+function scheduleGraphRefresh(reason) {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refreshGraph(reason), REFRESH_SETTLE_MS);
+}
+
+const POSITION_FIELDS = ["x", "y", "z", "vx", "vy", "vz", "pinned"];
+
+function mergeGraph(graph) {
+  const seen = new Set();
+  const added = [];
+  const merged = graph.nodes.map((incoming) => {
+    seen.add(incoming.id);
+    const existing = brain.byId.get(incoming.id);
+    if (existing) {
+      // Fresh metadata, same place: the label, counts and flags may have
+      // changed; where it sits is the reader's, not the server's.
+      for (const key of Object.keys(incoming)) {
+        if (!POSITION_FIELDS.includes(key)) existing[key] = incoming[key];
+      }
+      return existing;
+    }
+    added.push(incoming);
+    return incoming;
+  });
+  // Seed only the newcomers, at their lobe's edge with a deterministic
+  // jitter, so they visibly drift in rather than appear mid-cluster.
+  added.forEach((node, i) => {
+    const anchor = (LOBES[node.type] || LOBES.memory).anchor;
+    const angle = (i * 137.508) * Math.PI / 180;
+    node.x = anchor[0] + Math.cos(angle) * 0.42;
+    node.y = anchor[1] + Math.sin(angle) * 0.42;
+    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * 0.2;
+    node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
+  });
+  const removed = brain.nodes.filter((n) => !seen.has(n.id)).map((n) => n.id);
+  for (const id of removed) brain.selection.delete(id);
+
+  brain.nodes = merged;
+  brain.edges = graph.edges;
+  brain.byId = new Map(merged.map((n) => [n.id, n]));
+  brain.signals = brain.signals.filter((sg) => brain.byId.has(sg.from) && brain.byId.has(sg.to));
+  brain.callWires = brain.callWires.filter((w) => brain.byId.has(w.from) && brain.byId.has(w.to));
+  return { added, removed };
+}
+
+async function refreshGraph(reason) {
+  if (!brain.nodes.length) return;            // nothing loaded yet; the load will be fresh
+  let graph;
+  try {
+    graph = await api("/api/brain?fresh=1&floor=" + brain.floor.toFixed(2));
+  } catch (_) {
+    return;                                   // the next event will try again
+  }
+  graphPromise = Promise.resolve(graph);      // later ensureGraph() callers see this
+  const { added, removed } = mergeGraph(graph);
+  brain.refreshes++;
+  buildPalette();
+  if (brain.query) runSearch(brain.query);
+  renderLegend();
+  renderFindings(graph);
+  renderCensus(graph);
+  renderMemories();
+  renderSelection();
+  refreshPickSummaries();
+  try {
+    renderGate(await api("/api/memory/review"));
+  } catch (_) { /* the gate keeps its last reading */ }
+  const note = $("mem-note");
+  if (note) {
+    note.textContent = (graph.demo ? "DEMO DATA · " : "")
+      + `${graph.nodes.length} neurons · ${graph.edges.length} connections`
+      + ` · mesh ${brain.floor.toFixed(2)}`
+      + (graph.contested.length ? ` · ${graph.contested.length} contested` : "");
+  }
+  const sub = $("hub-sub");
+  if (sub) {
+    const c = graph.counts || {};
+    sub.textContent = `${c.memory || 0} memories · ${c.skill || 0} skills · `
+      + `${c.task || 0} queued · ${graph.demo ? "DEMO DATA" : "live"}`;
+  }
+  // The newcomers light up: they are evidence of exactly the event that
+  // brought them, and the reader should be able to find them.
+  for (const node of added) brain.fired.set(node.id, performance.now());
+  if (added.length || removed.length) {
+    logLive("got", `memory changed · ${reason}`,
+      `${added.length} new · ${removed.length} gone`);
+    reheat(0.35);                             // newcomers settle; the rest barely move
+  }
+}
+
 async function loadHub() {
   try {
     const graph = await ensureGraph();
@@ -908,6 +1021,7 @@ const brain = {
   live: null,              // the last live event, for the ticker
   liveLog: [],             // the recent sequence: trying → got
   callWires: [],           // transient person↔skill wires: asked, answered
+  refreshes: 0,            // merge-refreshes since load (the tests count these)
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -1164,6 +1278,7 @@ function logLive(phase, text, detail) {
 function brainActivate(event) {
   const kind = event.kind || "";
   const who = personForChat(event.chat_id);
+  if (STORE_CHANGE_KINDS.has(kind)) scheduleGraphRefresh(kind);
 
   if (kind === "model_call") {
     // Thinking reads its facts about you: a few pulses out along the

@@ -278,8 +278,12 @@ def _adapter(server: str):
     if transport == "builtin":
         return importlib.import_module(entry["module"])
     if transport == "mcp-stdio":
-        return MCPStdioAdapter(list(entry["command"]),
-                               env=dict(entry.get("env") or {}))
+        import os as _os
+        # ${VAR} in a server's env block resolves from THIS process's
+        # environment (.env) — credentials never sit in permissions.yaml.
+        env = {k: _os.path.expandvars(str(v))
+               for k, v in (entry.get("env") or {}).items()}
+        return MCPStdioAdapter(list(entry["command"]), env=env)
     raise ToolError(f"tool server {server!r}: unknown transport {transport!r} (builtin | mcp-stdio)")
 
 

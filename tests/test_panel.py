@@ -1006,3 +1006,24 @@ def test_handshake_works_on_a_deep_link_and_keeps_the_rest_of_the_query(panel):
     response, _ = request(panel, "/api/status?token=secret-token",
                           headers={"Host": "127.0.0.1"})
     assert response.status == 200
+
+
+
+def test_a_fresh_brain_fetch_bypasses_the_memo(monkeypatch, tmp_path, seeded_logs):
+    """The page refetches when the stream says the store changed. That is
+    the one caller that knows better than a 30s memo — without `fresh` it
+    would have been handed the graph from before the change, and the new
+    memory would not appear until the memo expired or the page reloaded."""
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+
+    first = queries.brain_graph()
+    key = next(iter(queries._graph_cache))
+    # Poison the memo so a cache hit is detectable.
+    marker = dict(first, nodes=first["nodes"][:1], counts={"memory": -1})
+    queries._graph_cache[key] = (queries._graph_cache[key][0], marker)
+
+    assert queries.brain_graph()["counts"] == {"memory": -1}        # memo served
+    assert queries.brain_graph(fresh=True)["counts"] != {"memory": -1}  # recomputed
+    # And the recomputation replaced the memo, so the next plain read is right.
+    assert queries.brain_graph()["counts"] != {"memory": -1}
