@@ -200,7 +200,12 @@
 
     <section id="view-memory" class="view">
      <section class="console sector-console" data-index="06">
-      <h2 data-index="06">Brain <span class="verdict" id="mem-note"></span></h2>
+      <h2 data-index="06">Brain
+        <span class="head-tools">
+          <button id="top-toggle" type="button" title="show or hide the controls row">controls ▴</button>
+          <button id="side-toggle" type="button" title="show or hide the side panels">panels ▸</button>
+        </span>
+        <span class="verdict" id="mem-note"></span></h2>
       <div class="controls">
         <input id="mem-search" type="search" placeholder="search neurons"
                autocomplete="off">
@@ -212,19 +217,30 @@
             <option value="kind">kind</option>
           </select>
         </label>
-        <span class="group-label">lobes</span>
-        <label><input type="checkbox" id="show-memory" checked> memory</label>
-        <label><input type="checkbox" id="show-person" checked> people</label>
-        <label><input type="checkbox" id="show-task" checked> work</label>
-        <label><input type="checkbox" id="show-episode" checked> recall</label>
-        <label><input type="checkbox" id="show-document" checked> docs</label>
-        <label><input type="checkbox" id="show-face" checked> faces</label>
-        <label><input type="checkbox" id="show-skill" checked> skills</label>
-        <span class="group-label">wiring</span>
-        <label><input type="checkbox" id="edge-synapse" checked> synapses</label>
-        <label><input type="checkbox" id="edge-coactivation" checked> co-firing</label>
-        <label><input type="checkbox" id="edge-relation" checked> relations</label>
-        <label><input type="checkbox" id="edge-structure" checked> structure</label>
+        <!-- Checklists behind a dropdown: eleven inline checkboxes took a
+             whole row and pushed the camera controls onto a second line.
+             The ids are unchanged, so filters and URL state are untouched. -->
+        <div class="pick" id="pick-lobes">
+          <button type="button" class="pick-btn" aria-haspopup="true" aria-expanded="false">lobes <b>7/7</b></button>
+          <div class="pick-menu" role="group" aria-label="lobes">
+            <label><input type="checkbox" id="show-memory" checked> memory</label>
+            <label><input type="checkbox" id="show-person" checked> people</label>
+            <label><input type="checkbox" id="show-task" checked> work</label>
+            <label><input type="checkbox" id="show-episode" checked> recall</label>
+            <label><input type="checkbox" id="show-document" checked> docs</label>
+            <label><input type="checkbox" id="show-face" checked> faces</label>
+            <label><input type="checkbox" id="show-skill" checked> skills</label>
+          </div>
+        </div>
+        <div class="pick" id="pick-wiring">
+          <button type="button" class="pick-btn" aria-haspopup="true" aria-expanded="false">wiring <b>4/4</b></button>
+          <div class="pick-menu" role="group" aria-label="wiring">
+            <label><input type="checkbox" id="edge-synapse" checked> synapses</label>
+            <label><input type="checkbox" id="edge-coactivation" checked> co-firing</label>
+            <label><input type="checkbox" id="edge-relation" checked> relations</label>
+            <label><input type="checkbox" id="edge-structure" checked> structure</label>
+          </div>
+        </div>
         <label title="cosine floor for a synapse">mesh
           <input type="range" id="mem-floor" min="0.25" max="0.85" step="0.05" value="0.45">
           <span class="readout-value" id="mem-floor-value">0.45</span>
@@ -248,30 +264,30 @@
         <div class="memory-side">
           <!-- The live sequence: what it is trying to fetch, then what it
                got. First in the column because it is the point of watching. -->
-          <section class="console">
+          <section class="console" id="con-live">
             <h2>Live <span class="verdict" id="live-verdict">—</span></h2>
             <div class="console-body tight scrolls" id="live-body"></div>
           </section>
-          <section class="console">
+          <section class="console" id="con-gate">
             <h2>Review gate <span class="verdict" id="gate-verdict">—</span></h2>
             <div class="console-body" id="gate-body"></div>
           </section>
-          <section class="console">
+          <section class="console" id="con-selection">
             <h2>Selection <span class="verdict" id="pick-verdict">—</span></h2>
             <div class="console-body" id="pick-body"></div>
           </section>
           <!-- The memories, as text. They are the CONTENT of the second
                brain and were the one node type the graph never labelled —
                readable only by hovering a dot you had already found. -->
-          <section class="console">
+          <section class="console" id="con-memories">
             <h2>Memories <span class="verdict" id="memories-verdict">—</span></h2>
             <div class="console-body tight scrolls" id="memories-body"></div>
           </section>
-          <section class="console">
+          <section class="console" id="con-findings">
             <h2>Findings <span class="verdict" id="findings-verdict">—</span></h2>
             <div class="console-body" id="findings-body"></div>
           </section>
-          <section class="console">
+          <section class="console" id="con-wiring">
             <h2>Wiring <span class="verdict" id="census-verdict">—</span></h2>
             <div class="console-body" id="census-body"></div>
           </section>

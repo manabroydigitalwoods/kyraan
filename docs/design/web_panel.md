@@ -543,6 +543,36 @@ carry the wire's own orientation and walk it either way. They render as
 current — a charged stretch of wire brightening and thickening toward a
 white-hot head — because a dot with a short tail read as a dot.
 
+**Signals come back.** A recall is a round trip: the thought reaches
+into memory and what it finds returns. A pulse sent with `bounce` walks
+its wire out, and on arrival one return pulse walks the same wire — same
+orientation — back; the return never bounces again, so a thought is out
+and back, never a ping-pong. Model calls read the person's fact wires the
+same way. Proven with the clock driven by hand (the harness pane is
+hidden, so the frame loop is stalled — `t` sat unchanged for 600ms):
+three out, three back, all flagged not-to-bounce, zero in flight after.
+
+**Space** (owner: "we need more space, manage the spaces"). The right
+column was six frames, most empty most of the time, and a legend box sat
+on the canvas. Now: each side console folds on its header and the fold is
+remembered; an empty console shrinks to one quiet line; the whole column
+hides behind `panels ▸` (in the URL as `side=0`) and the canvas takes the
+width — measured 1491px → 1803px; the lobes checklist carries each lobe's
+swatch and count in lobe colour, so the legend box only appears for the
+colourings the picker cannot show; the fit margin came down from 56px to
+30px. The eleven inline lobe and wiring checkboxes became two dropdown
+checklists showing counts (`lobes 6/7` is the only hint something is
+hidden once the boxes are out of sight), which put the camera controls
+back on the first row.
+
+Two URL bugs the picker flushed out, both pre-existing. `lobes` was
+written only when fewer than four were visible — the count from when
+there were four lobe types; with seven, hiding one left six and nothing
+was ever recorded. And the URL writer was registered before each
+control's state listener, so it read the previous state: hiding wrote
+nothing, restoring wrote "hidden" — one step late, for every control in
+that list. It defers a tick now.
+
 **Keys** (owner's ask): plain drag orbits; Space+drag pans (the hand);
 Cmd/Ctrl+drag zooms about where you pressed (up = in, recomputed from the
 start so it never drifts); Shift+drag selects; wheel zooms at the cursor;

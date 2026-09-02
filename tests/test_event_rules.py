@@ -215,3 +215,17 @@ async def test_dnd_hold_still_retries_under_edge_trigger(ticking, monkeypatch):
     assert await event_rules.tick() == 0          # held, last_met NOT set
     monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
     assert await event_rules.tick() == 1          # still lands after DND
+
+
+async def test_engaged_kill_switch_skips_quietly_not_per_rule(ticking, monkeypatch):
+    """A deliberately-engaged switch spammed event_rule_error every 15
+    min, drowning the log used to find real bugs (2026-09-02). One
+    quiet skip for the whole tick instead."""
+    _rule()
+    monkeypatch.setattr(kernel.kill_switch, "is_engaged", lambda: True)
+    logged = []
+    monkeypatch.setattr(event_rules, "log_event",
+                        lambda kind, **kw: logged.append(kind))
+    assert await event_rules.tick() == 0
+    assert logged == ["event_rules_skipped_kill_switch"]
+    assert "event_rule_error" not in logged

@@ -22,11 +22,17 @@ function el(tag, cls, text) {
 
 function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
+  const console_ = node.closest && node.closest(".console");
+  if (console_) console_.classList.remove("is-empty");
 }
 
 function empty(node, message) {
   clear(node);
   node.appendChild(el("div", "empty", message));
+  // An empty console holds its frame at full padding for a one-line
+  // placeholder. Mark it so the side column can let it shrink.
+  const console_ = node.closest && node.closest(".console");
+  if (console_) console_.classList.add("is-empty");
 }
 
 async function api(path) {
@@ -988,6 +994,7 @@ function emitFrom(nodeId, opts) {
       t: -sent * 0.09,                              // stagger: a wave, not a flash
       speed: (SIGNAL_SPEED[edge.kind] || 1) * 0.9,
       cascade: !!opts.cascade,
+      bounce: !!opts.bounce,                        // a round trip: out, then back
     });
     sent++;
   }
@@ -1014,6 +1021,14 @@ function advanceSignals(dt) {
     if (signal.cascade) {
       emitFrom(signal.to, { hop: signal.hop + 1, strength: signal.strength * 0.5,
                             kinds: ["synapse", "coactivation"], limit: 3 });
+    }
+    // A recall is a round trip: the thought reaches into memory and what
+    // it finds comes back. Same wire, same orientation, walked the other
+    // way — one return, never a ping-pong.
+    if (signal.bounce && brain.signals.length < MAX_SIGNALS) {
+      brain.signals.push({ ...signal, from: signal.to, to: signal.from,
+                           t: 0, bounce: false, cascade: false,
+                           strength: signal.strength * 0.85 });
     }
   }
   // Call wires expire on their own clock.
@@ -1153,7 +1168,7 @@ function brainActivate(event) {
   if (kind === "model_call") {
     // Thinking reads its facts about you: a few pulses out along the
     // person's own subject wires into the fact lobe. Not into everything.
-    if (who) fireNode(who.id, { kinds: ["subject", "relation"], limit: 6 });
+    if (who) fireNode(who.id, { kinds: ["subject", "relation"], limit: 6, bounce: true });
     lightLobe("memory");
     logLive("think", `thinking · ${event.model || event.provider || "model"}`,
       `${event.input_tokens ?? "?"} tokens in · ${event.latency_ms ?? "?"}ms`);
@@ -1162,7 +1177,7 @@ function brainActivate(event) {
     // even when none did — it looked), along the spoke wires only.
     lightLobe("episode");
     const n = Number(event.injected) || 0;
-    if (who) fireNode(who.id, { kinds: ["spoke"], limit: Math.max(2, Math.min(6, n)) });
+    if (who) fireNode(who.id, { kinds: ["spoke"], limit: Math.max(2, Math.min(6, n)), bounce: true });
     logLive("got", `recall → ${n} episodes`,
       event.best_sim != null ? `best match ${Number(event.best_sim).toFixed(2)}` : "");
   } else if (kind === "agent_tool_call" && event.tool) {
@@ -1886,7 +1901,7 @@ function focusOn(canvas, nodes, view) {
   // is (half the canvas, less padding) over (half the span, in pixels).
   // A guessed constant is what left the whole graph as a dot in the
   // middle of an empty field.
-  const pad = 56 * ratio;
+  const pad = 30 * ratio;
   const halfX = Math.max(0.05, (maxX - minX) / 2) * size;
   const halfY = Math.max(0.05, (maxY - minY) / 2) * size;
   view.scale = Math.max(0.3, Math.min(6,
@@ -2136,6 +2151,24 @@ function renderLegend() {
     row.appendChild(el("span", "label", `${key} · ${n}`));
     legend.appendChild(row);
   }
+  // In lobe colour the legend says exactly what the lobes picker says, so
+  // the picker carries the swatch and count and the box on the canvas
+  // goes. Other colourings (cluster, subject) keep the box — the picker
+  // cannot show them.
+  const byLobe = brain.colour === "lobe";
+  legend.hidden = byLobe;
+  for (const box of document.querySelectorAll("#pick-lobes input[type=checkbox]")) {
+    const type = box.id.replace("show-", "");
+    const label = box.closest("label");
+    for (const old of label.querySelectorAll(".swatch, .pick-count")) old.remove();
+    if (!byLobe) continue;
+    const hsl = brain.palette.get(type) || { h: 40, s: 80, l: 50 };
+    const swatch = el("span", "swatch");
+    swatch.style.background = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
+    label.insertBefore(swatch, box.nextSibling);
+    label.appendChild(el("span", "pick-count",
+      String(brain.nodes.filter((n) => n.type === type).length)));
+  }
 }
 
 function renderGate(review) {
@@ -2231,9 +2264,102 @@ async function loadMemory() {
   }
 }
 
+/* Dropdown checklists. Open on the button, close on outside click or
+   Esc, and keep the count on the button honest — "lobes 5/7" is the only
+   hint that something is hidden once the checkboxes are out of sight. */
+function refreshPickSummaries() {
+  for (const pick of document.querySelectorAll(".pick")) {
+    const boxes = pick.querySelectorAll("input[type=checkbox]");
+    const on = [...boxes].filter((b) => b.checked).length;
+    const count = pick.querySelector(".pick-btn b");
+    if (count) count.textContent = `${on}/${boxes.length}`;
+    pick.querySelector(".pick-btn").classList.toggle("partial", on < boxes.length);
+  }
+}
+
+function wirePickers() {
+  const closeAll = () => {
+    for (const pick of document.querySelectorAll(".pick.open")) {
+      pick.classList.remove("open");
+      pick.querySelector(".pick-btn").setAttribute("aria-expanded", "false");
+    }
+  };
+  for (const pick of document.querySelectorAll(".pick")) {
+    const button = pick.querySelector(".pick-btn");
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const opening = !pick.classList.contains("open");
+      closeAll();
+      if (opening) {
+        pick.classList.add("open");
+        button.setAttribute("aria-expanded", "true");
+      }
+    });
+    pick.querySelector(".pick-menu").addEventListener("click", (e) => e.stopPropagation());
+    pick.addEventListener("change", refreshPickSummaries);
+  }
+  document.addEventListener("click", closeAll);
+  window.addEventListener("keydown", (event) => { if (event.key === "Escape") closeAll(); });
+  refreshPickSummaries();
+}
+
+/* The side column: six frames, most empty most of the time. Each console
+   folds on its header, the fold is remembered, and the whole column can
+   go away — the graph is the point and it should be allowed to have the
+   width. */
+const FOLD_KEY = "kyraan.brain.folded";
+
+function foldedSet() {
+  try { return new Set(JSON.parse(localStorage.getItem(FOLD_KEY) || "[]")); }
+  catch (_) { return new Set(); }
+}
+
+function wireSidePanel() {
+  const view = $("view-memory");
+  const side = view && view.querySelector(".memory-side");
+  if (!side) return;
+  const folded = foldedSet();
+  for (const console_ of side.querySelectorAll(".console")) {
+    const head = console_.querySelector("h2");
+    if (!head || !console_.id) continue;
+    if (folded.has(console_.id)) console_.classList.add("folded");
+    head.title = "click to fold";
+    head.addEventListener("click", (event) => {
+      if (event.target.closest("button")) return;
+      console_.classList.toggle("folded");
+      const now = foldedSet();
+      if (console_.classList.contains("folded")) now.add(console_.id); else now.delete(console_.id);
+      try { localStorage.setItem(FOLD_KEY, JSON.stringify([...now])); } catch (_) {}
+    });
+  }
+  // Neither toggle refits. The view is centre-relative, so the graph
+  // keeps its place and size and the freed space opens around it; the
+  // refit that used to run here re-framed everything and read as "the
+  // simulation reset". FIT is one key away if the space is wanted.
+  const toggle = $("side-toggle");
+  if (toggle) {
+    toggle.addEventListener("click", () => {
+      view.classList.toggle("side-hidden");
+      brain.sideHidden = view.classList.contains("side-hidden");
+      toggle.textContent = brain.sideHidden ? "\u25c2 panels" : "panels \u25b8";
+      syncUrl(false);
+    });
+  }
+  const top = $("top-toggle");
+  if (top) {
+    top.addEventListener("click", () => {
+      view.classList.toggle("top-hidden");
+      brain.topHidden = view.classList.contains("top-hidden");
+      top.textContent = brain.topHidden ? "controls \u25be" : "controls \u25b4";
+      syncUrl(false);
+    });
+  }
+}
+
 function wireMemory() {
   const canvas = $("mem-canvas");
   if (!canvas) return;
+  wireSidePanel();
 
   canvas.addEventListener("mousedown", (event) => {
     const point = canvasPoint(canvas, event);
@@ -2950,10 +3076,17 @@ function collectState(view) {
     if (brain.query) params.set("q", brain.query);
     if (!brainCam.spin) params.set("spin", "0");
     if (brain.dragMode !== "orbit") params.set("drag", brain.dragMode);
+    if (brain.sideHidden) params.set("side", "0");
+    if (brain.topHidden) params.set("top", "0");
     if (brain.floor !== 0.45) params.set("floor", brain.floor.toFixed(2));
     const lobes = Object.entries(brain.showType)
       .filter(([, on]) => on).map(([type]) => type);
-    if (lobes.length < 4) params.set("lobes", lobes.join(","));
+    // "< 4" was the lobe count when this was written. With seven lobes,
+    // hiding one left six — never fewer than four — so hiding recall,
+    // docs or faces changed the view and was never written to the URL.
+    if (lobes.length < Object.keys(brain.showType).length) {
+      params.set("lobes", lobes.join(","));
+    }
     const off = Object.entries(brain.showEdge)
       .filter(([, on]) => !on).map(([kind]) => kind);
     if (off.length) params.set("hide", off.join(","));
@@ -3005,6 +3138,18 @@ function applyState(view, params) {
     if (query) {
       const box = $("mem-search");
       if (box) box.value = query;
+    }
+    if (params.get("top") === "0") {
+      brain.topHidden = true;
+      $("view-memory").classList.add("top-hidden");
+      const t = $("top-toggle");
+      if (t) t.textContent = "controls \u25be";
+    }
+    if (params.get("side") === "0") {
+      brain.sideHidden = true;
+      $("view-memory").classList.add("side-hidden");
+      const toggle = $("side-toggle");
+      if (toggle) toggle.textContent = "\u25c2 panels";
     }
     if (params.get("drag") === "pan") {
       brain.dragMode = "pan";
@@ -3074,6 +3219,7 @@ function navigate() {
   applyState(view, params);
   showView(view, { fromUrl: true, params });
   restoring = false;
+  refreshPickSummaries();
 }
 
 const LOADERS = {
@@ -3121,13 +3267,21 @@ window.addEventListener("popstate", navigate);
 // Every control that changes what you are looking at writes the URL.
 for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
                   "turns-hours", "cost-days", "mem-colour", "show-memory",
-                  "show-person", "show-task", "show-skill", "edge-synapse",
+                  "show-person", "show-task", "show-skill",
+                  // Added with the recall/docs/faces lobes — but not here, so
+                  // hiding any of the three changed the view and never the
+                  // URL. Found by toggling one inside the new picker.
+                  "show-episode", "show-document", "show-face", "edge-synapse",
                   "edge-relation", "edge-coactivation", "edge-structure",
                   "actions-days"]) {
   const node = $(id);
-  if (node) node.addEventListener("change", () => syncUrl(false));
+  // Deferred a tick: this listener is registered before each control's
+  // own state listener, so a synchronous write here read the PREVIOUS
+  // state — hiding a lobe wrote nothing, restoring it wrote "hidden". One
+  // step late, every time, for every control in this list.
+  if (node) node.addEventListener("change", () => setTimeout(() => syncUrl(false), 0));
 }
-$("stream-q").addEventListener("input", () => syncUrl(false));
+$("stream-q").addEventListener("input", () => setTimeout(() => syncUrl(false), 0));
 $("stream-q").addEventListener("input", renderStream);
 $("stream-anomalies").addEventListener("change", renderStream);
 $("stream-live").addEventListener("change", connectStream);
@@ -3143,6 +3297,7 @@ $("cost-refresh").addEventListener("click", loadCost);
 $("health-refresh").addEventListener("click", () => loadHealth(true));
 
 initPhosphor();
+wirePickers();
 wireMemory();
 wireHub();
 refreshStatus();

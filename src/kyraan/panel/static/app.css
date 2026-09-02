@@ -716,3 +716,46 @@ footer::before {
 .row.live-reply .live-phase { color: var(--ok); }
 .row.live-detail { padding-top: 0; border-top: none; }
 .row.live-detail .body { color: var(--dim); font-size: 11px; white-space: normal; opacity: .85; }
+
+/* ------------------------------------------------------------ pickers */
+/* A checklist behind a button that shows the count. Reads at a glance
+   ("lobes 5/7" says something is hidden) and costs one control's width
+   instead of seven. */
+.pick { position: relative; }
+.pick-btn b { font-weight: normal; color: var(--accent); margin-left: 4px; }
+.pick-btn::after { content: " \25be"; color: var(--dim); }
+.pick-menu {
+  display: none; position: absolute; top: calc(100% + 4px); left: 0; z-index: 6;
+  flex-direction: column; gap: 5px; padding: 8px 10px; min-width: 150px;
+  background: var(--panel); border: 1px solid var(--line-hot);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
+  clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+}
+.pick.open .pick-menu { display: flex; }
+.pick.open .pick-btn { color: var(--accent); border-color: var(--accent); }
+.pick-menu label { white-space: nowrap; }
+
+/* ------------------------------------------------- brain: space */
+.push-right { margin-left: auto; }
+#view-memory.side-hidden .memory-side { display: none; }
+/* A folded console is its header line and nothing else. */
+.memory-side .console.folded .console-body { display: none; }
+.memory-side .console h2 { cursor: pointer; user-select: none; }
+.memory-side .console.folded h2::after { content: "\25b8"; color: var(--dim); margin-left: 6px; }
+/* An empty console shrinks to a single quiet line. */
+.memory-side .console.is-empty .console-body { padding: 3px 10px; }
+.memory-side .console.is-empty .empty { padding: 2px 0; font-size: 11px; opacity: .8; }
+/* Legend rows inside the lobes picker. */
+#pick-lobes .swatch { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin: 0 6px 0 2px; }
+#pick-lobes .pick-count { margin-left: auto; padding-left: 12px; color: var(--dim); font-size: 11px; }
+#pick-lobes .pick-menu label { display: flex; align-items: center; }
+#mem-legend[hidden] { display: none; }
+
+/* Header tools: the two space toggles sit in the sector header, so
+   hiding the controls row cannot take the way back with it. */
+.head-tools { display: inline-flex; gap: 6px; margin-left: 14px; }
+.head-tools button {
+  font-size: 9.5px; padding: 0 8px; letter-spacing: .12em;
+  text-transform: lowercase; text-shadow: none;
+}
+#view-memory.top-hidden .sector-console > .controls { display: none; }

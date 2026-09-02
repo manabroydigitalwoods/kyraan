@@ -207,6 +207,12 @@ async def tick(send=None) -> int:
     `send` (job-context-bound in the bot) overrides the init() fallback."""
     send = send or _send_fn
     fired = 0
+    if kernel.kill_switch.is_engaged():
+        # A deliberately-engaged switch is not a per-rule error (it spammed
+        # event_rule_error every 15 min, drowning the log used to FIND real
+        # bugs, 2026-09-02). One quiet skip.
+        log_event("event_rules_skipped_kill_switch")
+        return 0
     for rule in list_active():
         try:
             state = await kernel.run_tool(kernel.ToolCall(
