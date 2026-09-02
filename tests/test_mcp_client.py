@@ -104,3 +104,30 @@ def test_mounted_tools_join_no_stage_toolset(monkeypatch):
     _mount(monkeypatch)
     assert not kernel.stage_allows("fake.shout", stage="full")
     assert not kernel.stage_allows("fake.shout", stage="read_mostly")
+
+
+def test_env_placeholders_resolve_from_the_process_environment(monkeypatch):
+    from kyraan.control_plane import config
+    monkeypatch.setenv("FAKE_SLACK_TOKEN", "xoxp-real")
+    cfg = config.load()
+    cfg = {**cfg, "tool_servers": {**cfg["tool_servers"], "envtest": {
+        "transport": "mcp-stdio", "command": FAKE,
+        "env": {"TOKEN": "${FAKE_SLACK_TOKEN}", "PLAIN": "x"}}}}
+    monkeypatch.setattr(config, "load", lambda: cfg)
+    registry._adapter.cache_clear()
+    adapter = registry._adapter("envtest")
+    assert adapter._env == {"TOKEN": "xoxp-real", "PLAIN": "x"}
+    registry._adapter.cache_clear()
+
+
+def test_slack_mount_declares_the_house_shape():
+    from kyraan.agents import loop_tools
+    specs = registry.load()
+    assert specs["slack.post"].permission == "confirm"
+    assert specs["slack.history"].mcp_name == "conversations_history"
+    from kyraan.control_plane import taint
+    assert taint.source_class("slack.history") == taint.WEB_UNTRUSTED
+    assert "slack.history" in loop_tools.TOOLS          # menu generated
+    assert "slack.history" in loop_tools._READ_ONLY_TOOLS
+    from kyraan.control_plane import kernel
+    assert not kernel.stage_allows("slack.history", stage="full")

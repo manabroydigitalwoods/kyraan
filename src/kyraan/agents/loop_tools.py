@@ -2748,9 +2748,11 @@ def register_mcp_tools() -> None:
             # explicit no-inverse policy: we cannot know a foreign
             # tool's inverse; the undo matrix records that honestly
             UNDO_MAP[name] = lambda a, r, p: None
+        if spec.side_effects != "read":
+            # a foreign write's outcome is whatever the server reports —
+            # declared as such, never dressed up as read-after-write
+            VERIFICATION_CLASS.setdefault(name, "foreign")
 
-
-register_mcp_tools()
 
 
 
@@ -2988,3 +2990,10 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         return (f'Scheduled: {outcome.get("description", "the task")} — '
                 'say "list tasks" to see it.')
     return f"Done: {tool}."
+
+
+# MCP mounts register LAST: the generated entries need the read-only
+# set, the undo matrix, and the verification map, all defined above
+# (the first real mount, Slack 2026-09-02, found the call sitting
+# before them — a NameError at import).
+register_mcp_tools()

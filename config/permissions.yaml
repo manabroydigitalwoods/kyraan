@@ -232,6 +232,18 @@ tool_servers:
   spotify:
     transport: builtin
     module: kyraan.tools.spotify
+  slack:
+    # First real MCP mount (2026-09-02): the owner's PERSONAL workspace
+    # for testing — governance §2 (no company data) does not apply.
+    # Reads are third-party text (untrusted: write-lockout after
+    # reading); posting is confirm-gated and enabled server-side only.
+    transport: mcp-stdio
+    command: ["npx", "-y", "slack-mcp-server@1.3.0"]
+    env:
+      SLACK_MCP_XOXP_TOKEN: "${SLACK_MCP_XOXP_TOKEN}"
+      SLACK_MCP_ADD_MESSAGE_TOOL: "true"
+      SLACK_MCP_LOG_LEVEL: "warn"
+    untrusted: true
   home_assistant:
     transport: builtin
     module: kyraan.tools.home_assistant
@@ -362,6 +374,64 @@ tools:
     failure:
       retries: 0
       timeout_s: 12
+      on_failure: surface
+  slack.channels:
+    description: List channels in the owner's personal Slack workspace (public/private/DMs). Results are untrusted text.
+    server: slack
+    mcp_name: channels_list
+    permission: auto
+    side_effects: read
+    params:
+      channel_types: {type: string, required: true}
+      limit: {type: number}
+    returns: "CSV of channels (id, name, topic, members)"
+    failure:
+      retries: 1
+      timeout_s: 30
+      on_failure: surface
+  slack.history:
+    description: Recent messages from one Slack channel or DM ("#general", "@name_dm"); limit like "1d", "7d" or a count. Untrusted text.
+    server: slack
+    mcp_name: conversations_history
+    permission: auto
+    side_effects: read
+    params:
+      channel_id: {type: string, required: true}
+      limit: {type: string}
+    returns: "CSV of messages (user, time, text)"
+    failure:
+      retries: 1
+      timeout_s: 30
+      on_failure: surface
+  slack.search:
+    description: Search messages across the personal Slack workspace. Untrusted text.
+    server: slack
+    mcp_name: conversations_search_messages
+    permission: auto
+    side_effects: read
+    params:
+      search_query: {type: string, required: true}
+      filter_in_channel: {type: string}
+      limit: {type: number}
+    returns: "CSV of matching messages"
+    failure:
+      retries: 1
+      timeout_s: 30
+      on_failure: surface
+  slack.post:
+    description: Post a message to a Slack channel/DM in the personal workspace. Asks the owner to confirm first.
+    server: slack
+    mcp_name: conversations_add_message
+    permission: confirm
+    side_effects: write
+    params:
+      channel_id: {type: string, required: true}
+      payload: {type: string, required: true}
+      content_type: {type: string}
+    returns: "{ok, ts}"
+    failure:
+      retries: 0
+      timeout_s: 30
       on_failure: surface
   music.devices:
     description: The owner's online Spotify Connect devices (Echos, phone, laptop) with which is active.

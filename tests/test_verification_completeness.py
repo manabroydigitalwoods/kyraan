@@ -11,7 +11,7 @@ def test_every_write_tool_declares_a_verification_class():
     writes = set(loop_tools.TOOLS) - loop_tools._READ_ONLY_TOOLS
     missing = {t for t in writes if t not in loop_tools.VERIFICATION_CLASS}
     assert not missing, f"writes with no declared verification: {missing}"
-    legal = {"read_after_write", "same_store", "undo_path"}
+    legal = {"read_after_write", "same_store", "undo_path", "foreign"}
     assert set(loop_tools.VERIFICATION_CLASS.values()) <= legal
 
 
