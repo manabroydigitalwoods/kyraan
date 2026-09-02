@@ -1447,6 +1447,40 @@ function emitFrom(nodeId, opts) {
   return sent;
 }
 
+/* Every pulse is a round trip from the core (owner, 2026-09-03: "the
+   pulses should fire from the centre, then come back to the centre"):
+   a route is a path of node ids starting at the core; the pulse walks it
+   hop by hop along the wires as drawn, and when it reaches the end it
+   walks the same path back. Between two nodes with no stored wire (the
+   core and a person it has no `talks` edge to) it rides a transient call
+   wire, so it is never seen crossing empty space. */
+function edgeBetween(u, v) {
+  return brain.edges.find((e) => (e.a === u && e.b === v) || (e.a === v && e.b === u)) || null;
+}
+
+function routeSegment(route, idx, strength, back) {
+  const from = route[idx], to = route[idx + 1];
+  const edge = edgeBetween(from, to);
+  if (!edge) callWire(from, to);
+  return {
+    from, to, kind: edge ? edge.kind : "call", hop: idx + 1, strength,
+    ca: edge ? edge.a : from, cb: edge ? edge.b : to,
+    t: 0, speed: (edge ? SIGNAL_SPEED[edge.kind] || 1 : 1.3) * 0.9,
+    route, idx, back,
+  };
+}
+
+function emitRoute(route, opts) {
+  opts = opts || {};
+  if (route.length < 2 || brain.signals.length >= MAX_SIGNALS) return false;
+  for (const id of route) if (!brain.byId.has(id) || !brain.showType[brain.byId.get(id).type]) return false;
+  const segment = routeSegment(route, 0, opts.strength ?? 1, false);
+  segment.t = -(opts.delay || 0);
+  brain.signals.push(segment);
+  brain.fired.set(route[0], performance.now());
+  return true;
+}
+
 function advanceSignals(dt) {
   if (!brain.signals.length) return;
   const arrived = [];
@@ -1467,6 +1501,19 @@ function advanceSignals(dt) {
     if (signal.cascade) {
       emitFrom(signal.to, { hop: signal.hop + 1, strength: signal.strength * 0.5,
                             kinds: ["synapse", "coactivation"], limit: 3 });
+    }
+    // A routed pulse: next hop out, then the same path home.
+    if (signal.route && brain.signals.length < MAX_SIGNALS) {
+      const last = signal.route.length - 2;
+      if (!signal.back && signal.idx < last) {
+        brain.signals.push(routeSegment(signal.route, signal.idx + 1, signal.strength, false));
+      } else if (!signal.back) {
+        const home = [...signal.route].reverse();
+        brain.signals.push(routeSegment(home, 0, signal.strength * 0.85, true));
+      } else if (signal.idx < last) {
+        brain.signals.push(routeSegment(signal.route, signal.idx + 1, signal.strength, true));
+      }
+      continue;
     }
     // A recall is a round trip: the thought reaches into memory and what
     // it finds comes back. Same wire, same orientation, walked the other
@@ -1566,6 +1613,17 @@ function lobeHeat(type) {
   return Math.max(0, 1 - (performance.now() - at) / LOBE_MS);
 }
 
+/* The ids wired to a node over the given kinds, in store order. */
+function neighbourIds(id, kinds) {
+  const want = new Set(kinds);
+  const out = [];
+  for (const e of brain.edges) {
+    if (!want.has(e.kind) || !brain.showEdge[e.kind]) continue;
+    if (e.a === id) out.push(e.b); else if (e.b === id) out.push(e.a);
+  }
+  return out;
+}
+
 function fireNode(id, emit) {
   if (!brain.byId.has(id)) return false;
   brain.fired.set(id, performance.now());
@@ -1616,8 +1674,15 @@ function brainActivate(event) {
   if (kind === "model_call") {
     // Thinking reads its facts about you: a few pulses out along the
     // person's own subject wires into the fact lobe. Not into everything.
-    if (who) { callWire(who.id, CORE); fireNode(who.id, { kinds: ["subject", "relation"], limit: 6, bounce: true }); }
+    // Thinking: the core reaches through the person to a few of the
+    // facts about them and the thought comes home. Core → person → fact
+    // → person → core, on the real subject wires.
     fireNode(CORE);
+    if (who) {
+      const facts = neighbourIds(who.id, ["subject", "relation"]).slice(0, 4);
+      facts.forEach((fact, i) => emitRoute([CORE, who.id, fact], { delay: i * 0.12 }));
+      if (!facts.length) emitRoute([CORE, who.id]);
+    }
     lightLobe("memory");
     logLive("think", `thinking · ${event.model || event.provider || "model"}`,
       `${event.input_tokens ?? "?"} tokens in · ${event.latency_ms ?? "?"}ms`);
@@ -1627,16 +1692,21 @@ function brainActivate(event) {
     lightLobe("episode");
     fireNode(CORE);
     const n = Number(event.injected) || 0;
-    if (who) fireNode(who.id, { kinds: ["spoke"], limit: Math.max(2, Math.min(6, n)), bounce: true });
+    if (who) {
+      neighbourIds(who.id, ["spoke"]).slice(0, Math.max(2, Math.min(6, n)))
+        .forEach((ep, i) => emitRoute([CORE, who.id, ep], { delay: i * 0.1, strength: 0.9 }));
+    }
     logLive("got", `recall → ${n} episodes`,
       event.best_sim != null ? `best match ${Number(event.best_sim).toFixed(2)}` : "");
   } else if (kind === "agent_tool_call" && event.tool) {
     // The ask: one wire out from the person to the skill, and the skill
     // fires. The model's own WANT/HAVE/NEED line is the reason.
     const skill = "s:" + event.tool;
+    // The ask leaves the core for the skill; the result (below) brings
+    // it back. One round trip, split across the two events.
     callWire(CORE, skill);
     fireNode(CORE);
-    fireNode(skill);
+    emitRoute([CORE, skill]);
     logLive("try", `${event.tool}`, String(event.consider || "").slice(0, 140));
   } else if (kind === "tool_call" && event.tool) {
     const skill = "s:" + event.tool;
@@ -1644,9 +1714,11 @@ function brainActivate(event) {
     // ask then, but not twice when the loop already did.
     const recent = brain.callWires.some((w) => w.to === skill
       && performance.now() - w.born < 1500);
-    if (!recent) { callWire(CORE, skill); fireNode(CORE); }
-    // The skill and, lightly, the two or three it habitually fires with.
-    fireNode(skill, { kinds: ["coactivation"], limit: 3, strength: 0.7 });
+    if (!recent) { callWire(CORE, skill); fireNode(CORE); emitRoute([CORE, skill]); }
+    // And, lightly, the two or three it habitually fires with: core →
+    // skill → co-fired skill and home.
+    neighbourIds(skill, ["coactivation"]).slice(0, 2)
+      .forEach((other, i) => emitRoute([CORE, skill, other], { strength: 0.6, delay: 0.2 + i * 0.12 }));
     if (event.tool.startsWith("memory.")) lightLobe("memory");
     if (event.tool.startsWith("memory.recall")) lightLobe("episode");
     if (event.tool.startsWith("documents.")) lightLobe("document");
@@ -1657,20 +1729,22 @@ function brainActivate(event) {
     const skill = "s:" + event.tool;
     fireNode(skill);
     callWire(skill, CORE);
+    // The answer comes home: one segment, skill → core.
+    brain.signals.push(routeSegment([skill, CORE], 0, 1, true));
     fireNode(CORE);
     logLive("got", event.ok
       ? `${event.tool} → ok · ${event.duration_ms ?? "?"}ms`
       : `${event.tool} → failed`,
       event.ok ? "" : String(event.error || "").slice(0, 140));
   } else if (kind === "agent_reply" || kind === "turn_health") {
-    if (who && kind === "agent_reply") { callWire(CORE, who.id); fireNode(CORE); }
+    if (who && kind === "agent_reply") { callWire(CORE, who.id); fireNode(CORE); emitRoute([CORE, who.id]); }
     if (who) brain.fired.set(who.id, performance.now());
     if (kind === "agent_reply") logLive("reply", "replied",
       `${event.steps ?? "?"} steps · ${event.tier || ""}`.trim());
   } else if (event.reminder_id) {
     callWire(CORE, "t:reminder:" + event.reminder_id);
     fireNode(CORE);
-    fireNode("t:reminder:" + event.reminder_id, { kinds: ["owns", "managed_by"], limit: 2 });
+    emitRoute([CORE, "t:reminder:" + event.reminder_id]);
     logLive("got", "reminder fired");
   }
 }
