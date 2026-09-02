@@ -142,7 +142,8 @@ fire late rather than never (sleep-proof since 2026-08-30).
 
 | Connector | What | Auth | Data boundary |
 |---|---|---|---|
-| Telegram Bot API | The one chat channel (text, voice, photos, files, pins) | bot token (.env) | messages in/out |
+| Local CLI | second channel: `python -m kyraan.channels.cli` — same brain/memory, conversation-only (no proactive jobs) | terminal access | fully local |
+| Telegram Bot API | The primary chat channel (text, voice, photos, files, pins) | bot token (.env) | messages in/out |
 | OpenAI | frontier model | API key | prompts exclude local-only data |
 | Ollama (local) | cheap model + embeddings + transcription | none (localhost) | fully local |
 | Gmail API | unread/read/important/search/drafts/modify | OAuth (readonly+metadata, compose & modify opt-in) | bodies local-only |

@@ -296,11 +296,11 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
    late-but-honest, not awake). Near: pmset/caffeinate wake scheduling
    around due jobs. Later: an always-on box; the Docker stack ports
    cleanly.
-5. **Channels.** Hermes speaks 15+ (WhatsApp, Signal, Slack, SMS,
-   iMessage…); Kyraan speaks Telegram only — if Telegram is down we
-   are mute. A second channel (CLI first: zero governance surface)
-   proves the `channels/` abstraction. WhatsApp remains gated (§3c:
-   ban risk on the owner's personal number).
+5. **Channels — CLI BUILT 2026-09-01** (`python -m kyraan.channels.cli`:
+   same brain and memory, conversation-only by pinned property — no
+   proactive wiring, so it can never steal the bot's jobs). Telegram
+   down no longer means mute. WhatsApp remains gated (§3c: ban risk
+   on the owner's personal number).
 6. **Self-improvement loop — BUILT 2026-09-01** (memory/lessons.py):
    nightly deterministic clustering of repeated corrections (3+ over
    2+ days), ONE rule drafted on the LOCAL tier, queued in the same
