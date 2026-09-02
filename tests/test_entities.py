@@ -71,3 +71,18 @@ def test_generic_entities_are_refused(monkeypatch):
     monkeypatch.setattr(router, "strip_code_fence", lambda t: t)
     out = entities.extract("photo of the Payment Status screen at Sharma Medical shop")
     assert out == ["Sharma Medical", "#receipt"]    # generics dropped, #photo refused, fallback category
+
+
+def test_clean_splits_glued_tags_and_keeps_one_hub():
+    """Live 2026-09-03: the vision model returned 'Wellbeing Nutrition
+    #health', '#Plant Based #nutrition' and photo.py stored them raw."""
+    text = "Wellbeing Nutrition melts into throat relief lozenges, plant based, sugar free"
+    out = entities.clean(["Wellbeing Nutrition #health",
+                          "melts into throat relief #throat-relief",
+                          "#Plant Based #nutrition", "#Sugar Free #nutrition"],
+                         text, hint="my medicine")
+    assert out == ["Wellbeing Nutrition", "melts into throat relief", "#medical"]
+    # no family in the words -> the model's first valid tag names it
+    assert entities.clean(["Acme #gadget"], "Acme thing") == ["Acme", "#gadget"]
+    # invention and generic words never pass
+    assert entities.clean(["Made Up", "Address"], "Address line") == []

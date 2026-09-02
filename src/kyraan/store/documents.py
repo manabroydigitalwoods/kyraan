@@ -13,6 +13,7 @@ forget cascade cover documents; retrieval is chat-scoped.
 """
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 
@@ -158,6 +159,48 @@ def link_person_to_latest_moment(chat_id: int, person_id: str,
     log_event("moment_person_linked", doc_id=str(doc_id),
               person=person_id)
     return caption, subjects
+
+
+def claim_latest_moment(chat_id: int, phrase: str, max_age_min: int = 20):
+    """The owner captioning the photo JUST sent as theirs ("this is my
+    medicine", live 2026-09-03: acknowledged twice, nothing stored
+    changed — the moment stayed "Moment — 03 Sep 2026", nobody's, no
+    category). Deterministic: link the owner, name the moment by the
+    phrase when it only had the default title, and give it a category
+    from the words when it has none. Returns (caption, entities) or
+    None when no recent moment exists."""
+    from kyraan.store import entities as _ents
+    phrase = " ".join(str(phrase or "").split())[:120]
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT id, caption, subject_persons, entities, text
+               FROM document
+               WHERE chat_id = %s AND kind IN ('moment', 'photo')
+                     AND created_at > now() - make_interval(mins => %s)
+               ORDER BY created_at DESC LIMIT 1""",
+            (chat_id, max_age_min)).fetchone()
+        if row is None:
+            return None
+        doc_id, caption, subjects, ents, text = row
+        subjects = list(subjects or [])
+        ents = list(ents or [])
+        if "owner" not in subjects:
+            subjects.append("owner")
+        default_title = bool(re.match(r"^Moment — \d", str(caption or "")))
+        if phrase and (default_title or not caption):
+            caption = phrase
+        if not any(e.startswith("#") for e in ents):
+            tag = _ents.category_from_words(f"{phrase} {text[:400]}")
+            if tag:
+                ents.append(tag)
+        conn.execute(
+            """UPDATE document SET subject_persons = %s, caption = %s,
+                                   entities = %s WHERE id = %s""",
+            (subjects, caption[:300], ents, doc_id))
+        conn.commit()
+    log_event("moment_claimed_by_owner", doc_id=str(doc_id),
+              caption=caption[:80], entities=ents)
+    return caption, ents
 
 
 FILES_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
@@ -339,7 +382,7 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
                            THEN 1 - (c.embedding <=> %s::vector) END AS sim,
                       (%s <> '' AND to_tsvector('english', c.text)
                                     @@ to_tsquery('english', %s)) AS fts,
-                      d.kind
+                      d.kind, d.subject_persons
                FROM document_chunk c JOIN document d ON d.id = c.document_id
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
                      AND d.exposure = ANY(%s)
@@ -349,12 +392,13 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
             (qvec, qvec, tsquery, tsquery or "x", chat_id,
              list(_allowed_exposures()), person or "", person or "")).fetchall()
     results = []
-    for doc_id, caption, filename, day, text, sim, fts, kind in rows:
+    for doc_id, caption, filename, day, text, sim, fts, kind, subj in rows:
         if not fts and (sim is None or sim < SEARCH_MIN_SIM):
             continue  # neither arm actually matched
         results.append({"doc_id": str(doc_id), "kind": kind,
                         "caption": caption or filename or "(untitled)",
                         "date": day.isoformat(), "text": text,
+                        "subjects": list(subj or []),
                         "sim": float(sim) if sim is not None else None,
                         "fts": bool(fts)})
         if len(results) >= k:

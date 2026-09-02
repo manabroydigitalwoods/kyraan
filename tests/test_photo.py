@@ -284,7 +284,8 @@ async def test_scene_photo_becomes_a_moment_with_face_links(monkeypatch):
     assert stored["subjects"] == ["Kiaan"]          # face match -> person link
     assert stored["original"][0] == b"ABC"          # bytes kept
     assert "Kiaan —" in stored["caption"]           # auto-title names who
-    assert stored["entities"] == ["#playground", "Sharma Garden"]   # label's own things
+    # the label's own things, cleaned: names first, ONE category last
+    assert stored["entities"] == ["Sharma Garden", "#playground"]
     assert "Saved to memories" in reply
 
 
@@ -347,3 +348,56 @@ def test_person_correction_links_the_latest_moment(monkeypatch):
     assert sorted(subs) == ["kiaan", "ruma"]
     assert documents.link_person_to_latest_moment(9999, "ruma") is None
     pg.reset_pool_for_tests()
+
+
+@pytest.mark.pg
+def test_owner_claim_names_links_and_files_the_latest_moment(monkeypatch):
+    """Live 2026-09-03: "this is my medicine" after a photo changed nothing.
+    The claim makes the capture the owner's, named by the phrase, filed
+    under a deterministic category — and leaves a real title alone."""
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import documents
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4243")
+        conn.execute(
+            """INSERT INTO document (id, chat_id, kind, caption, text,
+                                     subject_persons, entities)
+               VALUES (gen_random_uuid(), 4243, 'moment', 'Moment — 03 Sep 2026',
+                       '[photo] Wellbeing Nutrition throat relief lozenges',
+                       '{}', ARRAY['Wellbeing Nutrition'])""")
+        conn.commit()
+    got = documents.claim_latest_moment(4243, "my medicine")
+    assert got == ("my medicine", ["Wellbeing Nutrition", "#medical"])
+    with pg.connection() as conn:
+        subs, cap = conn.execute("""SELECT subject_persons, caption FROM document
+                                    WHERE chat_id = 4243""").fetchone()
+    assert subs == ["owner"] and cap == "my medicine"
+    # a second claim is idempotent; a real title is never overwritten
+    with pg.connection() as conn:
+        conn.execute("UPDATE document SET caption = 'throat lozenges' WHERE chat_id = 4243")
+        conn.commit()
+    assert documents.claim_latest_moment(4243, "my medicine") == (
+        "throat lozenges", ["Wellbeing Nutrition", "#medical"])
+    assert documents.claim_latest_moment(9998, "my medicine") is None
+    pg.reset_pool_for_tests()
+
+
+def test_search_hits_say_whose_they_are(monkeypatch):
+    """Live 2026-09-03: "my medications" listed Kiaan's drops as the owner's."""
+    import asyncio
+    from kyraan.agents import loop_tools
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "search", lambda *a, **k: [
+        {"caption": "Fourts B Drops", "date": "2026-08-27", "text": "drops",
+         "subjects": ["kiaan"]},
+        {"caption": "my supplement", "date": "2026-09-02", "text": "omega",
+         "subjects": ["owner"]}])
+    out = asyncio.run(loop_tools._documents_search(1, {"query": "medicine"}, ""))
+    assert out[0].startswith('[document "Fourts B Drops", 2026-08-27, about: kiaan]')
+    assert 'about: owner]' in out[1]

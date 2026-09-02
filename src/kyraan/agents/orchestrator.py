@@ -796,6 +796,26 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        photo_mine = _re.match(
+            r"^\s*(?:this|that|it|here|these|those)\s+(?:is|are|'s)\s+"
+            r"(my\s+[a-z][\w .'-]{1,60}?)\s*[.!]?\s*$",
+            raw_text, _re.IGNORECASE)
+        if photo_mine and kernel.viewer_person() == "owner":
+            # After-photo OWNER claim (live 2026-09-03: "this is my
+            # medicine" got "Got it" twice and nothing stored changed —
+            # the moment stayed nobody's, untitled, uncategorised, so
+            # "what are my medications?" had to guess). Deterministic:
+            # the just-stored capture becomes the owner's, named by the
+            # phrase, categorised by its words. No recent capture: the
+            # loop handles the statement as before.
+            from kyraan.store import documents as _docs0
+            claimed = _docs0.claim_latest_moment(chat_id, photo_mine.group(1))
+            if claimed is not None:
+                caption, ents = claimed
+                _skip_extraction.set(True)
+                tag = next((e for e in ents if e.startswith("#")), "")
+                return (f'Noted — that photo is yours now: "{caption}"'
+                        + (f", filed under {tag}" if tag else "") + ".")
         photo_person = _re.match(
             r"^\s*(?:she|he|that|this)\s+is\s+([a-z][\w .-]{1,40}?)\s*[.!]?\s*$",
             raw_text, _re.IGNORECASE)

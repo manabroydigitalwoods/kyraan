@@ -1133,7 +1133,12 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
     if not hits:
         return {"found": 0, "note": ("no saved document matches — say so "
                                      "honestly, never invent contents")}
-    return [f'[document "{h["caption"]}", {h["date"]}] {h["text"][:400]}'
+    # WHOSE it is rides on every hit (live 2026-09-03: "my medications"
+    # listed Kiaan's drops as the owner's — the text said "Kiaan", the
+    # hit did not say it was ABOUT Kiaan).
+    return [f'[document "{h["caption"]}", {h["date"]}'
+            + (f', about: {", ".join(h["subjects"])}' if h.get("subjects") else "")
+            + f'] {h["text"][:400]}'
             for h in hits]
 
 

@@ -167,8 +167,7 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             document_text = str(decision.get("document_text") or "").strip()
             document_title = str(decision.get("document_title") or "").strip()
             document_subjects = decision.get("document_subjects") or []
-            photo_entities = [str(e).strip() for e in
-                              (decision.get("entities") or []) if str(e).strip()]
+            photo_entities = list(decision.get("entities") or [])
         except (json.JSONDecodeError, AttributeError, TypeError):
             # Robustness: an unparseable response is still a reply —
             # losing the intent field beats losing the answer.
@@ -218,11 +217,15 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
                 original = None
             from kyraan.store import documents as _docs
             subjects = list(document_subjects) + _docs.subjects_from_name(caption)
+            from kyraan.store import entities as _ents
             doc_id = documents.ingest(chat_id, "photo", document_text,
                                       caption=title[:120],
                                       subjects=subjects,
                                       original=original,
-                                      entities=photo_entities)
+                                      entities=_ents.clean(
+                                          photo_entities,
+                                          f"{document_text}\n{reply}",
+                                          hint=title, contained=False))
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "
                           "it anytime.")
@@ -262,11 +265,13 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             subjects = (list(recognized or [])
                         + (_docs2.caption_people(caption)
                            if caption.strip() else []))
+            from kyraan.store import entities as _ents2
+            moment_text = f"[photo, {local_now().strftime('%d %b %Y')}] {reply}"
             moment_id = _docs2.ingest(
-                chat_id, "moment",
-                f"[photo, {local_now().strftime('%d %b %Y')}] {reply}",
+                chat_id, "moment", moment_text,
                 caption=title[:120], subjects=subjects, original=original,
-                entities=photo_entities)
+                entities=_ents2.clean(photo_entities, moment_text,
+                                      hint=caption, contained=False))
             if moment_id:
                 reply += "\n\n🖼 Saved to memories — ask me to show it anytime."
         except Exception as exc:

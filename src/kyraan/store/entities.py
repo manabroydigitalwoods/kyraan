@@ -51,35 +51,63 @@ def extract(text: str, hint: str = "") -> list:
         log_event("entity_extract_failed", error=str(exc)[:100])
         fallback = category_from_words(f"{hint} {text[:400]}")
         return [fallback] if fallback else []
-    low = text.lower()
-    cat = str(data.get("category") or "").strip().lower()
-    out = []
-    for raw in (data.get("entities") or []):
+    return clean(data.get("entities") or [], text,
+                 category=str(data.get("category") or ""), hint=hint)
+    return out
+
+
+def clean(items, text: str, category: str = "", hint: str = "",
+          contained: bool = True) -> list:
+    """The one gate every entity list passes — the local extractor's and
+    the vision call's alike (live 2026-09-03: the vision model returned
+    'Wellbeing Nutrition #health', '#Plant Based #nutrition' — tags
+    glued onto entities, several categories — and photo.py stored them
+    raw). Rules: an entity is accepted only if the text literally
+    contains it and it is not made of generic words; inline #tags are
+    split off and the FIRST valid one becomes THE category; exactly one
+    category per document, deterministic fallback when none is valid."""
+    low = str(text or "").lower()
+    cat = str(category or "").strip().lower()
+    out, tags = [], []
+    for raw in items:
         item = " ".join(str(raw).split())[:60]
+        # split glued tags: "Wellbeing Nutrition #health" -> entity + tag
+        parts = re.split(r"(?=#)", item)
+        words_only = " ".join(p for p in parts if not p.startswith("#")).strip()
+        tags += [p.strip().lower() for p in parts if p.startswith("#")]
+        item = words_only
         words = item.lower().split()
-        # accept only what the text actually contains — no invention —
-        # and never a generic word (or a phrase made only of them)
-        if (len(item) >= 2 and item.lower() in low and item not in out
+        if (len(item) >= 2 and (item.lower() in low or not contained)
+                and item not in out
                 and not all(w in _GENERIC for w in words)
                 and item.lower() != cat.lstrip("#")):
             out.append(item)
         if len(out) >= _MAX:
             break
-    if re.fullmatch(r"#[a-z][\w-]{1,30}", cat) and cat not in _GENERIC_TAGS:
-        out.append(cat)
-    elif not any(e.startswith("#") for e in out):
-        fallback = category_from_words(f"{hint} {text[:400]}")
-        if fallback:
-            out.append(fallback)
+    # The category is a HUB: one name per family, or the graph splits
+    # (#health beside #medical beside #medicine). The deterministic
+    # family wins whenever the words match one; the model's tag only
+    # names what no family covers.
+    fallback = category_from_words(f"{hint} {str(text or '')[:400]}")
+    if fallback:
+        out.append(fallback)
+        return out
+    for t in [cat] + tags:
+        t = t.replace(" ", "-")
+        if re.fullmatch(r"#[a-z][\w-]{1,30}", t) and t not in _GENERIC_TAGS:
+            out.append(t)
+            break
     return out
 
 
 _CATEGORY_WORDS = (
     ("#receipt", ("cash memo", "receipt", "invoice", "bill", "payment", "paid")),
-    ("#medical", ("prescription", "vaccination", "vaccine", "clinic", "hospital", "dose")),
+    ("#medical", ("prescription", "vaccination", "vaccine", "clinic", "hospital",
+                  "dose", "medicine", "medication", "lozenge", "syrup", "ointment",
+                  "tablet", "throat relief", "pain relief")),
     ("#ticket", ("ticket", "boarding", "pnr", "seat")),
     ("#card", ("visiting card", "business card", "id card", "aadhaar", "pan card")),
-    ("#supplement", ("supplement", "capsule", "tablet", "omega", "vitamin")),
+    ("#supplement", ("supplement", "capsule", "omega", "vitamin")),
     ("#contract", ("agreement", "contract", "terms")),
 )
 
