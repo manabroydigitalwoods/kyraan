@@ -103,6 +103,25 @@ def subjects_from_name(title: str) -> list:
     return sorted(out)
 
 
+def caption_people(caption: str) -> list:
+    """Subjects from a PHOTO-MOMENT caption (2026-09-02, live: "me and
+    kiaan" linked nobody by caption). Unlike document titles — where a
+    plain mention must not tag ("Ruma Stores" is a shop) — a moment
+    caption names who is IN the picture, so bare registry names and
+    aliases count as whole words. Bounded by the registry: nothing
+    outside name_map can match. The owner is intentionally absent,
+    matching valid_subjects' rule — his moments are his by default."""
+    import re
+    low = str(caption or "").lower()
+    out = []
+    for name, pid in _name_map().items():
+        if pid == "owner" or pid in out:
+            continue
+        if re.search(rf"\b{re.escape(name)}\b", low):
+            out.append(pid)
+    return sorted(out)
+
+
 FILES_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
 
 

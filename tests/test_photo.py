@@ -303,3 +303,16 @@ async def test_enrollment_photo_is_not_a_memory(monkeypatch):
     await photo.answer(9, "data:image/jpeg;base64,QUJD",
                        "remember this face as Suman")
     assert called == []   # biometric intake, not a memory
+
+
+def test_moment_captions_link_bare_names_and_self_words(monkeypatch):
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "_name_map",
+                        lambda: {"kiaan": "kiaan", "ruma": "ruma",
+                                 "maan": "owner", "owner": "owner"})
+    assert documents.caption_people("me and kiaan") == ["kiaan"]
+    assert documents.caption_people("with maan and kiaan") == ["kiaan"]  # owner excluded by rule
+    assert documents.caption_people("Ruma at the market") == ["ruma"]
+    assert documents.caption_people("sunset") == []
+    # document TITLES keep the strict rule — a shop is not a person
+    assert documents.subjects_from_name("Ruma Stores receipt") == []

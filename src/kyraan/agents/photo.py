@@ -249,7 +249,7 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             # and it poisoned a test-DB run's resolver via the TTL
             # cache, 2026-08-31).
             subjects = (list(recognized or [])
-                        + (_docs2.subjects_from_name(caption)
+                        + (_docs2.caption_people(caption)
                            if caption.strip() else []))
             moment_id = _docs2.ingest(
                 chat_id, "moment",
