@@ -1245,3 +1245,50 @@ def test_a_lan_bound_panel_answers_the_phone_and_still_refuses_rebinding(monkeyp
         assert bad.status == 421
     finally:
         httpd.shutdown(); httpd.server_close(); thread.join(timeout=5)
+
+
+def test_documents_join_the_synapse_mesh_by_their_chunk_embeddings(monkeypatch, tmp_path,
+                                                                    seeded_logs):
+    """Owner, 2026-09-03: "some documents are not linked yet, they might
+    have connections". Five of 21 live documents had nothing but their
+    wire to the core, although every chunk carries the same embedding a
+    fact does. A document's vector is the mean of its chunks; two near
+    documents earn a synapse, an orthogonal one earns none."""
+    import datetime as _dt
+    from kyraan.store import pg
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+    monkeypatch.setattr(queries, "_vault_name", lambda: "")
+    t0 = _dt.datetime(2026, 9, 3, 0, 0, tzinfo=_dt.timezone.utc)
+    mk = lambda i, cap: (f"doc{i}", "photo", cap, f"{i}.jpg", [], t0, 1, "", [], None, False)
+    docs = [mk(1, "vaccination card"), mk(2, "vaccination record"), mk(3, "cash memo")]
+    axis = lambda k: [1.0 if d == k else 0.0 for d in range(8)]
+    near = [0.9, 0.42, 0, 0, 0, 0, 0, 0]
+    chunks = [("doc1", axis(0)), ("doc1", near), ("doc2", near), ("doc3", axis(5))]
+
+    class _Cur:
+        def __init__(self): self.q = ""
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=()): self.q = sql
+        def fetchall(self):
+            # The documents query carries a FROM document_chunk subquery
+            # (the chunk count), so the document match must come first.
+            if "FROM document d" in self.q: return docs
+            if "FROM document_chunk" in self.q: return chunks
+            return []
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    monkeypatch.setattr(pg, "connection", lambda: _Conn())
+    graph = queries.brain_graph(fresh=True)
+    doc_synapses = {tuple(sorted((e["a"], e["b"]))) for e in graph["edges"]
+                    if e["kind"] == "synapse" and (e["a"].startswith("d:") or e["b"].startswith("d:"))}
+    assert ("d:doc1", "d:doc2") in doc_synapses
+    assert not any("d:doc3" in pair for pair in doc_synapses)
+    # the mesh never invents an endpoint
+    ids = {n["id"] for n in graph["nodes"]}
+    assert not [e for e in graph["edges"] if e["a"] not in ids or e["b"] not in ids]

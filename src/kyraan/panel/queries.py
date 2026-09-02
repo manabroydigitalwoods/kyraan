@@ -27,7 +27,7 @@ from kyraan.control_plane import logging_setup
 # predated `components`). Bump this whenever a response SHAPE changes,
 # and bump EXPECTED_API in app.js with it; the page then says so out loud
 # instead of quietly dropping a panel.
-API_VERSION = 11
+API_VERSION = 12
 
 # A turn is "overdue" for the trigger board on the same slack the
 # scheduler itself uses, so the panel and the bot never disagree about
@@ -1015,7 +1015,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # templates. All three carry embeddings, so they belong on the same
     # mesh rather than in a list somewhere else.
     from kyraan.panel import demo as _demo
-    episodes, documents, faces = [], [], []
+    episodes, documents, faces, chunk_rows = [], [], [], []
     vault = _vault_name() if not _demo.enabled() else ""
     if not _demo.enabled():
         try:
@@ -1039,6 +1039,11 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                 cur.execute("SELECT slug, name, created_at FROM face_template "
                             "ORDER BY slug")
                 faces = cur.fetchall()
+                # Every chunk carries the same 384-d embedding the facts
+                # do, so a document can earn synapses by the same rule.
+                cur.execute("SELECT document_id, embedding FROM document_chunk "
+                            "WHERE embedding IS NOT NULL")
+                chunk_rows = cur.fetchall()
         except Exception:
             pass
 
@@ -1176,6 +1181,48 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                       "label": tag, "group": "tag", "notes": len(owners)})
         for owner in owners:
             edges.append({"a": owner, "b": tag_id, "kind": "tagged", "weight": 0.5})
+
+    # Documents and notes join the synapse mesh (owner 2026-09-03: "some
+    # documents are not linked yet, they might have connections" — five
+    # of 21 had nothing but their wire to the core). A document's vector
+    # is the mean of its chunks' unit vectors; it is then meshed with the
+    # facts, the episodes and the other documents under the SAME top-k /
+    # floor rule as a fact, and only the edges that touch a document are
+    # kept — the fact-fact and episode-episode meshes are already drawn.
+    # So a vaccination card meets the fact about the vaccination and the
+    # conversation it was sent in, by evidence in the store, not by name.
+    doc_ids = [n["id"] for n in nodes if n["type"] in ("document", "note")]
+    if doc_ids and chunk_rows:
+        import numpy as np
+        by_doc: dict = defaultdict(list)
+        for doc_id, embedding in chunk_rows:
+            vec = _as_vector(embedding)
+            if vec:
+                by_doc[f"d:{doc_id}"].append(vec)
+        doc_vectors = {}
+        for doc_id, vecs in by_doc.items():
+            if doc_id not in doc_ids:
+                continue
+            dims = Counter(len(v) for v in vecs).most_common(1)[0][0]
+            matrix = np.asarray([v for v in vecs if len(v) == dims], dtype=float)
+            norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0
+            doc_vectors[doc_id] = (matrix / norms).mean(axis=0).tolist()
+        if doc_vectors:
+            dims = Counter(len(v) for v in doc_vectors.values()).most_common(1)[0][0]
+            mesh_ids = [i for i, v in doc_vectors.items() if len(v) == dims]
+            mesh_vectors = [doc_vectors[i] for i in mesh_ids]
+            for prefix, ids_, vecs_ in (("m:", fact_ids, vectors),
+                                        ("e:", episode_ids, episode_vectors)):
+                for id_, vec in zip(ids_, vecs_):
+                    if vec and len(vec) == dims:
+                        mesh_ids.append(prefix + str(id_))
+                        mesh_vectors.append(vec)
+            doc_set = set(doc_vectors)
+            for edge in _synapses(mesh_ids, mesh_vectors, floor=synapse_floor):
+                if edge["a"] in doc_set or edge["b"] in doc_set:
+                    edges.append({"a": edge["a"], "b": edge["b"],
+                                  "kind": "synapse", "weight": edge["weight"]})
 
     seen_faces: dict = {}
     for (slug, name, created) in faces:

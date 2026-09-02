@@ -9,7 +9,7 @@
    files from disk but loads its Python once, so an edited-then-not-
    restarted panel would otherwise render new consoles against old JSON
    and simply drop whatever is missing. Must match queries.API_VERSION. */
-const EXPECTED_API = 11;
+const EXPECTED_API = 12;
 
 const $ = (id) => document.getElementById(id);
 
@@ -1156,8 +1156,11 @@ async function loadCost() {
    a VOLUME: with every anchor on one plane the orbit only ever showed a
    sheet turning edge-on, which is a flat brain with extra steps. */
 const LOBES = {
+  // The core is Kyraan itself, pinned at the origin (simulate). People
+  // sit just off it: the owner is who it talks with, not what it is.
+  core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
   memory:   { anchor: [-1.05, -0.30, -0.55], label: "facts" },
-  person:   { anchor: [0.0, 0.0, 0.0], label: "people" },
+  person:   { anchor: [0.0, 0.32, 0.12], label: "people" },
   episode:  { anchor: [-0.60, 0.95, 0.65], label: "recall" },
   face:     { anchor: [0.30, 0.55, -0.45], label: "faces" },
   document: { anchor: [0.85, 0.85, 0.35], label: "documents" },
@@ -1186,12 +1189,19 @@ const EDGE_STYLE = {
   is:          { alpha: 0.65, width: 1.3, rest: 80,  key: "--ok" },
   tagged:      { alpha: 0.35, width: 0.9, rest: 90,  key: "--dim" },
   maybe:       { alpha: 0.5,  width: 1.1, rest: 110, key: "--warn", dash: true },
+  // The core's wiring (server: k:kyraan). ACTS through a skill, FIRES a
+  // scheduled thing, RECEIVED a file or note, TALKS with the owner.
+  acts:        { alpha: 0.22, width: 0.9, rest: 150, key: "--accent" },
+  fires:       { alpha: 0.3,  width: 1.0, rest: 170, key: "--warn" },
+  received:    { alpha: 0.10, width: 0.7, rest: 230, key: "--dim" },
+  talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
 };
+const CORE = "k:kyraan";
 
 const brain = {
   nodes: [], edges: [], byId: new Map(),
   colour: "lobe",
-  showType: { memory: true, person: true, episode: true, face: true,
+  showType: { core: true, memory: true, person: true, episode: true, face: true,
               document: true, task: true, skill: true, contact: true,
               note: true, tag: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
@@ -1546,7 +1556,8 @@ function brainActivate(event) {
   if (kind === "model_call") {
     // Thinking reads its facts about you: a few pulses out along the
     // person's own subject wires into the fact lobe. Not into everything.
-    if (who) fireNode(who.id, { kinds: ["subject", "relation"], limit: 6, bounce: true });
+    if (who) { callWire(who.id, CORE); fireNode(who.id, { kinds: ["subject", "relation"], limit: 6, bounce: true }); }
+    fireNode(CORE);
     lightLobe("memory");
     logLive("think", `thinking · ${event.model || event.provider || "model"}`,
       `${event.input_tokens ?? "?"} tokens in · ${event.latency_ms ?? "?"}ms`);
@@ -1554,6 +1565,7 @@ function brainActivate(event) {
     // Reaching into recall: as many wires as episodes came back (a couple
     // even when none did — it looked), along the spoke wires only.
     lightLobe("episode");
+    fireNode(CORE);
     const n = Number(event.injected) || 0;
     if (who) fireNode(who.id, { kinds: ["spoke"], limit: Math.max(2, Math.min(6, n)), bounce: true });
     logLive("got", `recall → ${n} episodes`,
@@ -1562,7 +1574,8 @@ function brainActivate(event) {
     // The ask: one wire out from the person to the skill, and the skill
     // fires. The model's own WANT/HAVE/NEED line is the reason.
     const skill = "s:" + event.tool;
-    if (who) callWire(who.id, skill);
+    callWire(CORE, skill);
+    fireNode(CORE);
     fireNode(skill);
     logLive("try", `${event.tool}`, String(event.consider || "").slice(0, 140));
   } else if (kind === "tool_call" && event.tool) {
@@ -1571,7 +1584,7 @@ function brainActivate(event) {
     // ask then, but not twice when the loop already did.
     const recent = brain.callWires.some((w) => w.to === skill
       && performance.now() - w.born < 1500);
-    if (who && !recent) callWire(who.id, skill);
+    if (!recent) { callWire(CORE, skill); fireNode(CORE); }
     // The skill and, lightly, the two or three it habitually fires with.
     fireNode(skill, { kinds: ["coactivation"], limit: 3, strength: 0.7 });
     if (event.tool.startsWith("memory.")) lightLobe("memory");
@@ -1583,16 +1596,20 @@ function brainActivate(event) {
     // The answer: one wire back from the skill to the person.
     const skill = "s:" + event.tool;
     fireNode(skill);
-    if (who) { callWire(skill, who.id); brain.fired.set(who.id, performance.now()); }
+    callWire(skill, CORE);
+    fireNode(CORE);
     logLive("got", event.ok
       ? `${event.tool} → ok · ${event.duration_ms ?? "?"}ms`
       : `${event.tool} → failed`,
       event.ok ? "" : String(event.error || "").slice(0, 140));
   } else if (kind === "agent_reply" || kind === "turn_health") {
+    if (who && kind === "agent_reply") { callWire(CORE, who.id); fireNode(CORE); }
     if (who) brain.fired.set(who.id, performance.now());
     if (kind === "agent_reply") logLive("reply", "replied",
       `${event.steps ?? "?"} steps · ${event.tier || ""}`.trim());
   } else if (event.reminder_id) {
+    callWire(CORE, "t:reminder:" + event.reminder_id);
+    fireNode(CORE);
     fireNode("t:reminder:" + event.reminder_id, { kinds: ["owns", "managed_by"], limit: 2 });
     logLive("got", "reminder fired");
   }
@@ -1675,6 +1692,9 @@ function buildPalette() {
   const keys = [...new Set(brain.nodes.map(groupKey))].sort();
   const variants = tubeVariants(keys.length);
   brain.palette = new Map(keys.map((key, i) => [key, variants[i]]));
+  // The core is the tube's own colour whatever the colour mode says.
+  const base = hslFromAccent();
+  brain.palette.set("core", { h: base.h, s: Math.round(base.s * 100), l: 62 });
 }
 
 function nodeColour(node, alpha) {
@@ -1687,6 +1707,7 @@ function nodeColour(node, alpha) {
 }
 
 function nodeRadius(node) {
+  if (node.type === "core") return 12;
   if (node.type === "person") return 7.5;
   if (node.type === "task") return 6.5;
   // An episode is one exchange — small and numerous by nature.
@@ -1772,6 +1793,11 @@ function simulate() {
   for (const node of nodes) lobeSize[node.type] = (lobeSize[node.type] || 0) + 1;
 
   for (const node of nodes) {
+    // The core does not drift: everything else arranges itself around it.
+    if (node.type === "core") {
+      node.x = 0; node.y = 0; node.z = 0; node.vx = 0; node.vy = 0; node.vz = 0;
+      continue;
+    }
     const anchor = (LOBES[node.type] || LOBES.memory).anchor;
     const pull = ANCHOR * (1 + 0.55 * Math.log10(lobeSize[node.type] || 1));
     node.vx += (anchor[0] - node.x) * pull;
@@ -2064,6 +2090,16 @@ function drawGraph(canvas, view, opts) {
       ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     }
     ctx.fill();
+    if (node.type === "core") {
+      // The core: a white-hot centre inside two rings — the one neuron
+      // that is the system rather than something it holds.
+      ctx.fillStyle = `rgba(255, 255, 255, ${0.55 * focusAlpha(node)})`;
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius * 0.38, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = nodeColour(node, 0.7); ctx.lineWidth = 1.1 * ratio;
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius + 5 * ratio, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = nodeColour(node, 0.35); ctx.lineWidth = 0.8 * ratio;
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius + 11 * ratio, 0, Math.PI * 2); ctx.stroke();
+    }
 
     // Firing: an expanding ring that fades, plus a brighter core. Drawn
     // after the soma so the pulse reads as coming OUT of the neuron.
@@ -2120,7 +2156,13 @@ function drawGraph(canvas, view, opts) {
       || (node.type === "skill" && (node.uses || 0) > 200)
       || selected || (brain.query && brain.matches.has(node.id))
       || (brain.focusMix > 0.5 && brain.focusSet.has(node.id));
-    if (opts.labels !== false && named) {
+    if (node.type === "core" && opts.labels !== false) {
+      ctx.font = `${10.5 * ratio}px ui-monospace, monospace`;
+      ctx.fillStyle = nodeColour(node, 0.95);
+      ctx.textAlign = "center";
+      ctx.fillText("K Y R A A N", p.x, p.y + radius + 24 * ratio);
+      ctx.textAlign = "start";
+    } else if (opts.labels !== false && named) {
       ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim;
       ctx.fillText(node.label.slice(0, 26), p.x + radius + 4 * ratio, p.y + 3 * ratio);
@@ -2427,6 +2469,13 @@ function renderSelection() {
     kvRow(list, "templates", String(node.templates));
     const linked = neighboursOf(node.id).some((n) => n.edge.kind === "recognises");
     kvRow(list, "person", linked ? "linked" : "no person record", !linked);
+  } else if (node.type === "core") {
+    const by = {};
+    for (const { edge } of neighboursOf(node.id)) by[edge.kind] = (by[edge.kind] || 0) + 1;
+    kvRow(list, "acts through", `${by.acts || 0} skills`);
+    kvRow(list, "talks with", `${by.talks || 0}`);
+    kvRow(list, "will fire", `${by.fires || 0} scheduled`);
+    kvRow(list, "received", `${by.received || 0} files and notes`);
   } else if (node.type === "task") {
     kvRow(list, "task", node.task_type);
     kvRow(list, "repeat", node.repeat || "once");
