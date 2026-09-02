@@ -595,6 +595,29 @@ control's state listener, so it read the previous state: hiding wrote
 nothing, restoring wrote "hidden" — one step late, for every control in
 that list. It defers a tick now.
 
+**Obsidian notes are in the brain, with a way back to the vault** (owner:
+"did we add Obsidian link in brain?"). The owner had wired the vault into
+memory in three commits — notes join the document index as `kind='note'`
+with the people they are about, their `#tags` and `relation:` lines, an
+event date and a vault-relative path; a person-note registers its
+person — and the brain showed none of it. Notes get their own lobe: a
+note is something the OWNER wrote, a different kind of memory from a
+photo Kyraan was sent. Edges are what the index stores: note → person
+(`about`), and note → tag (`tagged`), where a tag becomes a hub only when
+it joins two or more notes — one note's private tag is a Selection detail,
+not a neuron. Note-to-note wikilinks are not stored by the index, so none
+are drawn. A superseded or deleted note is kept, dimmed, like a
+superseded fact.
+
+Every note carries `obsidian://open?vault=<folder>&file=<path>` built
+server-side and tested, and the Selection panel offers it as "in
+Obsidian ↗" — the only place it appears. Facts get no such link: the
+memory tree is not inside the vault (`memory tree inside vault: False`
+when measured), and a link that opens nothing is worse than a path.
+`note_indexed`, `vault_synced` and `person_registered_from_note`
+merge-refresh the graph like any other store change. Today: two indexed
+notes, both superseded, one with entities — the vault sync has run once.
+
 **Contacts, wired by evidence** (owner: "we have contacts, can we connect
 them with the brain?"). 395 entries in the book — more than the brain
 held in total — and measured first: 7 resolve to a registry person, none

@@ -815,3 +815,6 @@ footer::before {
 .tc-cell b { font-weight: normal; color: var(--accent); font-size: 13px; font-variant-numeric: tabular-nums; }
 .tc-cell span { color: var(--dim); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
 .tc-cell.warn b { color: var(--bad); }
+
+.obsidian-link { color: var(--accent); text-decoration: none; border-bottom: 1px dotted var(--accent); }
+.obsidian-link:hover { text-shadow: 0 0 7px var(--glow); }

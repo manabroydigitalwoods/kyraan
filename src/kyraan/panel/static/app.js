@@ -501,7 +501,7 @@ const STORE_CHANGE_KINDS = new Set([
   "memory_short_term_expired", "episodes_ingested", "episodes_suppressed",
   "triples_extracted", "document_ingested", "document_renamed",
   "face_enrolled", "person_enrolled", "person_episodes_deleted",
-  "contacts_synced",
+  "contacts_synced", "note_indexed", "vault_synced", "person_registered_from_note",
 ]);
 const REFRESH_SETTLE_MS = 2500;      // let the write land; coalesce a burst
 let refreshTimer = null;
@@ -1159,6 +1159,8 @@ const LOBES = {
   document: { anchor: [0.85, 0.85, 0.35], label: "documents" },
   task:     { anchor: [0.45, -0.90, -0.60], label: "work" },
   contact:  { anchor: [-0.40, -0.70, 0.45], label: "contacts" },
+  note:     { anchor: [0.55, 0.35, -0.55], label: "notes" },
+  tag:      { anchor: [0.75, 0.10, -0.70], label: "tags" },
   skill:    { anchor: [1.10, 0.05, 0.30], label: "skills" },
 };
 
@@ -1178,6 +1180,7 @@ const EDGE_STYLE = {
   // A contact IS a person (exact name) or MAYBE is (one alias token):
   // the second is drawn dashed, because it is a candidate, not a claim.
   is:          { alpha: 0.65, width: 1.3, rest: 80,  key: "--ok" },
+  tagged:      { alpha: 0.35, width: 0.9, rest: 90,  key: "--dim" },
   maybe:       { alpha: 0.5,  width: 1.1, rest: 110, key: "--warn", dash: true },
 };
 
@@ -1185,7 +1188,8 @@ const brain = {
   nodes: [], edges: [], byId: new Map(),
   colour: "lobe",
   showType: { memory: true, person: true, episode: true, face: true,
-              document: true, task: true, skill: true, contact: true },
+              document: true, task: true, skill: true, contact: true,
+              note: true, tag: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
   pan: null, orbit: null, nodeDrag: null, band: null,
@@ -1642,6 +1646,8 @@ function nodeRadius(node) {
   if (node.type === "document") return 4 + Math.min(4, (node.chunks || 1) * 0.6);
   if (node.type === "face") return 5.5 + (node.templates || 1) * 0.7;
   if (node.type === "contact") return 4.2;
+  if (node.type === "note") return 4.8 + Math.min(3, (node.chunks || 1) * 0.5);
+  if (node.type === "tag") return 3.6 + Math.min(4, (node.notes || 2) * 0.6);
   if (node.type === "skill") {
     // Log scale: home.get_state ran 1236 times and calendar.list_events 69.
     // Linear would make one node the size of the lobe.
@@ -1989,7 +1995,7 @@ function drawGraph(canvas, view, opts) {
 
     ctx.fillStyle = nodeColour(node, node.active === false ? 0.55 : 0.98);
     ctx.beginPath();
-    if (node.type === "task" || node.type === "document") {
+    if (node.type === "task" || node.type === "document" || node.type === "note") {
       // Square things are ARTEFACTS — a queued job, a stored file. Shape
       // carries type even when colour is carrying group.
       ctx.rect(p.x - radius, p.y - radius, radius * 2, radius * 2);
@@ -2333,6 +2339,27 @@ function renderSelection() {
     kvRow(list, "kind", node.doc_kind);
     kvRow(list, "chunks", String(node.chunks));
     kvRow(list, "file", node.filename || "—");
+  } else if (node.type === "note") {
+    kvRow(list, "path", node.path || "—");
+    kvRow(list, "tags", (node.tags || []).join(" ") || "—");
+    kvRow(list, "relations", (node.relations || []).join(" · ") || "—");
+    kvRow(list, "event", node.event_date || "—");
+    kvRow(list, "chunks", String(node.chunks));
+    kvRow(list, "state", node.active === false ? "superseded in vault" : "indexed",
+          node.active === false);
+    if (node.obsidian_url) {
+      list.appendChild(el("dt", null, "open"));
+      const dd = el("dd");
+      const a = el("a", "obsidian-link", "in Obsidian \u2197");
+      a.href = node.obsidian_url;          // a URL from the server, never markup
+      a.title = node.obsidian_url;
+      dd.appendChild(a);
+      list.appendChild(dd);
+    } else {
+      kvRow(list, "open", "no vault configured", true);
+    }
+  } else if (node.type === "tag") {
+    kvRow(list, "notes", String(node.notes));
   } else if (node.type === "contact") {
     kvRow(list, "match", node.match === "is" ? "exact name" : "alias token — confirm",
           node.match !== "is");
@@ -2433,7 +2460,8 @@ function renderMemories() {
   if (!body) return;
   clear(body);
   const REMEMBERED = { memory: "fact", episode: "recall",
-                       document: "doc", face: "face", contact: "contact" };
+                       document: "doc", face: "face", contact: "contact",
+                       note: "note" };
   let facts = brain.nodes.filter((n) => REMEMBERED[n.type]
                                      && brain.showType[n.type]);
   if (brain.query) facts = facts.filter((n) => brain.matches.has(n.id));
@@ -2922,6 +2950,7 @@ function wireMemory() {
   for (const [id, type] of [["show-memory", "memory"], ["show-person", "person"],
                             ["show-episode", "episode"], ["show-document", "document"],
                             ["show-face", "face"], ["show-contact", "contact"],
+                            ["show-note", "note"], ["show-tag", "tag"],
                             ["show-task", "task"], ["show-skill", "skill"]]) {
     const box = $(id);
     if (box) box.addEventListener("change", (e) => {
@@ -2936,7 +2965,7 @@ function wireMemory() {
     if (box) box.addEventListener("change", (e) => {
       if (kind === "structure") {
         for (const k of ["subject", "owns", "managed_by", "spoke", "about",
-                         "recognises", "recalls", "is", "maybe"]) {
+                         "recognises", "recalls", "is", "maybe", "tagged"]) {
           brain.showEdge[k] = e.target.checked;
         }
       } else {
@@ -3627,7 +3656,8 @@ for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
                   // Added with the recall/docs/faces lobes — but not here, so
                   // hiding any of the three changed the view and never the
                   // URL. Found by toggling one inside the new picker.
-                  "show-episode", "show-document", "show-face", "show-contact", "edge-synapse",
+                  "show-episode", "show-document", "show-face", "show-contact",
+                  "show-note", "show-tag", "edge-synapse",
                   "edge-relation", "edge-coactivation", "edge-structure",
                   "actions-days"]) {
   const node = $(id);

@@ -1094,3 +1094,71 @@ def test_contact_book_search_is_by_name_and_empty_query_returns_nothing(monkeypa
     assert queries.contacts_search("")["contacts"] == []
     hit = queries.contacts_search("Raunak")["contacts"]
     assert hit and hit[0]["name"] == "Raunak Roy"
+
+
+
+# ------------------------------------------------------------ obsidian notes
+
+
+def test_obsidian_deep_link_is_built_from_vault_and_vault_relative_path():
+    """obsidian://open?vault=<folder name>&file=<path without .md>. Only a
+    note in a configured vault can have one; no vault, no link — a link
+    that opens nothing is worse than a path."""
+    url = queries._obsidian_url("Second Brain", "Kyraan/people/Rakesh Chakraborty.md")
+    assert url == ("obsidian://open?vault=Second%20Brain"
+                   "&file=Kyraan/people/Rakesh%20Chakraborty")
+    assert queries._obsidian_url("", "Kyraan/x.md") == ""
+    assert queries._obsidian_url("Vault", "") == ""
+
+
+def test_a_tag_becomes_a_hub_only_when_it_joins_notes(monkeypatch, tmp_path, seeded_logs):
+    """Two notes sharing #friend is a grouping worth a neuron; one note's
+    private tag is a detail for its Selection panel, not a node."""
+    import datetime as _dt
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+    monkeypatch.setattr(queries, "_vault_name", lambda: "Vault")
+    # queries imports pg inside its functions, so there is no queries.pg to
+    # patch — patch the store module the way the other pg-down tests do.
+    from kyraan.store import pg
+
+    now = _dt.datetime.now(_dt.timezone.utc)
+    docs = [
+        ("n1", "note", "Rakesh", "", ["kiaan"], now, 3, "people/Rakesh.md",
+         ["#friend", "#bangalore", "relation:college friend"], None, False),
+        ("n2", "note", "Souvik", "", [], now, 1, "people/Souvik.md",
+         ["#friend"], None, True),                       # superseded in the vault
+        ("p1", "photo", "Cash memo", "", [], now, 1, "", [], None, False),
+    ]
+    class _Cur:
+        def __init__(self): self.q = ""
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=()): self.q = sql
+        def fetchall(self):
+            if "FROM document d" in self.q: return docs
+            if "FROM episode" in self.q or "FROM face_template" in self.q: return []
+            if "FROM contact" in self.q: return []
+            if "FROM fact" in self.q: return []
+            if "FROM triple" in self.q: return []
+            return []
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    monkeypatch.setattr(pg, "connection", lambda: _Conn())
+    graph = queries.brain_graph(fresh=True)
+    by = {n["id"]: n for n in graph["nodes"]}
+
+    assert by["d:n1"]["type"] == "note" and by["d:p1"]["type"] == "document"
+    assert by["d:n1"]["tags"] == ["#friend", "#bangalore"]
+    assert by["d:n1"]["relations"] == ["college friend"]
+    assert by["d:n1"]["obsidian_url"].startswith("obsidian://open?vault=Vault&file=people/Rakesh")
+    assert by["d:n2"]["active"] is False                # kept, dimmed: history
+    # #friend joins two notes -> a hub; #bangalore is one note's own -> no node.
+    assert "g:#friend" in by and "g:#bangalore" not in by
+    tagged = {(e["a"], e["b"]) for e in graph["edges"] if e["kind"] == "tagged"}
+    assert tagged == {("d:n1", "g:#friend"), ("d:n2", "g:#friend")}
+    assert graph["vault"] == "Vault"

@@ -12,6 +12,7 @@ Sources are the ones that already exist; the panel adds no instrumentation:
 - data/reminders.json, agent_tasks.json, goals.json via the trigger stores
 """
 import json
+from urllib.parse import quote
 import time
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
@@ -806,6 +807,28 @@ _graph_cache: dict = {}
 GRAPH_TTL_S = 30
 
 
+def _vault_name() -> str:
+    """The Obsidian vault's name is its folder's basename — that is what
+    obsidian://open?vault= wants. Empty when no vault is configured."""
+    try:
+        from kyraan.store import notes
+        root = notes.vault_root()
+    except Exception:
+        return ""
+    return root.name if root else ""
+
+
+def _obsidian_url(vault: str, source_path: str) -> str:
+    """obsidian://open?vault=<name>&file=<vault-relative path, no .md>.
+    Only a note in a configured vault can have one; facts live in the
+    memory tree, which is not inside the vault, so they get a path and
+    no link — saying so beats a link that opens nothing."""
+    if not vault or not source_path:
+        return ""
+    rel = source_path[:-3] if source_path.endswith(".md") else source_path
+    return f"obsidian://open?vault={quote(vault, safe='')}&file={quote(rel, safe='/')}"
+
+
 def _slug(value: str) -> str:
     import re as _re
     return _re.sub(r"[\s,]+", "_", str(value or "").strip().lower())
@@ -993,6 +1016,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # mesh rather than in a list somewhere else.
     from kyraan.panel import demo as _demo
     episodes, documents, faces = [], [], []
+    vault = _vault_name() if not _demo.enabled() else ""
     if not _demo.enabled():
         try:
             with pg.connection() as conn, conn.cursor() as cur:
@@ -1004,7 +1028,9 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                     "SELECT d.id, d.kind, d.caption, d.filename, "
                     "       d.subject_persons, d.created_at, "
                     "       (SELECT count(*) FROM document_chunk c "
-                    "        WHERE c.document_id = d.id) "
+                    "        WHERE c.document_id = d.id), "
+                    "       d.source_path, d.entities, d.event_date, "
+                    "       d.suppressed_by IS NOT NULL "
                     "FROM document d ORDER BY d.created_at DESC")
                 documents = cur.fetchall()
                 cur.execute("SELECT slug, name, created_at FROM face_template "
@@ -1059,20 +1085,60 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
         edges.append({"a": f"e:{edge['a']}", "b": f"e:{edge['b']}",
                       "kind": "synapse", "weight": edge["weight"]})
 
-    for (doc_id, kind, caption, filename, subjects, created, chunks) in documents:
+    # Obsidian notes ride in the document table as kind='note' (migration
+    # 018). They get their own lobe: a note is something the OWNER wrote,
+    # which is a different kind of memory from a photo Kyraan was sent.
+    # What the index stores for a note: the people it is about (registry
+    # ids, in subject_persons), its #tags and relation: lines (entities),
+    # an event date, and its vault-relative path — which is what makes an
+    # obsidian:// deep link possible. Note-to-note wikilinks are NOT
+    # stored, so none are drawn.
+    tag_owners: dict = defaultdict(list)
+    for (doc_id, kind, caption, filename, subjects, created, chunks,
+         source_path, entities, event_date, suppressed) in documents:
+        is_note = kind == "note"
         node_id = f"d:{doc_id}"
-        nodes.append({
-            "id": node_id, "type": "document", "lobe": "docs",
+        node = {
+            "id": node_id, "type": "note" if is_note else "document",
+            "lobe": "notes" if is_note else "docs",
             "label": caption or filename or str(doc_id)[:8],
             "group": kind or "file", "doc_kind": kind or "file",
             "chunks": chunks, "filename": filename or "",
             "created": created.isoformat() if created else "",
-        })
+        }
+        if is_note:
+            tags = [e for e in (entities or []) if str(e).startswith("#")]
+            node.update({
+                "path": source_path or "",
+                "tags": tags,
+                "relations": [e.split(":", 1)[1].strip() for e in (entities or [])
+                              if str(e).startswith("relation:")],
+                "event_date": event_date.isoformat() if event_date else "",
+                # Superseded or deleted in the vault: kept, dimmed — history,
+                # like a superseded fact.
+                "active": not suppressed,
+                "obsidian_url": _obsidian_url(vault, source_path),
+            })
+            for tag in tags:
+                tag_owners[tag].append(node_id)
+        nodes.append(node)
         for who in (subjects or []):
             target = _person_node(who)
             if target:
                 edges.append({"a": node_id, "b": target, "kind": "about",
                               "weight": 0.6})
+
+    # A tag becomes a node only when it joins notes: two or more sharing
+    # #friend is a grouping worth a hub; one note's private tag is a
+    # detail for its Selection panel, not a neuron.
+    for tag, owners in tag_owners.items():
+        if len(owners) < 2:
+            continue
+        tag_id = f"g:{tag}"
+        nodes.append({"id": tag_id, "type": "tag", "lobe": "notes",
+                      "label": tag, "group": "tag", "notes": len(owners)})
+        for owner in owners:
+            edges.append({"a": owner, "b": tag_id, "kind": "tagged", "weight": 0.5})
 
     seen_faces: dict = {}
     for (slug, name, created) in faces:
@@ -1189,6 +1255,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
         "variants": links.get("variants", []),
         "orphans": [n["id"] for n in nodes if n.get("orphan")],
         "contacts_total": contacts_total,
+        "vault": vault,
         "maybe_contacts": maybe_contacts,
         "dead_skills": [n["label"] for n in nodes if n.get("dead")],
         "synapse_floor": synapse_floor,
