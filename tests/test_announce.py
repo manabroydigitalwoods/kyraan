@@ -87,3 +87,18 @@ async def test_spoken_reminder_failure_never_fails_the_reminder(monkeypatch):
     telegram_bot._wire_scheduler(FakeJQ(), FakeBot())
     assert await captured["send"](1, "Reminder: Drink water") is True
     assert sent and spoken == ["Reminder: Drink water"]  # tried, failed, contained
+
+
+def test_fan_domain_is_switchable_like_switch(monkeypatch):
+    monkeypatch.setattr(ha, "_allowlists",
+                        lambda: ([], ["fan.air_purifier"]))
+    calls = []
+    monkeypatch.setattr(ha, "_api", lambda path, payload: calls.append(path))
+    monkeypatch.setattr(ha, "_get_state",
+                        lambda e: {"entity": e, "state": "on"})
+    out = ha._switch("fan.air_purifier", True)
+    assert calls == ["/api/services/fan/turn_on"]
+    assert out["converged"] is True
+    with pytest.raises(ha.ToolError, match="only switch/fan"):
+        monkeypatch.setattr(ha, "_allowlists", lambda: ([], ["light.x"]))
+        ha._switch("light.x", True)

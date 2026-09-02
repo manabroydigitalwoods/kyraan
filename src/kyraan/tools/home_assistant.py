@@ -79,9 +79,11 @@ def _switch(entity: str, turn_on: bool) -> dict:
     if entity not in writes:
         raise ToolError(f"entity {entity!r} is not write-allowlisted — Kyraan may not switch it")
     domain = entity.split(".")[0]
-    if domain != "switch":
-        raise ToolError(f"only switch entities are switchable; {entity!r} is a {domain}")
-    _api(f"/api/services/switch/turn_{'on' if turn_on else 'off'}", {"entity_id": entity})
+    if domain not in ("switch", "fan"):
+        # fan joined 2026-09-02 (the Philips purifier): HA's fan domain
+        # has the identical turn_on/turn_off service shape.
+        raise ToolError(f"only switch/fan entities are switchable; {entity!r} is a {domain}")
+    _api(f"/api/services/{domain}/turn_{'on' if turn_on else 'off'}", {"entity_id": entity})
     # Read back — report what the device actually did, never assume. HA
     # applies service calls asynchronously, so the immediate read returns
     # the PRE-switch state (seen live: confirmed ON, reply said OFF). Poll

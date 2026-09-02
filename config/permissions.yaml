@@ -249,8 +249,17 @@ tool_servers:
       - binary_sensor.ac_overloaded
       - sensor.bed_room_temp_temperature
       - sensor.bed_room_temp_humidity
+      # Philips air purifier (2026-09-02, local CoAP at 192.168.0.113)
+      - fan.air_purifier
+      - sensor.air_purifier_pm2_5
+      - sensor.air_purifier_indoor_allergen_index
+      - sensor.air_purifier_nanoprotect_filter
+      - sensor.air_purifier_pre_filter
+      - switch.air_purifier_child_lock
     write_entities:
       - switch.ac
+      - fan.air_purifier                  # purifier on/off (confirm-gated)
+      - switch.air_purifier_child_lock    # Kiaan-proofing (confirm-gated)
     # Alexa announcements (governance 2026-09-02): allowlisted speakers
     # for home.announce — the notify.alexa_media_<target> services.
     announce_targets:
