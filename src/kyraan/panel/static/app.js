@@ -619,7 +619,10 @@ const CORRECTION_KINDS = new Set([
   "web_search_budget", "model_call_error", "agent_all_tiers_failed",
 ]);
 const turnCard = { turnId: null, steps: [], totals: null, asked: "", replied: "",
-                   startedAt: 0, endedAt: 0, pinned: false, timer: null, host: null };
+                   startedAt: 0, endedAt: 0, pinned: false, timer: null, host: null,
+                   // Folded to one line on a phone until opened (owner,
+                   // 2026-09-03); the choice sticks for the session.
+                   folded: PHONE.matches };
 
 function cardHost() {
   return currentView === "memory" ? document.querySelector("#view-memory .starfield")
@@ -713,14 +716,32 @@ function renderTurnCard() {
   }
   if (card.parentElement !== host) host.appendChild(card);
   clear(card);
+  card.classList.toggle("folded", turnCard.folded);
 
   const head = el("div", "tc-head");
+  // The head is the fold's handle: a tap anywhere on it that is not a
+  // button or the id opens or closes the card.
+  head.addEventListener("click", (event) => {
+    if (event.target.closest("button, .tag")) return;
+    turnCard.folded = !turnCard.folded;
+    renderTurnCard();
+  });
   head.appendChild(el("span", "tc-title", turnCard.endedAt ? "turn" : "turn · live"));
   const idTag = el("span", "tag literal", turnCard.turnId.slice(0, 8));
   idTag.title = "open in forensics";
   idTag.style.cursor = "pointer";
   idTag.addEventListener("click", () => { showView("turns"); showTurn(turnCard.turnId); });
   head.appendChild(idTag);
+  // One line when folded: what was asked, then the latest step.
+  const last = turnCard.steps[turnCard.steps.length - 1];
+  const summary = el("span", "tc-summary",
+    [turnCard.asked ? "“" + turnCard.asked.slice(0, 40) + "”" : "",
+     last ? last.phase.toUpperCase() + " " + last.text : ""].filter(Boolean).join(" · "));
+  head.appendChild(summary);
+  const fold = el("button", "tc-btn tc-fold", turnCard.folded ? "▾" : "▴");
+  fold.title = turnCard.folded ? "open" : "fold to one line";
+  fold.addEventListener("click", () => { turnCard.folded = !turnCard.folded; renderTurnCard(); });
+  head.appendChild(fold);
   const pin = el("button", "tc-btn", turnCard.pinned ? "unpin" : "pin");
   pin.addEventListener("click", () => {
     turnCard.pinned = !turnCard.pinned; clearTimeout(turnCard.timer); renderTurnCard();

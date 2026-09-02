@@ -806,7 +806,18 @@ footer::before {
 .tc-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 .tc-title { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 10.5px;
             text-shadow: 0 0 7px var(--glow); }
-.tc-btn { margin-left: auto; font-size: 9.5px; padding: 0 7px; }
+.tc-btn { font-size: 9.5px; padding: 0 7px; }
+.tc-fold { margin-left: auto; }
+/* Folded: the head line and nothing else. The summary shows only then —
+   open, the card says it all below. */
+.tc-summary {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--text); font-size: 10.5px; display: none;
+}
+.turn-card.folded .tc-summary { display: block; }
+.turn-card.folded > :not(.tc-head) { display: none; }
+.turn-card.folded .tc-head { margin-bottom: 0; cursor: pointer; }
+.turn-card .tc-head { cursor: pointer; }
 .tc-btn + .tc-btn { margin-left: 0; }
 .tc-asked { color: var(--text); border-left: 2px solid var(--accent); padding-left: 8px;
             margin: 4px 0 8px; white-space: pre-wrap; }
