@@ -94,3 +94,26 @@ def test_active_cap_holds(isolated):
     for i in range(12):
         lessons.apply(f"Rule number {i} about thing {i}.", [])
     assert len(lessons.active_rules()) == lessons.MAX_ACTIVE
+
+
+def test_show_last_turn_reads_telemetry(tmp_path, monkeypatch):
+    import json
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import logging_setup
+    trace = tmp_path / "traces.jsonl"
+    events = tmp_path / "events.jsonl"
+    trace.write_text(json.dumps({
+        "kind": "turn_end", "chat_id": 7, "turn_id": "t1",
+        "termination": "replied", "total_ms": 4200,
+        "reply": "Two leads found."}) + "\n")
+    events.write_text("\n".join([
+        json.dumps({"kind": "model_call", "turn_id": "t1",
+                    "cost_usd": 0.0021}),
+        json.dumps({"kind": "agent_tool_call", "turn_id": "t1",
+                    "tool": "web.search"})]) + "\n")
+    monkeypatch.setattr(logging_setup, "TRACE_LOG", trace)
+    monkeypatch.setattr(logging_setup, "EVENT_LOG", events)
+    out = orchestrator._describe_last_turn(7)
+    assert "Ended: replied" in out
+    assert "$0.0021" in out and "web.search" in out and "4.2s" in out
+    assert "No completed turn" in orchestrator._describe_last_turn(999)

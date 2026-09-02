@@ -156,6 +156,55 @@ async def _review_memory(chat_id: int, text: str) -> str:
     return await _gated(chat_id, SkillCall("memory.review", {"text": text}), handler)
 
 
+def _describe_last_turn(chat_id: int) -> str:
+    """Owner phrase "show last turn": termination, tools, cost, timing
+    of this chat's previous turn — from telemetry, zero model calls."""
+    import json as _json
+
+    from kyraan.control_plane import logging_setup as _logs
+    last = None
+    try:
+        for line in _logs.TRACE_LOG.read_text().splitlines():
+            if '"turn_end"' in line:
+                try:
+                    e = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if e.get("chat_id") == chat_id:
+                    last = e
+    except OSError:
+        pass
+    if last is None:
+        return "No completed turn on record for this chat yet."
+    tid = last.get("turn_id")
+    tools, cost, calls = [], 0.0, 0
+    try:
+        for line in _logs.EVENT_LOG.read_text().splitlines():
+            if tid and tid in line:
+                try:
+                    ev = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if ev.get("kind") == "agent_tool_call":
+                    tools.append(ev.get("tool", "?"))
+                elif ev.get("kind") == "model_call":
+                    calls += 1
+                    cost += ev.get("cost_usd") or 0
+    except OSError:
+        pass
+    lines = ["🔍 Last turn:"]
+    lines.append(f"- Ended: {last.get('termination', 'unknown')}")
+    lines.append(f"- Model calls: {calls} — ${cost:.4f}")
+    if tools:
+        lines.append("- Tools: " + " → ".join(tools[:8]))
+    if last.get("total_ms"):
+        lines.append(f"- Took: {last['total_ms'] / 1000:.1f}s")
+    reply_preview = str(last.get("reply") or "")[:120]
+    if reply_preview:
+        lines.append(f'- Replied: "{reply_preview}…"')
+    return "\n".join(lines)
+
+
 def _cloud_tier_in_use() -> bool:
     """A tier is local only if its ENDPOINT is local — judged by
     router.provider_is_local, the same resolution routing itself uses
@@ -744,6 +793,16 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        if (_re.match(r"^\s*(?:show|explain)\s+(?:the\s+)?last\s+turn\s*[?!.]?\s*$"
+                      r"|^\s*why\s+did\s+(?:that|the last)\s+turn\s+"
+                      r"(?:end|fail|do that)\s*[?!.]?\s*$",
+                      raw_text, _re.IGNORECASE)
+                and kernel.viewer_person() == "owner"):
+            # Turn introspection (2026-09-01): the drill-down that used
+            # to need log grepping, deterministic and owner-only. Reads
+            # the PREVIOUS turn's trace + events; never a model call.
+            _skip_extraction.set(True)
+            return _describe_last_turn(chat_id)
         if (_re.match(r"^\s*list\s+learned\s+rules\s*[?!.]?\s*$",
                       raw_text, _re.IGNORECASE)
                 and kernel.viewer_person() == "owner"):

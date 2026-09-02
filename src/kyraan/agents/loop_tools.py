@@ -600,6 +600,16 @@ async def _usage_report(chat_id: int, args: dict, raw_text: str):
     from kyraan.model_router import usage_report
     # Robust coercion — the model was seen sending days="few days" after a
     # too-clever param description. Any unparseable value means the default.
+    if args.get("per_message"):
+        import asyncio as _aio
+        rows = await _aio.to_thread(usage_report.recent_turns, 8)
+        return {"per_message": [
+            {"time": r["ts"], "message": r["text"], "cost_usd": r["usd"],
+             "model_calls": r["calls"], "input_tokens": r["in"],
+             "cached": r["cached"], "output_tokens": r["out"]}
+            for r in rows],
+            "note": "one row per recent message/turn — cached tokens "
+                    "bill at the reduced rate"}
     raw_days = args.get("days", 7)
     try:
         days = int(float(raw_days))
@@ -1740,8 +1750,8 @@ TOOLS = {
         "run": _reminders_cancel,
     },
     "usage.report": {
-        "params": '{"days": 7}',
-        "about": "Kyraan's own AI usage: per-day calls, tokens, cost USD, budget picture. For 'how much did we spend', 'token usage'. days is a NUMBER (vague ranges: 7) — call directly, never ask which.",
+        "params": '{"days": 7} — or {"per_message": true} for the last few MESSAGES\' individual cost/tokens ("what did that message cost", "spend per message")',
+        "about": "Kyraan's own AI usage: per-day calls, tokens, cost USD, budget picture. For 'how much did we spend', 'token usage'. days is a NUMBER (vague ranges: 7) — call directly, never ask which. per_message: true answers cost-of-each-message questions with a per-turn table.",
         "run": _usage_report,
     },
     "system.status": {

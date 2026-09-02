@@ -82,3 +82,47 @@ def usage_summary(days: int = 7) -> dict:
             "alert_threshold_pct": router.budget_alert_threshold_pct(),
         },
     }
+
+
+def recent_turns(n: int = 8) -> list:
+    """Per-MESSAGE spend (owner asked twice, 2026-09-01): the last n
+    turns' model calls grouped by turn_id, joined with the turn's user
+    text from the trace log — cost, tokens, calls, cache share."""
+    import collections
+    turns: "collections.OrderedDict" = collections.OrderedDict()
+    for path in _event_files():
+        for line in path.read_text().splitlines():
+            if '"model_call"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            tid = e.get("turn_id")
+            if not tid:
+                continue
+            t = turns.setdefault(tid, {"ts": e["ts"][11:16], "calls": 0,
+                                       "in": 0, "cached": 0, "out": 0,
+                                       "usd": 0.0})
+            t["calls"] += 1
+            t["in"] += e.get("input_tokens") or 0
+            t["cached"] += e.get("cached_tokens") or 0
+            t["out"] += e.get("output_tokens") or 0
+            t["usd"] += e.get("cost_usd") or 0
+    texts = {}
+    trace = logging_setup.TRACE_LOG
+    if trace.exists():
+        for line in trace.read_text().splitlines():
+            if '"turn_start"' not in line:
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if e.get("turn_id"):
+                texts[e["turn_id"]] = str(e.get("user_text") or "")[:60]
+    out = []
+    for tid, t in list(turns.items())[-n:]:
+        out.append({**t, "usd": round(t["usd"], 4),
+                    "text": texts.get(tid, "(proactive/scheduled)")})
+    return out
