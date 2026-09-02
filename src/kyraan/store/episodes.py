@@ -392,6 +392,8 @@ def relevant_snippets(chat_id: int, message: str) -> list:
 def records_for_day(day: str, lines: list) -> list:
     """Filter parsed chat.jsonl records to one local-calendar day."""
     tz = local_now().tzinfo
+    from kyraan.agents.secrets import apply_redactions
+    lines = apply_redactions(lines)          # a secret never becomes an episode
     keep = []
     for entry in lines:
         try:

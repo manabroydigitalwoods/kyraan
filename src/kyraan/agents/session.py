@@ -230,11 +230,14 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
     except OSError as exc:
         log_event("history_seed_failed", error=str(exc))
         return
+    parsed = []
     for line in lines[-2000:]:
         try:
-            entry = json.loads(line)
+            parsed.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+    from kyraan.agents.secrets import apply_redactions
+    for entry in apply_redactions(parsed):   # secrets stay redacted across restarts
         role = entry.get("role")
         if role == "proactive":
             role = "assistant"

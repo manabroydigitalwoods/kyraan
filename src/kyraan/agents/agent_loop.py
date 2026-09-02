@@ -556,20 +556,20 @@ def current_tier() -> str:
 
 
 async def run(chat_id: int, raw_text: str, tier: str = "frontier",
-              read_only: bool = False) -> str:
+              read_only: bool = False, secret: bool = False) -> str:
     """One agentic exchange on the given model tier. Returns the reply;
     raises AgentUnavailable to hand the message down the fallback chain
     (frontier loop -> cheap loop -> honest outage). One brain, two
     tiers: G-02's dual-system drift is closed by construction."""
     _tier_token = _current_tier.set(tier)
     try:
-        return await _run_inner(chat_id, raw_text, tier, read_only)
+        return await _run_inner(chat_id, raw_text, tier, read_only, secret)
     finally:
         _current_tier.reset(_tier_token)
 
 
 async def _run_inner(chat_id: int, raw_text: str, tier: str,
-                     read_only: bool) -> str:
+                     read_only: bool = False, secret: bool = False) -> str:
     from kyraan.agents import orchestrator  # late: avoids a module cycle
 
     from kyraan.control_plane import logging_setup as _logs
@@ -594,7 +594,10 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                    "not chatting. Only READ tools exist here — any action "
                    "needing a write must be suggested for the owner to do "
                    "live. Reply with the task's RESULT, concise, no greeting.")
-    if tier == "cheap":
+    if secret:
+        from kyraan.agents.secrets import SYSTEM_ADDENDUM
+        system += SYSTEM_ADDENDUM
+    elif tier == "cheap":
         # Degraded-mode self-awareness, carried over from the classifier
         # era's live lesson: the local backup model must keep replies
         # short and admit reduced quality instead of spiraling.

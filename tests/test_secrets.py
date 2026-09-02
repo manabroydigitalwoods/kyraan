@@ -1,0 +1,88 @@
+"""Secrets (owner 2026-09-03): a secret is handled end to end on this
+machine and leaves only a placeholder anywhere a cloud prompt could read."""
+import asyncio
+import json
+
+import pytest
+
+from kyraan.agents import secrets
+
+
+def test_secret_phrases_in_any_wording():
+    assert secrets.opens("ek secret baat hai or esko secret rakha hai ok?")
+    assert secrets.opens("keep this between us")
+    assert secrets.opens("this is confidential, don't tell anyone")
+    assert not secrets.opens("what is the secret ingredient of biryani") is False  # a word is enough to open
+    assert not secrets.opens("what did we discuss this morning")
+    assert secrets.retro("isko secret rakho")
+    assert secrets.retro("keep this secret")
+    assert not secrets.retro("ek secret baat hai")            # announcing, not retro
+    assert secrets.closes("bas itna hi") and secrets.closes("that's all") and not secrets.closes("bas itna hi aur ek baat")
+
+
+def test_window_opens_extends_and_closes(monkeypatch):
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    secrets.close(99)
+    assert not secrets.active(99)
+    secrets.touch(99)
+    assert secrets.active(99)
+    secrets.close(99)
+    assert not secrets.active(99)
+
+
+def test_redact_recent_and_log_readers_agree(monkeypatch, tmp_path):
+    from kyraan.agents import session
+    from kyraan.control_plane import logging_setup
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    log = tmp_path / "chat.jsonl"
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    monkeypatch.setattr(secrets, "log_chat",
+                        lambda chat_id, role, text, **f: log.open("a").write(
+                            json.dumps({"ts": "2026-09-03T00:00:00+00:00", "chat_id": chat_id, "role": role, "text": text, **f}) + "\n"))
+    rows = [("user", "how is the weather"), ("assistant", "sunny"),
+            ("user", "i have a girlfriend"), ("assistant", "ohh nice, secret rakhunga")]
+    session._history[55] = rows
+    with log.open("a") as fh:
+        for r, t in rows:
+            fh.write(json.dumps({"ts": "2026-09-02T20:00:00+00:00", "chat_id": 55, "role": r, "text": t}) + "\n")
+    assert secrets.redact_recent(55, entries=2) == 2
+    assert list(session._history[55])[2:] == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    assert list(session._history[55])[:2] == rows[:2]
+    # the log readers (restart seeding, episodes) see the same placeholders
+    parsed = [json.loads(l) for l in log.read_text().splitlines()]
+    cloud = [e.get("cloud_text") or e["text"] for e in secrets.apply_redactions(parsed) if e["role"] != "redact"]
+    assert cloud == ["how is the weather", "sunny", secrets.PLACEHOLDER, secrets.PLACEHOLDER]
+    session._history[55] = []
+    session.seed_history_from_log()
+    assert list(session._history[55])[2:] == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    # contains-mode redacts every earlier mention
+    session._history[55] = rows
+    assert secrets.redact_recent(55, contains="girlfriend") == 1
+    assert list(session._history[55])[2] == ("user", secrets.PLACEHOLDER)
+    session._history[55] = []
+
+
+def test_secret_turn_is_local_only_and_leaves_placeholders(monkeypatch):
+    from kyraan.agents import orchestrator, session, agent_loop
+    from kyraan.control_plane import kernel, logging_setup
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    seen = []
+    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False, secret=False):
+        seen.append((tier, secret)); return "ok, secret rakha"
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    logged = []
+    monkeypatch.setattr(orchestrator, "log_chat", lambda chat_id, role, text, **f: logged.append((role, text, f.get("cloud_text"))))
+    session._history[56] = []
+    secrets.close(56)
+    out = asyncio.run(orchestrator.handle_message(56, "ek secret baat hai, i have a girlfriend"))
+    assert out.startswith("ok, secret rakha")
+    assert seen == [("cheap", True)]                                # never the frontier
+    assert list(session._history[56]) == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    assert [(r, c) for r, _, c in logged] == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    assert secrets.active(56)                                        # the window stays open
+    asyncio.run(orchestrator.handle_message(56, "bas itna hi"))
+    assert seen[-1] == ("cheap", True) and not secrets.active(56)    # closed, still local
+    asyncio.run(orchestrator.handle_message(56, "what's the weather"))
+    assert seen[-1][0] == "frontier"                                 # back to normal
+    session._history[56] = []

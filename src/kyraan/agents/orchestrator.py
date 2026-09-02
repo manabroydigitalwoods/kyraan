@@ -5,6 +5,7 @@ architecture retired 2026-08-27 (P3.7b) after the cheap-tier loop
 passed the full HARD eval twice consecutively.
 """
 import contextvars
+import contextvars as _contextvars
 import json
 import re
 import time
@@ -463,6 +464,10 @@ def _photo_just_sent(chat_id: int, max_age_s: int = 20 * 60) -> bool:
     return cap is not None and (time.time() - cap["created"].timestamp()) <= max_age_s
 
 
+_secret_turn: _contextvars.ContextVar = _contextvars.ContextVar("secret_turn", default=False)
+_user_redaction: _contextvars.ContextVar = _contextvars.ContextVar("user_redaction", default=None)
+
+
 async def handle_message(chat_id: int, raw_text: str) -> str:
     from kyraan.control_plane.logging_setup import (
         log_trace, new_turn, start_anomaly_capture)
@@ -482,6 +487,27 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     redaction_token = _history_redaction.set(None)
     skip_token = _skip_extraction.set(False)
     degraded_token = _degraded_turn.set(False)
+    secret_token = _secret_turn.set(False)
+    user_red_token = _user_redaction.set(None)
+    from kyraan.agents import secrets as _secrets
+    if kernel.viewer_person() == "owner" and (
+            _secrets.opens(raw_text) or _secrets.active(chat_id)):
+        # SECRET WINDOW (owner 2026-09-03: "isko secret rakho" — see
+        # agents/secrets.py). This turn never reaches the cloud tier,
+        # never enters memory, and leaves only a placeholder behind in
+        # anything a later cloud prompt could read.
+        if _secrets.retro(raw_text):
+            _secrets.redact_recent(chat_id)
+        _secret_turn.set(True)
+        _skip_extraction.set(True)
+        _user_redaction.set(_secrets.PLACEHOLDER)
+        _history_redaction.set(_secrets.PLACEHOLDER)
+        if _secrets.closes(raw_text):
+            _secrets.close(chat_id)
+        else:
+            _secrets.touch(chat_id)
+        log_event("secret_turn", chat_id=chat_id,
+                  retro=_secrets.retro(raw_text), closed=_secrets.closes(raw_text))
     reply = await _dispatch(chat_id, raw_text)
     if kernel.viewer_person() != "owner":
         # P3.5c first-month rule: extraction from a non-owner's messages
@@ -556,7 +582,8 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
                  "dropped it — nothing was done. Ask again if you still want it.)"
                  f"\n\n{reply}")
     redacted = _history_redaction.get()
-    for entry in (("user", raw_text), ("assistant", redacted or reply)):
+    user_red = _user_redaction.get()
+    for entry in (("user", user_red or raw_text), ("assistant", redacted or reply)):
         if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
             # the oldest entry is about to fall off the window — keep it
             # for the rolling summary instead of losing it (harness C)
@@ -567,9 +594,12 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     import asyncio as _aio2
     _aio2.create_task(_roll_summary(chat_id))
     _history_redaction.reset(redaction_token)
+    _secret_turn.reset(secret_token)
+    _user_redaction.reset(user_red_token)
     _last_sent_reply[chat_id] = reply
     _last_reply_at[chat_id] = time.monotonic()
-    log_chat(chat_id, "user", raw_text)
+    log_chat(chat_id, "user", raw_text,
+             **({"cloud_text": user_red} if user_red else {}))
     # The full reply stays in the LOCAL log (inside the §3a boundary);
     # cloud_text is what history seeding may hand back to cloud prompts —
     # without it, the redaction died at the first restart (review P1).
@@ -999,15 +1029,18 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # reported as one; the legacy classifier was retired 2026-08-27
         # after two consecutive all-green degraded eval runs (P3.7a).
         from kyraan.agents import agent_loop
-        for tier in ("frontier", "cheap"):
-            if tier == "cheap":
+        secret = _secret_turn.get()
+        for tier in (("cheap",) if secret else ("frontier", "cheap")):
+            if tier == "cheap" and not secret:
                 # P3.7a: the local model now holds BOTH the loop and
                 # extraction — the extraction cutoff widens for this
                 # turn or contention silently eats every "Noted for
                 # review" (9x in one degraded eval run).
                 _degraded_turn.set(True)
             try:
-                return await agent_loop.run(chat_id, raw_text, tier=tier)
+                return await agent_loop.run(
+                    chat_id, raw_text, tier=tier,
+                    **({"secret": True} if secret else {}))
             except KillSwitchEngaged:
                 raise
             except agent_loop.AgentUnavailable as exc:
@@ -1015,7 +1048,11 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             except Exception as exc:
                 log_event("agent_loop_error", tier=tier, error=str(exc),
                           error_type=type(exc).__name__)
-        log_event("agent_all_tiers_failed")
+        log_event("agent_all_tiers_failed", secret=secret)
+        if secret:
+            return ("I can't handle this privately right now — the local "
+                    "model is unreachable, and I won't send a secret to the "
+                    "cloud. Nothing was stored; tell me again in a few minutes.")
         return ("Both my reasoning models are unreachable right now, so I "
                 "couldn't act on that — nothing was done. Reminders and "
                 "scheduled tasks still fire on their own; try me again in "
