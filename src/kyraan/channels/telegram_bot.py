@@ -902,6 +902,72 @@ def _wire_goals(job_queue: JobQueue, bot) -> None:
     goals.init(schedule_fn=schedule_fn, run_fn=run_fn, send_fn=send_fn)
 
 
+def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
+    """Mention watch (2026-09-02): draft + confirm, never post. Skips
+    itself entirely when Slack isn't mounted or the token is absent."""
+    import os as _os
+
+    from kyraan.agents import agent_loop, orchestrator as _orch
+    from kyraan.control_plane import kernel as _kernel
+    from kyraan.control_plane.kernel import SkillCall
+    from kyraan.triggers import slack_watch
+    server = (_kernel.config.load().get("tool_servers") or {}).get("slack") or {}
+    channels = server.get("watch_channels") or []
+    token = _os.environ.get("SLACK_MCP_XOXP_TOKEN", "").strip()
+    if not channels or not token:
+        return
+
+    def _whoami() -> tuple:
+        # the owner's Slack identity, once, from the token itself
+        import json as _json
+        import urllib.request as _ur
+        try:
+            req = _ur.Request("https://slack.com/api/auth.test", data=b"",
+                              headers={"Authorization": f"Bearer {token}"})
+            body = _json.loads(_ur.urlopen(req, timeout=15).read())
+            return str(body.get("user_id", "")), str(body.get("user", ""))
+        except Exception as exc:
+            logger.warning("slack auth.test failed: %s", exc)
+            return "", ""
+
+    async def draft_fn(instruction: str) -> str:
+        for tier in ("frontier", "cheap"):
+            try:
+                return await agent_loop.run(_owner_id(), instruction,
+                                            tier=tier, read_only=True)
+            except agent_loop.AgentUnavailable:
+                continue
+        return ""
+
+    async def ask_fn(chat_id: int, channel: str, draft: str, context: str) -> None:
+        async def _post(_a: dict) -> str:
+            result = await _kernel.run_tool(_kernel.ToolCall(
+                "slack.post", {"channel_id": channel, "payload": draft,
+                               "content_type": "text/plain"}))
+            return f"Posted to {channel}: \"{draft[:80]}\""
+        ask = await _orch._gated(
+            chat_id, SkillCall("agent.action", {"tool": "slack.post"}), _post,
+            describe=(f"📣 Slack {channel} — {context}\n\n"
+                      f"Proposed reply (posted as you): \"{draft}\""))
+        await bot.send_message(chat_id=chat_id, text=_plain(ask),
+                               reply_markup=_confirm_keyboard(chat_id))
+        _orch.record_proactive(chat_id, ask)
+
+    async def _job(context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            if not slack_watch._owner_user_id:
+                uid, handle = await asyncio.to_thread(_whoami)
+                if not uid:
+                    return
+                slack_watch.init(uid, draft_fn, ask_fn, owner_handle=handle)
+            await slack_watch.tick(channels, _owner_id())
+        except Exception as exc:
+            logger.warning("slack watch tick failed: %s", exc)
+
+    job_queue.run_repeating(_job, interval=120, first=90, name="slack_watch")
+    logger.info("Slack mention watch armed (%d channels, every 2 min)", len(channels))
+
+
 def _wire_scheduler(job_queue: JobQueue, bot) -> None:
     def schedule_fn(job_name: str, run_at, payload: dict) -> None:
         job_queue.run_once(_reminder_job, when=run_at, data=payload,
@@ -1298,6 +1364,7 @@ def run() -> None:
     _wire_scheduler(app.job_queue, app.bot)
     _wire_agent_tasks(app.job_queue, app.bot)
     _wire_goals(app.job_queue, app.bot)
+    _wire_slack_watch(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
 
     # Files OUT (2026-08-28): the loop's files.send delivers through here.

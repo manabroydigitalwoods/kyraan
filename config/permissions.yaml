@@ -244,6 +244,10 @@ tool_servers:
       SLACK_MCP_ADD_MESSAGE_TOOL: "true"
       SLACK_MCP_LOG_LEVEL: "warn"
     untrusted: true
+    # Mention watch (owner decisions 2026-09-02): poll these every
+    # 2 min; an @mention of the owner becomes a DRAFT + one-tap confirm
+    # in Telegram — never an autonomous post.
+    watch_channels: ["#social", "#all-kyraan", "#new-channel"]
   home_assistant:
     transport: builtin
     module: kyraan.tools.home_assistant
