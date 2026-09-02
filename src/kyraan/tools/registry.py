@@ -59,7 +59,8 @@ class ToolSpec:
 # spoken and DND-refused in the executor — voice never breaks
 # quiet hours. Nothing else joins without the same ceremony.
 MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause",
-                               "music.volume", "home.announce"})
+                               "music.volume", "home.announce",
+                               "home.speaker_volume"})
 
 
 def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:

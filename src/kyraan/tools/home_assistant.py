@@ -128,7 +128,37 @@ def _announce(message: str, target: str = "") -> dict:
     return {"announced": True, "on": chosen, "message": message}
 
 
+def _speaker_volume(percent: int, target: str = "") -> dict:
+    """Echo DEVICE volume via media_player.volume_set — what
+    announcements and Alexa-played audio use (distinct from Spotify's
+    playback volume). Targets ride the same announce allowlist."""
+    targets = _announce_targets()
+    if not targets:
+        raise ToolError("no announce_targets configured")
+    chosen = targets[0]
+    if target:
+        hint = target.strip().lower().replace(" ", "_")
+        chosen = next((t for t in targets if hint in t.lower()), None)
+        if chosen is None:
+            raise ToolError(f"unknown speaker {target!r} — configured: "
+                            + ", ".join(targets))
+    entity = f"media_player.{chosen}"
+    prior = None
+    try:
+        raw = _api(f"/api/states/{entity}")
+        prior = raw.get("attributes", {}).get("volume_level")
+        prior = round(prior * 100) if prior is not None else None
+    except Exception:
+        pass
+    _api("/api/services/media_player/volume_set",
+         {"entity_id": entity, "volume_level": round(percent / 100, 2)})
+    return {"volume": percent, "on": chosen, "prior": prior}
+
+
 async def call(tool_name: str, args: dict) -> object:
+    if tool_name == "home.speaker_volume":
+        return await asyncio.to_thread(_speaker_volume, int(args["percent"]),
+                                       str(args.get("target", "") or ""))
     if tool_name == "home.announce":
         return await asyncio.to_thread(_announce, args["message"],
                                        str(args.get("target", "") or ""))

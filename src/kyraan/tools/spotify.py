@@ -81,8 +81,9 @@ def _api(path: str, method: str = "GET", payload: dict | None = None):
             raise ToolError("Spotify refused (403) — Connect control needs "
                             "Premium on this account") from exc
         if exc.code == 404:
-            raise ToolError("no active Spotify device — open Spotify on a "
-                            "device (or name one from music.devices)") from exc
+            raise ToolError("no active Spotify session — for the ECHO's "
+                            "own volume use home.speaker_volume; to play "
+                            "first, open Spotify or say what to play") from exc
         if exc.code == 429:
             raise TransientToolError("Spotify rate limit") from exc
         if exc.code >= 500:

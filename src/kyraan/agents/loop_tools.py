@@ -1591,6 +1591,29 @@ async def _home_announce(chat_id: int, args: dict, raw_text: str):
                           "target": str(args.get("target", "") or "")}))
 
 
+async def _speaker_volume(chat_id: int, args: dict, raw_text: str):
+    """Echo DEVICE volume (live 2026-09-02: "adjust echo dot volume to
+    7" dead-ended in Spotify's no-active-device error). Alexa speaks
+    0-10, we store percent: a value ≤10 is the Alexa scale (7 -> 70%).
+    Same owner caps as music volume: auto ≤70%, confirm above, ≤40 in
+    quiet hours."""
+    try:
+        value = float(args.get("percent"))
+    except (TypeError, ValueError):
+        raise kernel.ToolFailed("give the volume as a number (0-10 like "
+                                "Alexa, or 0-100)")
+    percent = int(value * 10) if 0 <= value <= 10 else int(value)
+    percent = max(0, min(100, percent))
+    limit = (_VOLUME_DND_MAX
+             if not kernel.can_send_proactively(chat_id=chat_id)
+             else _VOLUME_AUTO_MAX)
+    if percent > limit and not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("home.speaker_volume", dict(args))
+    return await kernel.run_tool(kernel.ToolCall(
+        "home.speaker_volume",
+        {"percent": percent, "target": str(args.get("target", "") or "")}))
+
+
 async def _music_devices(chat_id: int, args: dict, raw_text: str):
     return await kernel.run_tool(kernel.ToolCall("music.devices", {}))
 
@@ -2169,6 +2192,14 @@ TOOLS = {
         "about": "Pause the music. Immediate, no confirm.",
         "run": _music_pause,
     },
+    "home.speaker_volume": {
+        "params": '{"percent": 7, "target": "<optional speaker>"}',
+        "about": ("Set the ECHO SPEAKER's device volume (announcements + "
+                  "Alexa audio) — \"echo volume 7\", \"speaker louder\". "
+                  "Values 0-10 are the Alexa scale (7 = 70%). Use "
+                  "music.volume ONLY for Spotify playback volume."),
+        "run": _speaker_volume,
+    },
     "music.volume": {
         "params": '{"percent": 50, "device": "<optional>"}',
         "about": ("Set music volume 0-100. Auto up to 70; higher asks "
@@ -2361,6 +2392,7 @@ VERIFICATION_CLASS = {
     "music.pause": "read_after_write",
     "music.volume": "same_store",  # prior-capture; the set itself is audible
     "home.announce": "same_store",  # audible by nature; nothing to re-read
+    "home.speaker_volume": "same_store",  # prior captured; result audible
     "calendar.create_event": "read_after_write",
     "calendar.reschedule": "read_after_write",
     "calendar.delete_event": "read_after_write",
@@ -2403,6 +2435,9 @@ UNDO_MAP = {
     # the observed prior when the state read captured it.
     "music.play": lambda a, r, p: ("music.pause", {}),
     "home.announce": lambda a, r, p: None,  # a spoken word has no unsay
+    "home.speaker_volume": lambda a, r, p: (
+        ("home.speaker_volume", {"percent": r["prior"]})
+        if isinstance(r, dict) and r.get("prior") is not None else None),
     "music.pause": lambda a, r, p: None,
     "music.volume": lambda a, r, p: (
         ("music.volume", {"percent": r["prior"]})

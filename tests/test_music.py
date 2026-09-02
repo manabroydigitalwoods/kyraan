@@ -13,10 +13,11 @@ def configured(monkeypatch):
     monkeypatch.setattr(spotify, "configured", lambda: True)
 
 
-def test_media_exemption_is_exactly_four_tools():
+def test_media_exemption_is_exactly_five_tools():
     from kyraan.tools import registry
     assert registry.MEDIA_AUTO_EXEMPT == {"music.play", "music.pause",
-                                          "music.volume", "home.announce"}
+                                          "music.volume", "home.announce",
+                                          "home.speaker_volume"}
     # anything else notify+auto still refuses at load
     spec = registry.ToolSpec(
         name="x.blast", description="", server="spotify",
@@ -101,3 +102,28 @@ async def test_switch_already_in_state_never_asks(monkeypatch):
     assert out == {"changed": False, "state": "on",
                    "note": "already on — say so, don't ask to confirm a no-op"}
     assert calls == ["home.get_state"]
+
+
+async def test_speaker_volume_understands_the_alexa_scale(monkeypatch):
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+    ran = []
+
+    async def fake_run(call, **kw):
+        ran.append(dict(call.args))
+        return {"volume": call.args["percent"], "on": "manab_s_echo_dot",
+                "prior": 50}
+    monkeypatch.setattr(kernel, "run_tool", fake_run)
+    out = await loop_tools._speaker_volume(7, {"percent": 7}, "")
+    assert ran[0]["percent"] == 70          # Alexa 7 -> 70%
+    await loop_tools._speaker_volume(7, {"percent": 55}, "")
+    assert ran[1]["percent"] == 55          # >10 is already percent
+    with pytest.raises(kernel.ConfirmationRequired):
+        await loop_tools._speaker_volume(7, {"percent": 9}, "")   # 90%: asks
+    assert out["prior"] == 50
+
+
+def test_speaker_volume_undo_restores_prior():
+    from kyraan.agents.loop_tools import UNDO_MAP
+    assert UNDO_MAP["home.speaker_volume"](
+        {}, {"volume": 70, "prior": 50}, None) == \
+        ("home.speaker_volume", {"percent": 50})

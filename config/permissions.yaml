@@ -307,6 +307,19 @@ tools:
       retries: 2
       timeout_s: 15
       on_failure: surface
+  home.speaker_volume:
+    description: Set an Echo speaker's DEVICE volume (announcements/Alexa audio) — distinct from Spotify playback volume. Same owner policy as music volume (2026-09-02).
+    server: home_assistant
+    permission: auto
+    side_effects: notify
+    params:
+      percent: {type: number, required: true}
+      target: {type: string}
+    returns: "{volume, on, prior}"
+    failure:
+      retries: 0
+      timeout_s: 12
+      on_failure: surface
   home.announce:
     description: Speak a short message through the house Echo (Alexa announcement). Auto by the owner's 2026-09-02 decision; the executor refuses during quiet hours — voice never breaks DND.
     server: home_assistant
