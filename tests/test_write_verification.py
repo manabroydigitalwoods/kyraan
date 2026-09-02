@@ -18,8 +18,16 @@ def _fake_kernel(monkeypatch, responses: dict, calls: list):
 
 async def test_switch_write_is_verified_against_observed_state(monkeypatch):
     calls = []
-    _fake_kernel(monkeypatch, {"home.turn_on": {"ok": True},
-                               "home.get_state": {"state": "on"}}, calls)
+    state = {"value": "off"}   # off before the write, on after
+
+    async def run(call, **kw):
+        calls.append((call.tool_name, dict(call.args)))
+        if call.tool_name == "home.get_state":
+            return {"state": state["value"]}
+        state["value"] = "on"
+        return {"ok": True}
+    from kyraan.control_plane import kernel as _k
+    monkeypatch.setattr(_k, "run_tool", run)
     out = await loop_tools.TOOLS["home.turn_on"]["run"](7, {"entity": "switch.ac"}, "")
     assert out["verified"] is True
     assert calls[-1][0] == "home.get_state"

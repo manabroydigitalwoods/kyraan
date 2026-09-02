@@ -2549,6 +2549,19 @@ async def record_action(chat_id: int, tool: str, args: dict, result,
 
 def _register_home_switches() -> None:
     async def _switch(tool, args, expect):
+        # No-op guard (owner's question 2026-09-02): an entity already
+        # in the target state never asks for a confirm — same house
+        # pattern as mark-read on a read email. The read is auto-
+        # permission, so it happens BEFORE the kernel's confirm gate.
+        try:
+            current = await kernel.run_tool(kernel.ToolCall(
+                "home.get_state", {"entity": args["entity"]}))
+            if isinstance(current, dict) and current.get("state") == expect:
+                return {"changed": False, "state": expect,
+                        "note": f"already {expect} — say so, don't ask "
+                                "to confirm a no-op"}
+        except Exception:
+            pass  # unreadable state: fall through to the normal gated path
         result = await kernel.run_tool(kernel.ToolCall(tool, {"entity": args["entity"]}))
         base = result if isinstance(result, dict) else {"ok": result}
         return await _verified(

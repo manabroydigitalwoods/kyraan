@@ -85,3 +85,19 @@ def test_volume_undo_restores_observed_prior():
 def test_music_tools_join_no_family_stage():
     assert not kernel.stage_allows("music.play", stage="full")
     assert not kernel.stage_allows("music.play", stage="read_mostly")
+
+
+async def test_switch_already_in_state_never_asks(monkeypatch):
+    calls = []
+
+    async def fake_run(call, **kw):
+        calls.append(call.tool_name)
+        if call.tool_name == "home.get_state":
+            return {"entity": call.args["entity"], "state": "on"}
+        raise AssertionError("write should not run")
+    monkeypatch.setattr(kernel, "run_tool", fake_run)
+    out = await loop_tools.TOOLS["home.turn_on"]["run"](
+        7, {"entity": "fan.air_purifier"}, "")
+    assert out == {"changed": False, "state": "on",
+                   "note": "already on — say so, don't ask to confirm a no-op"}
+    assert calls == ["home.get_state"]
