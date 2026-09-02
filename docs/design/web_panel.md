@@ -513,6 +513,45 @@ TRY, then GOT. What the events do NOT carry is the result body — it only
 enters the next prompt, in `traces.jsonl` — so the log reads "ok · 1493ms"
 and never pretends to know what came back.
 
+**Signals, third pass** (owner: "very messy", "should pass through the
+connector line precisely, like an electric pulse flowing"). Two faults.
+
+The mess was the cascade: forty of the owner's ~220 wires sampled, and
+every neuron reached re-firing its neighbours two hops deep — one thought
+was a firework, and a firework tells you nothing. Each event now sends a
+FEW pulses along the wires it literally means: a model call reads the
+person's own subject wires into the fact lobe (six); recall reaches along
+the spoke wires, as many as episodes came back (two even when none did —
+it looked); a tool lights the two or three it habitually fires with. No
+cascade unless asked for, and then one hop along the mesh. Nine pulses in
+flight for a whole turn, down from eighty-one.
+
+The call itself is a wire the store does not have — nothing links a
+person to a skill — yet "this person's turn called this tool" is exactly
+what the event says. So a call is drawn as a transient wire: out to the
+skill when tried, back to the person when the result comes, one pulse
+riding each way. That is the story the firework hid: asked, reached,
+answered.
+
+The imprecision was a real bug. A curved wire's bow flips side depending
+on which endpoint is "a", and a pulse travelling backwards along a wire
+built its curve from its own travel direction — so every reverse pulse
+rode a curve mirrored to the wrong side of its wire. Measured on a 332px
+reverse wire: the old head sat 39.9px off the drawn curve at mid-wire
+(exactly 2 × 0.12 × L/2), the new one 0.00px at every sample. Pulses now
+carry the wire's own orientation and walk it either way. They render as
+current — a charged stretch of wire brightening and thickening toward a
+white-hot head — because a dot with a short tail read as a dot.
+
+**Keys** (owner's ask): plain drag orbits; Space+drag pans (the hand);
+Cmd/Ctrl+drag zooms about where you pressed (up = in, recomputed from the
+start so it never drifts); Shift+drag selects; wheel zooms at the cursor;
+`+`/`−` zoom about the centre; `0` fits; arrows pan; Esc clears. Held
+modifiers take precedence over grabbing a neuron, so you can pan across a
+dense lobe without picking one up, and they clear on blur — a key held
+when the window lost focus would otherwise stick forever. The map lives
+in the drag control's tooltip, since the hint line was removed by request.
+
 Zoom is about the cursor now. The renderer places a node at
 `W/2 + (c·size + view.x)·scale`, so holding a screen offset K fixed across
 a scale change means shifting the view by `K·(1/s₁ − 1/s₀)`. Measured: a

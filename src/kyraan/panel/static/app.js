@@ -896,9 +896,12 @@ const brain = {
   // twelve seconds of a page's life, which silently held the spin off
   // until the page was old enough.
   lastTouch: -1e12, dragMode: "orbit",
+  keys: { space: false, zoom: false },   // held modifiers: Space = pan, Cmd/Ctrl = zoom
+  zoomDrag: null,
   lobeFired: new Map(),    // lobe type -> time it last received activity
   live: null,              // the last live event, for the ticker
   liveLog: [],             // the recent sequence: trying → got
+  callWires: [],           // transient person↔skill wires: asked, answered
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -946,31 +949,49 @@ function matchAlpha(node) {
    the truthful picture and the one worth being able to see. */
 const SIGNAL_SPEED = { coactivation: 1.7, synapse: 1.25, subject: 1.0,
                        relation: 1.1, owns: 0.9, managed_by: 0.8 };
-const MAX_SIGNALS = 240;
-const MAX_HOPS = 2;
+const MAX_SIGNALS = 60;
+const MAX_HOPS = 2;                // reachable only when an emit asks to cascade
 
-function emitFrom(nodeId, hop, strength) {
-  if (hop > MAX_HOPS || strength < 0.18) return;
-  // The owner node has a couple of hundred edges. Sample rather than
-  // flood: a thought reads as a burst along some wires, not a wall.
-  const candidates = brain.edges.filter((e) => e.a === nodeId || e.b === nodeId);
-  const stride = Math.max(1, Math.ceil(candidates.length / 40));
-  for (let i = 0; i < candidates.length; i += stride) {
+/* Send a FEW pulses out of a node along the wires an event actually
+   means. The first version sampled forty of the owner's ~220 edges and
+   re-fired every neuron it reached, two hops deep — one thought became a
+   firework, and a firework tells you nothing. Now: a kind filter, a small
+   limit, a stagger so a burst reads as a wave, and no cascade unless
+   asked for (and then only one hop, three wires, along the mesh). */
+function emitFrom(nodeId, opts) {
+  opts = opts || {};
+  const limit = opts.limit ?? 6;
+  const strength = opts.strength ?? 1;
+  const hop = opts.hop ?? 1;
+  const kinds = opts.kinds ? new Set(opts.kinds) : null;
+  if (hop > MAX_HOPS || strength < 0.18) return 0;
+
+  const candidates = brain.edges.filter((e) =>
+    (e.a === nodeId || e.b === nodeId)
+    && brain.showEdge[e.kind]
+    && (!kinds || kinds.has(e.kind)));
+  if (!candidates.length) return 0;
+  // Deterministic spread through the candidates rather than the first N,
+  // so the same event lights different wires each time it happens.
+  const stride = Math.max(1, Math.floor(candidates.length / limit));
+  const offset = brain.signals.length % stride;
+  let sent = 0;
+  for (let i = offset; i < candidates.length && sent < limit; i += stride) {
     const edge = candidates[i];
-    let from = null, to = null;
-    if (edge.a === nodeId) { from = edge.a; to = edge.b; }
-    else if (edge.b === nodeId) { from = edge.b; to = edge.a; }
-    else continue;
-    if (!brain.showEdge[edge.kind]) continue;
-    const a = brain.byId.get(from), b = brain.byId.get(to);
-    if (!a || !b || !brain.showType[a.type] || !brain.showType[b.type]) continue;
-    if (brain.signals.length >= MAX_SIGNALS) return;
+    const from = nodeId, to = edge.a === nodeId ? edge.b : edge.a;
+    const bNode = brain.byId.get(to), aNode = brain.byId.get(from);
+    if (!aNode || !bNode || !brain.showType[aNode.type] || !brain.showType[bNode.type]) continue;
+    if (brain.signals.length >= MAX_SIGNALS) break;
     brain.signals.push({
-      from, to, kind: edge.kind, t: 0, hop,
-      strength: strength,
-      speed: (SIGNAL_SPEED[edge.kind] || 1) * (0.75 + Math.random() * 0.4),
+      from, to, kind: edge.kind, hop, strength,
+      ca: edge.a, cb: edge.b,                       // the wire as DRAWN, a→b
+      t: -sent * 0.09,                              // stagger: a wave, not a flash
+      speed: (SIGNAL_SPEED[edge.kind] || 1) * 0.9,
+      cascade: !!opts.cascade,
     });
+    sent++;
   }
+  return sent;
 }
 
 function advanceSignals(dt) {
@@ -982,16 +1003,64 @@ function advanceSignals(dt) {
     arrived.push(signal);
     return false;
   });
+  const now = performance.now();
   for (const signal of arrived) {
     // Arriving lights the far neuron, dimmer than a real firing so the
     // difference between "this ran" and "this is connected" stays visible.
-    const now = performance.now();
     const existing = brain.fired.get(signal.to);
     if (existing === undefined || now - existing > FIRE_MS * 0.6) {
       brain.fired.set(signal.to, now - FIRE_MS * (1 - signal.strength * 0.55));
     }
-    emitFrom(signal.to, signal.hop + 1, signal.strength * 0.5);
+    if (signal.cascade) {
+      emitFrom(signal.to, { hop: signal.hop + 1, strength: signal.strength * 0.5,
+                            kinds: ["synapse", "coactivation"], limit: 3 });
+    }
   }
+  // Call wires expire on their own clock.
+  brain.callWires = brain.callWires.filter((w) => now - w.born < w.ttl);
+}
+
+/* A call is a wire that does not exist in the store: nothing links a
+   person to a skill, yet "this person's turn called this tool" is exactly
+   what the event says. So the call is drawn as a transient wire — out to
+   the skill when it is tried, back to the person when the result comes —
+   with one pulse riding it. That is the story the old firework hid:
+   asked, reached, answered. */
+const CALL_TTL = 2600;
+
+function callWire(fromId, toId) {
+  if (!brain.byId.has(fromId) || !brain.byId.has(toId)) return;
+  brain.callWires.push({ from: fromId, to: toId, born: performance.now(), ttl: CALL_TTL });
+}
+
+/* Current on a curve. `at(t)` gives the point at t along the wire. The
+   stretch behind the head brightens and thickens toward it — charged
+   wire — and the head is a white-hot core in a bloom. That reads as
+   electricity flowing; a dot with a short tail read as a dot. */
+function drawCurrent(ctx, at, tt, colour, ratio, scale, strength) {
+  const back = Math.max(0, tt - 0.42);
+  const steps = 14;
+  let prev = at(back);
+  for (let i = 1; i <= steps; i++) {
+    const f = i / steps;
+    const p = at(back + (tt - back) * f);
+    ctx.strokeStyle = colour(Math.min(1, strength * (0.12 + 0.88 * f * f)));
+    ctx.lineWidth = (0.5 + 2.4 * f) * ratio * scale;
+    ctx.lineCap = "round";
+    ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(p.x, p.y); ctx.stroke();
+    prev = p;
+  }
+  const head = at(tt);
+  const r = 3.0 * ratio * scale;
+  const bloom = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, r * 3.6);
+  bloom.addColorStop(0, colour(Math.min(1, strength)));
+  bloom.addColorStop(1, "transparent");
+  ctx.fillStyle = bloom;
+  ctx.beginPath(); ctx.arc(head.x, head.y, r * 3.6, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = "#fff";
+  ctx.globalAlpha = Math.min(1, 0.5 + strength * 0.5);
+  ctx.beginPath(); ctx.arc(head.x, head.y, r * 0.55, 0, Math.PI * 2); ctx.fill();
+  ctx.globalAlpha = 1;
 }
 
 /* The same quadratic the edges are DRAWN with, so a pulse rides the wire
@@ -1036,10 +1105,10 @@ function lobeHeat(type) {
   return Math.max(0, 1 - (performance.now() - at) / LOBE_MS);
 }
 
-function fireNode(id) {
+function fireNode(id, emit) {
   if (!brain.byId.has(id)) return false;
   brain.fired.set(id, performance.now());
-  emitFrom(id, 1, 1);
+  if (emit) emitFrom(id, emit);
   return true;
 }
 
@@ -1079,47 +1148,59 @@ function logLive(phase, text, detail) {
 
 function brainActivate(event) {
   const kind = event.kind || "";
+  const who = personForChat(event.chat_id);
 
   if (kind === "model_call") {
-    const who = personForChat(event.chat_id);
-    if (who) fireNode(who.id);
+    // Thinking reads its facts about you: a few pulses out along the
+    // person's own subject wires into the fact lobe. Not into everything.
+    if (who) fireNode(who.id, { kinds: ["subject", "relation"], limit: 6 });
     lightLobe("memory");
     logLive("think", `thinking · ${event.model || event.provider || "model"}`,
       `${event.input_tokens ?? "?"} tokens in · ${event.latency_ms ?? "?"}ms`);
   } else if (kind === "episode_rag") {
+    // Reaching into recall: as many wires as episodes came back (a couple
+    // even when none did — it looked), along the spoke wires only.
     lightLobe("episode");
-    const who = personForChat(event.chat_id);
-    if (who) fireNode(who.id);
-    logLive("got", `recall → ${event.injected ?? 0} episodes`,
+    const n = Number(event.injected) || 0;
+    if (who) fireNode(who.id, { kinds: ["spoke"], limit: Math.max(2, Math.min(6, n)) });
+    logLive("got", `recall → ${n} episodes`,
       event.best_sim != null ? `best match ${Number(event.best_sim).toFixed(2)}` : "");
   } else if (kind === "agent_tool_call" && event.tool) {
-    // The model's own reason for reaching for the tool — its WANT/HAVE/
-    // NEED line — is the truest "what is it trying to do" there is.
-    fireNode("s:" + event.tool);
+    // The ask: one wire out from the person to the skill, and the skill
+    // fires. The model's own WANT/HAVE/NEED line is the reason.
+    const skill = "s:" + event.tool;
+    if (who) callWire(who.id, skill);
+    fireNode(skill);
     logLive("try", `${event.tool}`, String(event.consider || "").slice(0, 140));
   } else if (kind === "tool_call" && event.tool) {
-    fireNode("s:" + event.tool);
+    const skill = "s:" + event.tool;
+    // A scheduled run calls tools with no agent_tool_call first; draw the
+    // ask then, but not twice when the loop already did.
+    const recent = brain.callWires.some((w) => w.to === skill
+      && performance.now() - w.born < 1500);
+    if (who && !recent) callWire(who.id, skill);
+    // The skill and, lightly, the two or three it habitually fires with.
+    fireNode(skill, { kinds: ["coactivation"], limit: 3, strength: 0.7 });
     if (event.tool.startsWith("memory.")) lightLobe("memory");
     if (event.tool.startsWith("memory.recall")) lightLobe("episode");
     if (event.tool.startsWith("documents.")) lightLobe("document");
     if (event.tool.startsWith("faces.") || event.tool.startsWith("persons.")) lightLobe("face");
     logLive("try", `${event.tool} ${compactArgs(event.args)}`.trim());
   } else if (kind === "tool_result" && event.tool) {
-    // The answer arriving: the skill fires again, and the asker lights.
-    fireNode("s:" + event.tool);
-    const who = personForChat(event.chat_id);
-    if (who) brain.fired.set(who.id, performance.now());
+    // The answer: one wire back from the skill to the person.
+    const skill = "s:" + event.tool;
+    fireNode(skill);
+    if (who) { callWire(skill, who.id); brain.fired.set(who.id, performance.now()); }
     logLive("got", event.ok
       ? `${event.tool} → ok · ${event.duration_ms ?? "?"}ms`
       : `${event.tool} → failed`,
       event.ok ? "" : String(event.error || "").slice(0, 140));
   } else if (kind === "agent_reply" || kind === "turn_health") {
-    const who = personForChat(event.chat_id);
     if (who) brain.fired.set(who.id, performance.now());
     if (kind === "agent_reply") logLive("reply", "replied",
       `${event.steps ?? "?"} steps · ${event.tier || ""}`.trim());
   } else if (event.reminder_id) {
-    fireNode("t:reminder:" + event.reminder_id);
+    fireNode("t:reminder:" + event.reminder_id, { kinds: ["owns", "managed_by"], limit: 2 });
     logLive("got", "reminder fired");
   }
 }
@@ -1495,40 +1576,51 @@ function drawGraph(canvas, view, opts) {
   }
   ctx.globalAlpha = 1;
 
+  // Call wires: the ask going out, the answer coming back. A dashed arc
+  // between person and skill that fades over its life, with one bright
+  // pulse riding from the caller to the called.
+  for (const wire of brain.callWires) {
+    if (!shown.has(wire.from) || !shown.has(wire.to)) continue;
+    const pa = proj.get(wire.from), pb = proj.get(wire.to);
+    const life = (performance.now() - wire.born) / wire.ttl;       // 0 → 1
+    const fade = 1 - life;
+    const control = edgeControl(pa, pb);
+    const accentColour = styles.getPropertyValue("--accent").trim() || dim;
+    ctx.strokeStyle = accentColour;
+    ctx.globalAlpha = 0.55 * fade;
+    ctx.lineWidth = 1.2 * ratio;
+    ctx.setLineDash([5 * ratio, 4 * ratio]);
+    ctx.beginPath();
+    ctx.moveTo(pa.x, pa.y);
+    ctx.quadraticCurveTo(control.x, control.y, pb.x, pb.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const t = Math.min(1, life * 2.2);                              // arrives early, wire lingers
+    const target = brain.byId.get(wire.to);
+    drawCurrent(ctx, (u) => bezierAt(pa, control, pb, u), t,
+                (alpha) => nodeColour(target, alpha * fade), ratio,
+                (opts.nodeScale || 1) * 1.15, 1);
+  }
+
   // Action potentials in flight. Drawn after the wires and before the
   // somas: a pulse rides over its edge but passes behind the neurons.
   for (const signal of brain.signals) {
+    if (signal.t < 0) continue;                    // staggered, not started yet
     const a = brain.byId.get(signal.from), b = brain.byId.get(signal.to);
     if (!a || !b || !shown.has(signal.from) || !shown.has(signal.to)) continue;
-    const pa = proj.get(signal.from), pb = proj.get(signal.to);
-    const control = edgeControl(pa, pb);
-    const head = bezierAt(pa, control, pb, Math.min(1, signal.t));
-    // A short trail behind the head reads as direction; a bare dot does not.
-    const tail = bezierAt(pa, control, pb, Math.max(0, signal.t - 0.22));
-    const alpha = signal.strength * (0.35 + 0.65 * Math.sin(Math.PI * signal.t));
-
-    const trail = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
-    trail.addColorStop(0, "transparent");
-    trail.addColorStop(1, nodeColour(b, alpha));
-    ctx.strokeStyle = trail;
-    ctx.lineWidth = 2.6 * ratio * (opts.nodeScale || 1);
-    ctx.beginPath();
-    ctx.moveTo(tail.x, tail.y);
-    ctx.lineTo(head.x, head.y);
-    ctx.stroke();
-
-    // A glowing head. At 2px the pulses were technically drawn and
-    // practically invisible against three hundred neurons.
-    const headR = 3.4 * ratio * (opts.nodeScale || 1);
-    const bloom = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, headR * 3.2);
-    bloom.addColorStop(0, nodeColour(b, Math.min(1, alpha + 0.3)));
-    bloom.addColorStop(1, "transparent");
-    ctx.fillStyle = bloom;
-    ctx.beginPath(); ctx.arc(head.x, head.y, headR * 3.2, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = "#fff";
-    ctx.globalAlpha = Math.min(1, alpha + 0.2);
-    ctx.beginPath(); ctx.arc(head.x, head.y, headR * 0.55, 0, Math.PI * 2); ctx.fill();
-    ctx.globalAlpha = 1;
+    // Ride the wire EXACTLY as drawn. The bow of the quadratic flips side
+    // depending on which end is "a", so the curve is built in the edge's
+    // own orientation and the pulse walks it forwards or backwards.
+    // Building it from the travel direction put every reverse-travelling
+    // pulse on a curve mirrored to the other side of its wire.
+    const ca = proj.get(signal.ca), cb = proj.get(signal.cb);
+    const control = edgeControl(ca, cb);
+    const reverse = signal.from !== signal.ca;
+    const at = (t) => bezierAt(ca, control, cb, reverse ? 1 - t : t);
+    const tt = Math.min(1, signal.t);
+    const strength = signal.strength * (0.55 + 0.45 * Math.sin(Math.PI * tt));
+    drawCurrent(ctx, at, tt, (alpha) => nodeColour(b, alpha), ratio,
+                opts.nodeScale || 1, strength);
   }
 
   // Somas, back to front.
@@ -1744,6 +1836,19 @@ function nodesInBand(canvas) {
     const p = toScreen(canvas, node, brain.view);
     return p.x >= left && p.x <= right && p.y >= top && p.y <= bottom;
   });
+}
+
+/* Zoom so that the screen point `about` stays where it is. The renderer
+   places a node at W/2 + (c*size + view.x)*scale, so for a fixed screen
+   offset K the view must shift by K*(1/s1 - 1/s0). Used by the wheel,
+   Cmd-drag, and the +/- keys (about the centre). */
+function zoomAbout(canvas, about, targetScale) {
+  const s0 = brain.view.scale;
+  const s1 = Math.max(0.35, Math.min(6, targetScale));
+  const kx = about.x - canvas.width / 2, ky = about.y - canvas.height / 2;
+  brain.view.x += kx * (1 / s1 - 1 / s0);
+  brain.view.y += ky * (1 / s1 - 1 / s0);
+  brain.view.scale = s1;
 }
 
 /* Fit everything currently shown. The force layout settles wherever the
@@ -2131,6 +2236,22 @@ function wireMemory() {
   if (!canvas) return;
 
   canvas.addEventListener("mousedown", (event) => {
+    const point = canvasPoint(canvas, event);
+    if (brain.keys.zoom || event.metaKey || event.ctrlKey) {
+      // Cmd/Ctrl-drag: up zooms in, down zooms out, about where you
+      // pressed. Scale is recomputed from the start each move, so the
+      // gesture never drifts.
+      brain.zoomDrag = { anchor: point, y0: point.y, scale0: brain.view.scale };
+      brain.lastTouch = performance.now();
+      canvas.classList.add("dragging");
+      return;
+    }
+    if (brain.keys.space) {
+      brain.pan = point;
+      brain.lastTouch = performance.now();
+      canvas.classList.add("dragging");
+      return;
+    }
     const hit = nodeAt(canvas, event);
     if (hit) {
       // Dragging a picked node drags the whole picked group with it.
@@ -2158,6 +2279,13 @@ function wireMemory() {
 
   canvas.addEventListener("mousemove", (event) => {
     const point = canvasPoint(canvas, event);
+    if (brain.zoomDrag) {
+      const dy = brain.zoomDrag.y0 - point.y;             // up = in
+      zoomAbout(canvas, brain.zoomDrag.anchor,
+                brain.zoomDrag.scale0 * Math.exp(dy * 0.006));
+      brain.lastTouch = performance.now();
+      return;
+    }
     if (brain.nodeDrag) {
       const size = Math.min(canvas.width, canvas.height) * 0.42;
       for (const node of brain.nodeDrag.group) {
@@ -2207,6 +2335,7 @@ function wireMemory() {
     }
     brain.pan = null;
     brain.orbit = null;
+    brain.zoomDrag = null;
     canvas.classList.remove("dragging");
   });
 
@@ -2236,22 +2365,54 @@ function wireMemory() {
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
     brain.lastTouch = performance.now();
-    // Zoom about the cursor: the point under the pointer stays under the
-    // pointer. The renderer puts a node at W/2 + (c*size + view.x)*scale,
-    // so for a fixed screen offset K the view must shift by K*(1/s1 - 1/s0).
-    const point = canvasPoint(canvas, event);
-    const kx = point.x - canvas.width / 2, ky = point.y - canvas.height / 2;
-    const s0 = brain.view.scale;
-    const s1 = Math.max(0.35, Math.min(6, s0 * Math.exp(-event.deltaY * 0.0012)));
-    brain.view.x += kx * (1 / s1 - 1 / s0);
-    brain.view.y += ky * (1 / s1 - 1 / s0);
-    brain.view.scale = s1;
+    zoomAbout(canvas, canvasPoint(canvas, event),
+              brain.view.scale * Math.exp(-event.deltaY * 0.0012));
   }, { passive: false });
+
+  // Held modifiers. Space is the hand (pan), Cmd/Ctrl is the lens (zoom).
+  // They take precedence over grabbing a neuron, so you can pan across a
+  // dense lobe without picking one up. Cleared on blur, or a key held
+  // when the window lost focus would stick forever.
+  const typing = (event) => event.target
+    && /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName);
+  const cursorFor = () => {
+    if (currentView !== "memory") return;
+    canvas.style.cursor = brain.keys.space ? "grab"
+      : brain.keys.zoom ? "zoom-in" : "default";
+  };
+  window.addEventListener("keydown", (event) => {
+    if (currentView !== "memory" || typing(event)) return;
+    if (event.key === " ") {
+      if (!brain.keys.space) { brain.keys.space = true; cursorFor(); }
+      event.preventDefault();          // Space must not scroll the page
+    }
+    if (event.key === "Meta" || event.key === "Control") {
+      brain.keys.zoom = true; cursorFor();
+    }
+  });
+  window.addEventListener("keyup", (event) => {
+    if (event.key === " ") { brain.keys.space = false; cursorFor(); }
+    if (event.key === "Meta" || event.key === "Control") { brain.keys.zoom = false; cursorFor(); }
+  });
+  window.addEventListener("blur", () => {
+    brain.keys.space = false; brain.keys.zoom = false;
+    brain.zoomDrag = null; brain.pan = null; brain.orbit = null;
+    cursorFor();
+  });
 
   window.addEventListener("keydown", (event) => {
     if (currentView !== "memory") return;
     if (event.target && /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)) return;
     if (event.key === "Escape") { brain.selection.clear(); renderSelection(); }
+    if (event.key === "+" || event.key === "=") {
+      zoomAbout(canvas, { x: canvas.width / 2, y: canvas.height / 2 }, brain.view.scale * 1.25);
+      brain.lastTouch = performance.now();
+    }
+    if (event.key === "-" || event.key === "_") {
+      zoomAbout(canvas, { x: canvas.width / 2, y: canvas.height / 2 }, brain.view.scale / 1.25);
+      brain.lastTouch = performance.now();
+    }
+    if (event.key === "0") { fitAll(); brain.lastTouch = performance.now(); }
     // Arrow keys nudge the view: the one pan that needs no gesture at all.
     const step = 48 / brain.view.scale;
     if (event.key === "ArrowLeft")  { brain.view.x += step; brain.lastTouch = performance.now(); }
