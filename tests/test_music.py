@@ -13,11 +13,12 @@ def configured(monkeypatch):
     monkeypatch.setattr(spotify, "configured", lambda: True)
 
 
-def test_media_exemption_is_exactly_five_tools():
+def test_media_exemption_is_exactly_seven_tools():
     from kyraan.tools import registry
     assert registry.MEDIA_AUTO_EXEMPT == {"music.play", "music.pause",
                                           "music.volume", "home.announce",
-                                          "home.speaker_volume"}
+                                          "home.speaker_volume",
+                                          "home.media", "home.tv_play"}
     # anything else notify+auto still refuses at load
     spec = registry.ToolSpec(
         name="x.blast", description="", server="spotify",

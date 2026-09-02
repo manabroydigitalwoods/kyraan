@@ -429,8 +429,41 @@ async def _email_read(chat_id: int, args: dict, raw_text: str):
     return {"__direct_reply__": "\n\n".join(lines)}
 
 
+def _resolve_home_entity(requested: str, allowlist: list) -> str | None:
+    """The owner's rule (2026-09-02): when only ONE allowlisted entity
+    can possibly be meant, Kyraan resolves to it — a wrong internal
+    guess ("switch.air_purifier" for the fan, "media_player.tv" for
+    the FireTV stick) must never fail a confirmed action. Deterministic
+    ladder: exact id -> exact name-after-domain -> the SOLE candidate
+    sharing a word. Zero or several candidates return None (the honest
+    allowlist error handles it)."""
+    req = str(requested or "").strip().lower()
+    if not req:
+        return None
+    if req in allowlist:
+        return req
+    req_name = req.split(".", 1)[-1]
+    exact = [e for e in allowlist if e.split(".", 1)[-1] == req_name]
+    if len(exact) == 1:
+        return exact[0]
+    words = [w for w in req_name.replace("_", " ").split() if len(w) >= 2]
+    hits = [e for e in allowlist
+            if any(w in e.split(".", 1)[-1] for w in words)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _home_allowlists():
+    server = (kernel.config.load().get("tool_servers") or {}).get(
+        "home_assistant") or {}
+    return (server.get("read_entities") or [],
+            server.get("write_entities") or [])
+
+
 async def _home_get_state(chat_id: int, args: dict, raw_text: str):
-    result = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": args["entity"]}))
+    reads, writes = _home_allowlists()
+    entity = _resolve_home_entity(args.get("entity", ""),
+                                  reads + writes) or args.get("entity", "")
+    result = await kernel.run_tool(kernel.ToolCall("home.get_state", {"entity": entity}))
     if isinstance(result, dict) and result.get("last_changed"):
         # Humanized local time — a raw UTC ISO string leaked into a reply
         # verbatim ("...at 2026-08-26T10:42:32.966246Z", which is also
@@ -1591,6 +1624,18 @@ async def _home_announce(chat_id: int, args: dict, raw_text: str):
                           "target": str(args.get("target", "") or "")}))
 
 
+async def _home_media(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall(
+        "home.media", {"action": str(args.get("action", "")).lower(),
+                       "target": str(args.get("target", "") or "")}))
+
+
+async def _home_tv_play(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall(
+        "home.tv_play", {"title": str(args.get("title", "")),
+                         "app": str(args.get("app", ""))}))
+
+
 async def _speaker_volume(chat_id: int, args: dict, raw_text: str):
     """Echo DEVICE volume (live 2026-09-02: "adjust echo dot volume to
     7" dead-ended in Spotify's no-active-device error). Alexa speaks
@@ -2197,6 +2242,22 @@ TOOLS = {
         "about": "Pause the music. Immediate, no confirm.",
         "run": _music_pause,
     },
+    "home.media": {
+        "params": '{"action": "play|pause|stop|next|previous", "target": "<optional: tv>"}',
+        "about": ("TV/media transport — \"pause the tv\", \"next episode\", "
+                  "\"previous\". Immediate, no confirm, native remote (not "
+                  "voice)."),
+        "run": _home_media,
+    },
+    "home.tv_play": {
+        "params": '{"title": "<show or movie name>", "app": "netflix|prime video|youtube"}',
+        "about": ("Play a NAMED title on the Fire TV — \"play Bluey on "
+                  "Netflix\", \"kids rhymes on YouTube\". Alexa resolves "
+                  "the title; the receipt says it was REQUESTED — relay "
+                  "that, and that the TV may take a few seconds. Use "
+                  "music.play for songs on the Echo."),
+        "run": _home_tv_play,
+    },
     "home.speaker_volume": {
         "params": '{"percent": 7, "target": "<optional speaker>"}',
         "about": ("Set the ECHO SPEAKER's device volume (announcements + "
@@ -2398,6 +2459,8 @@ VERIFICATION_CLASS = {
     "music.volume": "same_store",  # prior-capture; the set itself is audible
     "home.announce": "same_store",  # audible by nature; nothing to re-read
     "home.speaker_volume": "same_store",  # prior captured; result audible
+    "home.media": "same_store",   # visible on the TV itself
+    "home.tv_play": "same_store",  # Alexa resolves; receipt says requested
     "calendar.create_event": "read_after_write",
     "calendar.reschedule": "read_after_write",
     "calendar.delete_event": "read_after_write",
@@ -2440,6 +2503,10 @@ UNDO_MAP = {
     # the observed prior when the state read captured it.
     "music.play": lambda a, r, p: ("music.pause", {}),
     "home.announce": lambda a, r, p: None,  # a spoken word has no unsay
+    "home.media": lambda a, r, p: (
+        ("home.media", {"action": "pause"}) if a.get("action") == "play"
+        else None),
+    "home.tv_play": lambda a, r, p: ("home.media", {"action": "pause"}),
     "home.speaker_volume": lambda a, r, p: (
         ("home.speaker_volume", {"percent": r["prior"]})
         if isinstance(r, dict) and r.get("prior") is not None else None),
@@ -2589,6 +2656,10 @@ async def record_action(chat_id: int, tool: str, args: dict, result,
 
 def _register_home_switches() -> None:
     async def _switch(tool, args, expect):
+        _, writes = _home_allowlists()
+        resolved = _resolve_home_entity(args.get("entity", ""), writes)
+        if resolved:
+            args = {**args, "entity": resolved}
         # No-op guard (owner's question 2026-09-02): an entity already
         # in the target state never asks for a confirm — same house
         # pattern as mark-read on a read email. The read is auto-

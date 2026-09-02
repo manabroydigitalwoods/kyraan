@@ -60,7 +60,8 @@ class ToolSpec:
 # quiet hours. Nothing else joins without the same ceremony.
 MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause",
                                "music.volume", "home.announce",
-                               "home.speaker_volume"})
+                               "home.speaker_volume", "home.media",
+                               "home.tv_play"})
 
 
 def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:

@@ -878,16 +878,26 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR) -> dict:
     # The registry, not just whoever a fact happens to be about. Kamal and
     # Titu have enrolled FACES and no facts; keyed off subjects alone they
     # had nowhere to attach and their faces floated unlinked.
-    registry_people = set()
+    registry_people: dict = {}
     try:
         from kyraan.store import persons as _persons
-        registry_people = {row[0] for row in _persons.list_persons()}
+        registry_people = {row[0]: row[1] for row in _persons.list_persons()}
     except Exception:
         pass
-    for person in sorted(subjects | registry_people):
+    # The owner's chat lives in the environment, not the registry row.
+    import os as _os
+    if "owner" in registry_people and not registry_people["owner"]:
+        try:
+            registry_people["owner"] = int(_os.environ.get("TELEGRAM_OWNER_ID", "0")) or None
+        except ValueError:
+            pass
+    for person in sorted(set(subjects) | set(registry_people)):
         nodes.append({"id": f"p:{person}", "type": "person", "label": person,
                       "lobe": "memory", "group": person,
-                      "registered": person in registry_people})
+                      "registered": person in registry_people,
+                      # A live model_call names a chat; this is how the page
+                      # finds whose turn is being thought about.
+                      "chat_id": registry_people.get(person)})
     for fact in memory["facts"]:
         edges.append({"a": f"m:{fact['id']}", "b": f"p:{fact['subject']}",
                       "kind": "subject", "weight": 0.5})

@@ -699,3 +699,8 @@ footer::before {
 .undo-state.undone { color: var(--dim); }
 .undo-state.irreversible { color: var(--warn); }
 .row.undone .body { opacity: .5; text-decoration: line-through; }
+
+/* The brain's live line: what it is doing right now, fading to nothing
+   when nothing is happening — a quiet assistant shows a quiet line. */
+.note.live { color: var(--accent); text-shadow: 0 0 7px var(--glow); min-width: 160px; }
+.note.live::after { content: none; }

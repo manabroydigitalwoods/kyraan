@@ -467,6 +467,39 @@ from under the cursor. The hub on the overview shares the camera — same
 graph, same eye. Every existing feature — hover, select, band, search,
 signals — survived, because they all read projected screen positions.
 
+**Motion, second pass** (owner: "movement is so fast", "unable to drag to
+move top, bottom, left, right", "signals, pulses are not visible"). Three
+faults that compounded. The idle spin resumed the instant you let go, so
+any angle you set drifted away — it now stays paused for twelve seconds
+after the last touch, and turns at ~2°/s rather than ~7.5°/s. Orbit gain
+halved. And pan was hidden behind alt-drag, which nobody finds: it is now
+right-drag, a `drag: orbit | pan` switch (in the URL), and the arrow keys.
+One edge caught by measurement: `lastTouch` initialised to `0`, and
+`now − 0 < 12000` held for a page's first twelve seconds, silently
+holding the spin off until the page was old enough. It initialises to the
+distant past now.
+
+**The thinking is visible.** Only tool calls lit the brain before, as 2px
+dots that lived 2.6s — technically drawn, practically invisible. Now each
+live event maps to what it literally is: a MODEL CALL is the person's
+turn being thought about, so their node fires and the thought runs out
+along their memory wiring; EPISODE RAG is the recall lobe being searched,
+so that lobe glows (the event carries a count, not which episodes, so the
+lobe lights rather than the page inventing neurons); a `memory.*` tool
+lights the fact lobe; the reply closes the loop on the person. Pulses are
+bigger, glow, and live 4.2s; a fan-out cap samples ~40 of the owner's
+~220 edges so a thought reads as a burst, not a wall. A live line under
+the controls names the last event and fades over six seconds. Person
+nodes carry their chat id server-side for this; `model_call` events carry
+no chat, and fall back to the owner, who it is nearly every time. Nothing
+fires on a timer — a quiet assistant shows a quiet brain.
+
+Verification note for whoever reads this later: `requestAnimationFrame`
+does not fire in a hidden browser pane, so the idle spin cannot be
+measured there. It was proven by driving `advanceCamera()` by hand — 100
+steps, yaw delta exactly 100 × SPIN_RATE, all guards clear — and, when the
+pane was visible, by two frames four seconds apart.
+
 **Found while proving it in a fresh browser:** the `?token=` handshake
 only fired on `/`. A deep link such as `/brain?token=…` served the page
 (the query token authenticates that one request) and then 401'd its own

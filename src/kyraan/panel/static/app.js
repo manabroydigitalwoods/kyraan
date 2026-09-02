@@ -892,6 +892,12 @@ const brain = {
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
   pan: null, orbit: null, nodeDrag: null, band: null,
+  // Far in the past, not 0: "now - 0 < 12000" is true for the first
+  // twelve seconds of a page's life, which silently held the spin off
+  // until the page was old enough.
+  lastTouch: -1e12, dragMode: "orbit",
+  lobeFired: new Map(),    // lobe type -> time it last received activity
+  live: null,              // the last live event, for the ticker
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -944,7 +950,12 @@ const MAX_HOPS = 2;
 
 function emitFrom(nodeId, hop, strength) {
   if (hop > MAX_HOPS || strength < 0.18) return;
-  for (const edge of brain.edges) {
+  // The owner node has a couple of hundred edges. Sample rather than
+  // flood: a thought reads as a burst along some wires, not a wall.
+  const candidates = brain.edges.filter((e) => e.a === nodeId || e.b === nodeId);
+  const stride = Math.max(1, Math.ceil(candidates.length / 40));
+  for (let i = 0; i < candidates.length; i += stride) {
+    const edge = candidates[i];
     let from = null, to = null;
     if (edge.a === nodeId) { from = edge.a; to = edge.b; }
     else if (edge.b === nodeId) { from = edge.b; to = edge.a; }
@@ -998,22 +1009,85 @@ function bezierAt(pa, c, pb, t) {
 // How long a neuron stays lit after it fires. Long enough to catch out of
 // the corner of your eye, short enough that a busy turn does not leave the
 // whole skill lobe permanently on.
-const FIRE_MS = 2600;
+const FIRE_MS = 4200;
+const LOBE_MS = 3600;            // how long a lobe stays lit after activity
 
 /* Live activation. The SSE tail already carries every tool call, so the
    brain can show what is firing RIGHT NOW rather than only what exists —
    the difference between an anatomy diagram and an EEG. Fed from the same
    one connection the stream sector uses; costs nothing extra. */
+/* Whose turn is this? Live events name a chat; person nodes carry theirs.
+   With no chat on the event, it is the owner's — that is who talks to
+   Kyraan almost every time. */
+function personForChat(chatId) {
+  const people = brain.nodes.filter((n) => n.type === "person");
+  const hit = chatId != null && people.find((n) => n.chat_id === chatId);
+  return hit || people.find((n) => n.label === "owner") || null;
+}
+
+function lightLobe(type) {
+  brain.lobeFired.set(type, performance.now());
+}
+
+function lobeHeat(type) {
+  const at = brain.lobeFired.get(type);
+  if (at === undefined) return 0;
+  return Math.max(0, 1 - (performance.now() - at) / LOBE_MS);
+}
+
+function fireNode(id) {
+  if (!brain.byId.has(id)) return false;
+  brain.fired.set(id, performance.now());
+  emitFrom(id, 1, 1);
+  return true;
+}
+
+/* One live event → what it means in the brain. Each mapping is literal:
+     a MODEL CALL is the person's turn being thought about, so their node
+       fires and the thought runs out along their memory wiring;
+     EPISODE RAG is the recall lobe being searched — the event carries a
+       count but not which episodes, so the lobe glows rather than
+       inventing which neurons;
+     a memory.* TOOL is the fact lobe being read;
+     any other tool is its own skill firing, as before;
+     the REPLY is the person's node closing the loop.
+   Nothing here fires on a timer. A quiet assistant shows a quiet brain. */
 function brainActivate(event) {
-  let id = null;
-  if (event.kind === "tool_call" || event.kind === "agent_tool_call") {
-    if (event.tool) id = "s:" + event.tool;
+  const kind = event.kind || "";
+  let note = null;
+
+  if (kind === "model_call") {
+    const who = personForChat(event.chat_id);
+    if (who) fireNode(who.id);
+    lightLobe("memory");
+    note = `thinking · ${event.model || event.provider || "model"}`;
+  } else if (kind === "episode_rag") {
+    lightLobe("episode");
+    const who = personForChat(event.chat_id);
+    if (who) fireNode(who.id);
+    note = `recalling · ${event.injected ?? "?"} episodes`;
+  } else if (kind === "tool_call" || kind === "agent_tool_call") {
+    if (event.tool) {
+      fireNode("s:" + event.tool);
+      if (event.tool.startsWith("memory.")) lightLobe("memory");
+      if (event.tool.startsWith("memory.recall")) lightLobe("episode");
+      if (event.tool.startsWith("documents.")) lightLobe("document");
+      if (event.tool.startsWith("faces.") || event.tool.startsWith("persons.")) lightLobe("face");
+      note = `${event.tool} fired`;
+    }
+  } else if (kind === "agent_reply" || kind === "turn_health") {
+    const who = personForChat(event.chat_id);
+    if (who) brain.fired.set(who.id, performance.now());
+    note = kind === "agent_reply" ? "replied" : null;
   } else if (event.reminder_id) {
-    id = "t:reminder:" + event.reminder_id;
+    fireNode("t:reminder:" + event.reminder_id);
+    note = "reminder fired";
   }
-  if (id && brain.byId.has(id)) {
-    brain.fired.set(id, performance.now());
-    emitFrom(id, 1, 1);
+
+  if (note) {
+    brain.live = { text: note, at: performance.now() };
+    const line = $("mem-live");
+    if (line) line.textContent = "● " + note;
   }
 }
 
@@ -1190,6 +1264,9 @@ function reheat(to = 1) { brain.alpha = to; }
    No library. A 3D graph is a rotation matrix and a divide; three.js
    would be 600KB of vendored script to do two multiplies. */
 const brainCam = { yaw: -0.55, pitch: 0.32, spin: true };
+const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
+const ORBIT_GAIN = 0.0022;       // radians per pixel of drag
+const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
 const HOME_CAM = { yaw: -0.55, pitch: 0.32 };
 
@@ -1239,7 +1316,11 @@ function advanceCamera() {
   // anything, so a tooltip never drifts out from under the cursor.
   if (!brainCam.spin || REDUCED_MOTION) return;
   if (brain.hover || brain.nodeDrag || brain.orbit || brain.pan || brain.band) return;
-  brainCam.yaw += 0.0022;
+  // The angle you just set is the angle you wanted. Spin only resumes
+  // after the pointer has been away for a while — otherwise every view
+  // you arranged drifted off the moment you let go.
+  if (performance.now() - brain.lastTouch < IDLE_BEFORE_SPIN_MS) return;
+  brainCam.yaw += SPIN_RATE;
 }
 
 function canvasPoint(canvas, event) {
@@ -1286,8 +1367,11 @@ function drawGraph(canvas, view, opts) {
       const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
       const spread = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)))
                    + 30 * ratio;
+      // A lobe that just received activity glows brighter and fades: the
+      // recall lobe lighting up IS "it is searching its memory".
+      const heat = lobeHeat(type);
       const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, spread);
-      glow.addColorStop(0, nodeColour(members[0], 0.1));
+      glow.addColorStop(0, nodeColour(members[0], 0.1 + 0.32 * heat));
       glow.addColorStop(1, nodeColour(members[0], 0));
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(cx, cy, spread, 0, Math.PI * 2); ctx.fill();
@@ -1351,23 +1435,31 @@ function drawGraph(canvas, view, opts) {
     const control = edgeControl(pa, pb);
     const head = bezierAt(pa, control, pb, Math.min(1, signal.t));
     // A short trail behind the head reads as direction; a bare dot does not.
-    const tail = bezierAt(pa, control, pb, Math.max(0, signal.t - 0.13));
+    const tail = bezierAt(pa, control, pb, Math.max(0, signal.t - 0.22));
     const alpha = signal.strength * (0.35 + 0.65 * Math.sin(Math.PI * signal.t));
 
     const trail = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
     trail.addColorStop(0, "transparent");
     trail.addColorStop(1, nodeColour(b, alpha));
     ctx.strokeStyle = trail;
-    ctx.lineWidth = 1.8 * ratio * (opts.nodeScale || 1);
+    ctx.lineWidth = 2.6 * ratio * (opts.nodeScale || 1);
     ctx.beginPath();
     ctx.moveTo(tail.x, tail.y);
     ctx.lineTo(head.x, head.y);
     ctx.stroke();
 
-    ctx.fillStyle = nodeColour(b, Math.min(1, alpha + 0.25));
-    ctx.beginPath();
-    ctx.arc(head.x, head.y, 1.9 * ratio * (opts.nodeScale || 1), 0, Math.PI * 2);
-    ctx.fill();
+    // A glowing head. At 2px the pulses were technically drawn and
+    // practically invisible against three hundred neurons.
+    const headR = 3.4 * ratio * (opts.nodeScale || 1);
+    const bloom = ctx.createRadialGradient(head.x, head.y, 0, head.x, head.y, headR * 3.2);
+    bloom.addColorStop(0, nodeColour(b, Math.min(1, alpha + 0.3)));
+    bloom.addColorStop(1, "transparent");
+    ctx.fillStyle = bloom;
+    ctx.beginPath(); ctx.arc(head.x, head.y, headR * 3.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.globalAlpha = Math.min(1, alpha + 0.2);
+    ctx.beginPath(); ctx.arc(head.x, head.y, headR * 0.55, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
   }
 
   // Somas, back to front.
@@ -1511,9 +1603,18 @@ function tickSignals() {
   advanceSignals(dt);
 }
 
+function fadeLiveLine() {
+  const line = $("mem-live");
+  if (!line || !brain.live) return;
+  const age = (performance.now() - brain.live.at) / 6000;
+  line.style.opacity = String(Math.max(0, 1 - age));
+  if (age >= 1) { brain.live = null; line.textContent = ""; }
+}
+
 function drawBrain() {
   const canvas = $("mem-canvas");
   if (!canvas || currentView !== "memory") return;
+  fadeLiveLine();
   sizeCanvas(canvas);
   simulate();
   tickSignals();
@@ -1972,16 +2073,18 @@ function wireMemory() {
     } else if (event.shiftKey) {
       const point = canvasPoint(canvas, event);
       brain.band = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
-    } else if (event.altKey) {
+    } else if (event.altKey || event.button === 2 || brain.dragMode === "pan") {
+      // Pan: right button, alt, or the drag-mode switch set to pan.
       brain.pan = canvasPoint(canvas, event);
       canvas.classList.add("dragging");
     } else {
-      // Plain drag turns the brain. Panning moved to alt-drag: once there
-      // is a third axis, turning it is what an empty-space drag means.
       brain.orbit = canvasPoint(canvas, event);
       canvas.classList.add("dragging");
     }
+    brain.lastTouch = performance.now();
   });
+  // Right-drag pans, so the browser menu must not eat the gesture.
+  canvas.addEventListener("contextmenu", (event) => event.preventDefault());
 
   canvas.addEventListener("mousemove", (event) => {
     const point = canvasPoint(canvas, event);
@@ -2002,16 +2105,18 @@ function wireMemory() {
     }
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
     if (brain.orbit) {
-      brainCam.yaw += (point.x - brain.orbit.x) * 0.0045;
+      brainCam.yaw += (point.x - brain.orbit.x) * ORBIT_GAIN;
       brainCam.pitch = Math.max(-1.3, Math.min(1.3,
-        brainCam.pitch + (point.y - brain.orbit.y) * 0.0045));
+        brainCam.pitch + (point.y - brain.orbit.y) * ORBIT_GAIN));
       brain.orbit = point;
+      brain.lastTouch = performance.now();
       return;
     }
     if (brain.pan) {
       brain.view.x += (point.x - brain.pan.x) / brain.view.scale;
       brain.view.y += (point.y - brain.pan.y) / brain.view.scale;
       brain.pan = point;
+      brain.lastTouch = performance.now();
       return;
     }
     brain.hover = nodeAt(canvas, event);
@@ -2060,13 +2165,21 @@ function wireMemory() {
 
   canvas.addEventListener("wheel", (event) => {
     event.preventDefault();
+    brain.lastTouch = performance.now();
     brain.view.scale = Math.max(0.35, Math.min(6,
       brain.view.scale * Math.exp(-event.deltaY * 0.0012)));
   }, { passive: false });
 
   window.addEventListener("keydown", (event) => {
     if (currentView !== "memory") return;
+    if (event.target && /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)) return;
     if (event.key === "Escape") { brain.selection.clear(); renderSelection(); }
+    // Arrow keys nudge the view: the one pan that needs no gesture at all.
+    const step = 48 / brain.view.scale;
+    if (event.key === "ArrowLeft")  { brain.view.x += step; brain.lastTouch = performance.now(); }
+    if (event.key === "ArrowRight") { brain.view.x -= step; brain.lastTouch = performance.now(); }
+    if (event.key === "ArrowUp")    { brain.view.y += step; brain.lastTouch = performance.now(); }
+    if (event.key === "ArrowDown")  { brain.view.y -= step; brain.lastTouch = performance.now(); }
   });
 
   const search = $("mem-search");
@@ -2130,6 +2243,11 @@ function wireMemory() {
     });
   }
   $("mem-fit").addEventListener("click", fitAll);
+  const drag = $("mem-drag");
+  if (drag) {
+    drag.value = brain.dragMode;
+    drag.addEventListener("change", (e) => { brain.dragMode = e.target.value; syncUrl(false); });
+  }
   const spin = $("mem-spin");
   if (spin) {
     spin.checked = brainCam.spin;
@@ -2592,6 +2710,7 @@ function collectState(view) {
     params.set("colour", brain.colour);
     if (brain.query) params.set("q", brain.query);
     if (!brainCam.spin) params.set("spin", "0");
+    if (brain.dragMode !== "orbit") params.set("drag", brain.dragMode);
     if (brain.floor !== 0.45) params.set("floor", brain.floor.toFixed(2));
     const lobes = Object.entries(brain.showType)
       .filter(([, on]) => on).map(([type]) => type);
@@ -2647,6 +2766,11 @@ function applyState(view, params) {
     if (query) {
       const box = $("mem-search");
       if (box) box.value = query;
+    }
+    if (params.get("drag") === "pan") {
+      brain.dragMode = "pan";
+      const sel = $("mem-drag");
+      if (sel) sel.value = "pan";
     }
     if (params.get("spin") === "0") {
       brainCam.spin = false;

@@ -311,6 +311,32 @@ tools:
       retries: 2
       timeout_s: 15
       on_failure: surface
+  home.media:
+    description: Native transport on the Fire TV / allowlisted media players — play, pause, stop, next, previous. No Alexa voice involved.
+    server: home_assistant
+    permission: auto
+    side_effects: notify
+    params:
+      action: {type: string, required: true}
+      target: {type: string}
+    returns: "{action, on}"
+    failure:
+      retries: 0
+      timeout_s: 12
+      on_failure: surface
+  home.tv_play:
+    description: Play a NAMED title on the Fire TV via the enveloped Alexa voice bridge (owner go, 2026-09-02) — only "play <title> on <netflix|prime video|youtube>" can ever transit; the general Alexa surface stays closed.
+    server: home_assistant
+    permission: auto
+    side_effects: notify
+    params:
+      title: {type: string, required: true}
+      app: {type: string, required: true}
+    returns: "{asked_alexa, note}"
+    failure:
+      retries: 0
+      timeout_s: 12
+      on_failure: surface
   home.speaker_volume:
     description: Set an Echo speaker's DEVICE volume (announcements/Alexa audio) — distinct from Spotify playback volume. Same owner policy as music volume (2026-09-02).
     server: home_assistant

@@ -139,7 +139,8 @@ def _speaker_volume(percent: int, target: str = "") -> dict:
     """Echo DEVICE volume via media_player.volume_set — what
     announcements and Alexa-played audio use (distinct from Spotify's
     playback volume). Targets ride the same announce allowlist."""
-    targets = _announce_targets()
+    targets = _announce_targets() + [
+        e.split(".", 1)[1] for e in _media_players()]
     if not targets:
         raise ToolError("no announce_targets configured")
     chosen = targets[0]
@@ -162,7 +163,77 @@ def _speaker_volume(percent: int, target: str = "") -> dict:
     return {"volume": percent, "on": chosen, "prior": prior}
 
 
+_TRANSPORT = {"play": "media_play", "pause": "media_pause",
+              "stop": "media_stop", "next": "media_next_track",
+              "previous": "media_previous_track"}
+
+
+def _media_players() -> list:
+    _, writes = _allowlists()
+    return [e for e in writes if e.startswith("media_player.")]
+
+
+def _media_transport(action: str, target: str = "") -> dict:
+    """play/pause/next/previous/stop on an allowlisted media player —
+    the Fire TV's native remote, no Alexa voice involved."""
+    service = _TRANSPORT.get(action)
+    if service is None:
+        raise ToolError(f"action must be one of {sorted(_TRANSPORT)}")
+    players = _media_players()
+    if not players:
+        raise ToolError("no media players are write-allowlisted")
+    entity = players[0]
+    if target:
+        hint = target.strip().lower().replace(" ", "_")
+        entity = next((e for e in players if hint in e), None)
+        if entity is None:
+            raise ToolError(f"unknown player {target!r} — allowlisted: "
+                            + ", ".join(players))
+    _api(f"/api/services/media_player/{service}", {"entity_id": entity})
+    return {"action": action, "on": entity}
+
+
+_VOICE_APPS = ("netflix", "prime video", "youtube")
+_VOICE_TITLE = None  # compiled lazily
+
+
+def _alexa_play_title(title: str, app: str) -> dict:
+    """The ENVELOPED voice bridge (owner 'go', 2026-09-02): the ONLY
+    thing this can utter is 'play <title> on <app> on fire tv' — title
+    pattern-checked, app from a fixed tuple. Nothing else can transit;
+    the general Alexa surface stays closed."""
+    import re
+    global _VOICE_TITLE
+    if _VOICE_TITLE is None:
+        _VOICE_TITLE = re.compile(r"^[\w \'&:,.!-]{2,60}$")
+    app = app.strip().lower()
+    if app not in _VOICE_APPS:
+        raise ToolError(f"app must be one of {_VOICE_APPS}")
+    title = " ".join(str(title or "").split())
+    if not _VOICE_TITLE.match(title) or re.search(
+            r"\b(?:and|then|also|order|buy|call|send|alexa)\b",
+            title, re.IGNORECASE):
+        raise ToolError("that title doesn't fit the play envelope — plain "
+                        "title words only")
+    targets = _announce_targets()
+    if not targets:
+        raise ToolError("no announce_targets configured")
+    phrase = f"play {title} on {app} on fire tv"
+    _api("/api/services/media_player/play_media",
+         {"entity_id": f"media_player.{targets[0]}",
+          "media_content_type": "custom", "media_content_id": phrase})
+    return {"asked_alexa": phrase, "note": "Alexa resolves the title — "
+            "relay that it was requested, not confirmed playing"}
+
+
 async def call(tool_name: str, args: dict) -> object:
+    if tool_name == "home.media":
+        return await asyncio.to_thread(_media_transport, str(args["action"]),
+                                       str(args.get("target", "") or ""))
+    if tool_name == "home.tv_play":
+        return await asyncio.to_thread(_alexa_play_title,
+                                       str(args.get("title", "")),
+                                       str(args.get("app", "")))
     if tool_name == "home.speaker_volume":
         return await asyncio.to_thread(_speaker_volume, int(args["percent"]),
                                        str(args.get("target", "") or ""))
