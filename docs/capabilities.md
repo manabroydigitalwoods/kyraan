@@ -156,11 +156,15 @@ fire late rather than never (sleep-proof since 2026-08-30).
 | Ollama (local) | cheap model + embeddings + transcription | none (localhost) | fully local |
 | Gmail API | unread/read/important/search/drafts/modify | OAuth (readonly+metadata, compose & modify opt-in) | bodies local-only |
 | Google Calendar | reads via secret ICS; writes via OAuth | ICS URL / OAuth | — |
+| Google Contacts | nightly sync of My Contacts (395 synced 2026-09-02) | OAuth contacts.readonly | names may enter prompts; numbers/emails local-only (direct reply) |
+| Spotify | play/pause/volume on Connect devices incl. Echos | OAuth playback scopes | search queries + device commands |
+| Alexa Media Player (HA) | announcements, Echo/FireTV volume, transport, enveloped title play | Amazon session inside HA | announcement text + enveloped play phrases transit Amazon |
 | Home Assistant (local) | entity reads/writes | long-lived token | allowlisted entities only |
 | SearXNG (local Docker) | web search | none | only the query leaves the machine |
 | Open-Meteo | weather | none | coordinates only |
 | Google Routes / TomTom | live-traffic ETAs | API keys | origin/destination only |
-| Any MCP stdio server | mountable via config (none mounted yet) | per-server env | behind our registry: confirm-gated writes, optional untrusted taint, owner-only until granted |
+| **Slack (personal workspace)** — first real MCP mount | channels / history / search (untrusted-tainted reads), post (confirm) | user OAuth token via env | messages are third-party text: write-lockout after any read |
+| Any MCP stdio server | mountable via config (Slack proves the path) | per-server env, ${VAR}-resolved | behind our registry: confirm-gated writes, optional untrusted taint, owner-only until granted |
 | Postgres (Docker) | facts, persons, documents, episodes, triples, mirrors | local | fully local |
 | Redis (Docker) | working state / KV | local | fully local |
 

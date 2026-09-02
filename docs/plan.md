@@ -299,8 +299,9 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
    2026-08-31** (stdio client, yaml mounts behind the permission
    registry, generated menu entries, per-server untrusted taint,
    no-auto-writes enforced at load, stage-invisible until granted).
-   Remaining per-server: a governance data-destination row for each
-   actual mount — none mounted yet. Claude lists 950+ MCP
+   First real mount 2026-09-02: the owner's personal Slack workspace
+   (§2 untouched — no company data), proving the path end to end.
+   Each further mount still needs its data-destination row. Claude lists 950+ MCP
    servers; we have 11 hand-built adapters. We will never match breadth
    by hand — one MCP client adapter mounting external servers behind
    our own permission registry (capability names, confirm gates, taint
