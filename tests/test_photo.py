@@ -401,3 +401,50 @@ def test_search_hits_say_whose_they_are(monkeypatch):
     out = asyncio.run(loop_tools._documents_search(1, {"query": "medicine"}, ""))
     assert out[0].startswith('[document "Fourts B Drops", 2026-08-27, about: kiaan]')
     assert 'about: owner]' in out[1]
+
+
+@pytest.mark.pg
+def test_capture_and_milestone_note_relate_both_ways(monkeypatch):
+    """Owner 2026-09-03: Kiaan's milestone note "1st wear sree krishna
+    dress" and the photo "today kiaan with lord shree krishna dressed"
+    linked Kiaan and never each other. relate() joins them by the note's
+    title words + a shared person, inherits the note's #tags onto the
+    capture, and is symmetric and idempotent. A body-only word
+    ("standing") never links."""
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "_name_map", lambda: {"kiaan": "kiaan"})
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4244")
+        conn.execute("""INSERT INTO document (id, chat_id, kind, caption, text, subject_persons, entities) VALUES
+            ('00000000-0000-0000-0000-00000000a001', 4244, 'note', '1st wear sree krishna dress',
+             'Today his mom him dress up of lord krishna', ARRAY['kiaan'], ARRAY['#family','#milestone','type:milestone']),
+            ('00000000-0000-0000-0000-00000000a002', 4244, 'note', '1st Self- Support Standing',
+             'He started self-supporting standing', ARRAY['kiaan'], ARRAY['#milestone']),
+            ('00000000-0000-0000-0000-00000000a003', 4244, 'moment', 'today kiaan with lord shree krishna dressed',
+             '[photo] kiaan dressed as Lord Shree Krishna standing on a tiled floor', ARRAY['kiaan'], ARRAY['Lord Shree Krishna','#festival']),
+            ('00000000-0000-0000-0000-00000000a004', 4244, 'moment', 'ruma at the market',
+             '[photo] ruma in a krishna print dress', ARRAY['ruma'], '{}')""")
+        conn.commit()
+    got = documents.relate('00000000-0000-0000-0000-00000000a003')
+    assert got == ['00000000-0000-0000-0000-00000000a001']       # not the standing note
+    assert documents.relate('00000000-0000-0000-0000-00000000a003') == []   # idempotent
+    with pg.connection() as conn:
+        rows = dict(conn.execute("SELECT id::text, related::text[] FROM document WHERE chat_id = 4244").fetchall())
+        ents, = conn.execute("SELECT entities FROM document WHERE id = '00000000-0000-0000-0000-00000000a003'").fetchone()
+    assert rows['00000000-0000-0000-0000-00000000a001'] == ['00000000-0000-0000-0000-00000000a003']
+    assert rows['00000000-0000-0000-0000-00000000a003'] == ['00000000-0000-0000-0000-00000000a001']
+    assert rows['00000000-0000-0000-0000-00000000a004'] == []                # no shared person
+    assert ents == ['Lord Shree Krishna', '#festival', '#family', '#milestone']   # inherited hubs
+    # the note side finds the capture too (a note written after the photo)
+    assert documents.relate('00000000-0000-0000-0000-00000000a002') == []
+    listing = documents.list_documents(4244)
+    by = {d["caption"]: d for d in listing}
+    assert by["1st wear sree krishna dress"]["related"] == ["today kiaan with lord shree krishna dressed"]
+    pg.reset_pool_for_tests()

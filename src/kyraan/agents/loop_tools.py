@@ -1111,6 +1111,7 @@ async def _documents_list(chat_id: int, args: dict, raw_text: str):
                          else "no documents saved yet")}
     return [f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars'
             + (f', about: {", ".join(d["subjects"])}' if d["subjects"] else "")
+            + (f', linked to: {"; ".join(d["related"])}' if d.get("related") else "")
             + ')'
             for d in docs]
 
@@ -1138,6 +1139,7 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
     # hit did not say it was ABOUT Kiaan).
     return [f'[document "{h["caption"]}", {h["date"]}'
             + (f', about: {", ".join(h["subjects"])}' if h.get("subjects") else "")
+            + (f', linked to: {"; ".join(h["related"])}' if h.get("related") else "")
             + f'] {h["text"][:400]}'
             for h in hits]
 

@@ -354,6 +354,12 @@ def index_file(chat_id: int, root: Path, path: Path, force: bool = False) -> str
         conn.commit()
     log_event("note_indexed", path=rel, people=people, chunks=len(chunks),
               exposure=_exposure(parsed, flags, rel))
+    try:
+        # the note written AFTER the photo still finds it (symmetric)
+        from kyraan.store import documents as _documents
+        _documents.relate(doc_id)
+    except Exception as exc:
+        log_event("documents_relate_failed", error=str(exc)[:100])
     return "indexed"
 
 

@@ -1033,7 +1033,8 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                     # The index marks a live row with an EMPTY array, not
                     # NULL. IS NOT NULL called every note dead, including
                     # the current one.
-                    "       coalesce(d.suppressed_by, '{}') <> '{}' "
+                    "       coalesce(d.suppressed_by, '{}') <> '{}', "
+                    "       d.related "
                     "FROM document d ORDER BY d.created_at DESC")
                 documents = cur.fetchall()
                 cur.execute("SELECT slug, name, created_at FROM face_template "
@@ -1107,6 +1108,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # newest if every version is superseded (the note was deleted), and
     # carry the version count. Rows arrive newest first.
     seen_paths: dict = {}
+    related_drawn: set = set()
     collapsed = []
     for row in documents:
         kind, source_path, suppressed = row[1], row[7], row[10]
@@ -1125,7 +1127,8 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
 
     for row in collapsed:
         (doc_id, kind, caption, filename, subjects, created, chunks,
-         source_path, entities, event_date, suppressed) = row
+         source_path, entities, event_date, suppressed, *rest) = row
+        related = rest[0] if rest else []     # older fixtures carry no column
         is_note = kind == "note"
         node_id = f"d:{doc_id}"
         node = {
@@ -1169,6 +1172,15 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             if target:
                 edges.append({"a": node_id, "b": target, "kind": "about",
                               "weight": 0.6})
+        # A capture and the note it illustrates (documents.relate, owner
+        # 2026-09-03): the milestone note and the milestone photo are one
+        # story, drawn once (each row carries the other's id).
+        for rid in (related or []):
+            a, b = sorted((node_id, f"d:{rid}"))
+            if (a, b) not in related_drawn:
+                related_drawn.add((a, b))
+                edges.append({"a": a, "b": b, "kind": "illustrates",
+                              "weight": 0.7})
 
     # A tag becomes a node only when it joins notes: two or more sharing
     # #friend is a grouping worth a hub; one note's private tag is a

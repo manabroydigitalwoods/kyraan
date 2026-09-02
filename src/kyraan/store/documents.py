@@ -338,7 +338,107 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         conn.commit()
     log_event("document_ingested", chat_id=chat_id, doc_kind=kind,
               chars=len(text), chunks=len(_chunks(text)), flags=flags)
+    if kind in ("photo", "moment"):
+        try:
+            relate(doc_id)
+        except Exception as exc:   # a link is a bonus; the capture is stored
+            log_event("documents_relate_failed", error=str(exc)[:100])
     return doc_id
+
+
+_STOP = frozenset(
+    "the a an of in on at to for with and or my his her their our its this "
+    "that today first 1st 2nd 3rd new day photo photos moment moments".split())
+
+
+def _content_words(text: str) -> set:
+    """Crude stems of the words that carry meaning ("dressed" ~ "dress",
+    "standing" ~ "stand"); registry names are not content, the shared
+    subject already carries that."""
+    out = set()
+    for w in re.findall(r"[a-z]+", str(text or "").lower()):
+        if len(w) < 4 or w in _STOP or w in _name_map():
+            continue
+        for suf in ("ing", "ed", "es", "s"):
+            if not w.endswith(suf) or len(w) - len(suf) < 4:
+                continue
+            if suf == "s" and w.endswith("ss"):          # dress, glass
+                continue
+            if suf == "es" and not w.endswith(("ses", "xes", "zes", "ches", "shes")):
+                continue                                  # clothes -> clothe? no: keep
+            w = w[:-len(suf)]
+            break
+        out.add(w)
+    return out
+
+
+def relate(doc_id: str) -> list:
+    """Link a capture (photo/moment) to the notes it illustrates and a
+    note to the captures that illustrate it — symmetric, deterministic
+    (owner 2026-09-03: the milestone note "1st wear sree krishna dress"
+    and the photo "today kiaan with lord shree krishna dressed" both
+    linked Kiaan and never each other). Rule: same chat, a SHARED
+    registry person, and the note's TITLE words recur in the capture —
+    two of them, or all of them when the title is that short. A note
+    with a body mentioning "standing" does not catch a photo of someone
+    standing; the title is the claim. The capture also inherits the
+    note's #tags, so #milestone joins it at the hub. Returns the ids
+    newly related."""
+    with pg.connection() as conn:
+        me = conn.execute(
+            """SELECT chat_id, kind, caption, text, subject_persons, entities,
+                      related FROM document WHERE id = %s""",
+            (doc_id,)).fetchone()
+        if me is None:
+            return []
+        chat_id, kind, caption, text, subjects, ents, related = me
+        subjects = list(subjects or [])
+        if not subjects:
+            return []
+        i_am_note = kind == "note"
+        others = conn.execute(
+            """SELECT id, kind, caption, text, entities, related
+               FROM document
+               WHERE chat_id = %s AND suppressed_by = '{}' AND id <> %s
+                     AND (kind = 'note') <> %s
+                     AND subject_persons && %s::text[]""",
+            (chat_id, doc_id, i_am_note, subjects)).fetchall()
+        newly = []
+        for oid, okind, ocap, otext, oents, orel in others:
+            note_title = caption if i_am_note else ocap
+            capture = f"{ocap} {otext}" if i_am_note else f"{caption} {text}"
+            title_words = _content_words(note_title)
+            if not title_words:
+                continue
+            hit = title_words & _content_words(capture)
+            if len(hit) < 2 and hit != title_words:
+                continue
+            note_tags = [e for e in ((ents if i_am_note else oents) or [])
+                         if str(e).startswith("#")]
+            cap_id, cap_ents = ((oid, list(oents or [])) if i_am_note
+                                else (doc_id, list(ents or [])))
+            inherited = [t for t in note_tags if t not in cap_ents]
+            conn.execute(
+                """UPDATE document
+                   SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
+                                  FROM unnest(related || %s::uuid[]) r)
+                   WHERE id = %s""", ([str(oid)], doc_id))
+            conn.execute(
+                """UPDATE document
+                   SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
+                                  FROM unnest(related || %s::uuid[]) r)
+                   WHERE id = %s""", ([str(doc_id)], oid))
+            if inherited:
+                conn.execute(
+                    "UPDATE document SET entities = entities || %s::text[] "
+                    "WHERE id = %s", (inherited, cap_id))
+            if str(oid) not in [str(r) for r in (related or [])]:
+                newly.append(str(oid))
+                log_event("documents_related", capture=str(cap_id),
+                          note=str(doc_id if i_am_note else oid),
+                          words=sorted(hit), inherited=inherited)
+        conn.commit()
+    return newly
 
 
 def _allowed_exposures() -> tuple:
@@ -382,7 +482,9 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
                            THEN 1 - (c.embedding <=> %s::vector) END AS sim,
                       (%s <> '' AND to_tsvector('english', c.text)
                                     @@ to_tsquery('english', %s)) AS fts,
-                      d.kind, d.subject_persons
+                      d.kind, d.subject_persons,
+                      (SELECT array_agg(r.caption) FROM document r
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
                FROM document_chunk c JOIN document d ON d.id = c.document_id
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
                      AND d.exposure = ANY(%s)
@@ -392,13 +494,14 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
             (qvec, qvec, tsquery, tsquery or "x", chat_id,
              list(_allowed_exposures()), person or "", person or "")).fetchall()
     results = []
-    for doc_id, caption, filename, day, text, sim, fts, kind, subj in rows:
+    for doc_id, caption, filename, day, text, sim, fts, kind, subj, rel in rows:
         if not fts and (sim is None or sim < SEARCH_MIN_SIM):
             continue  # neither arm actually matched
         results.append({"doc_id": str(doc_id), "kind": kind,
                         "caption": caption or filename or "(untitled)",
                         "date": day.isoformat(), "text": text,
                         "subjects": list(subj or []),
+                        "related": [r for r in (rel or []) if r],
                         "sim": float(sim) if sim is not None else None,
                         "fts": bool(fts)})
         if len(results) >= k:
@@ -451,15 +554,18 @@ def list_documents(chat_id: int, limit: int = 15, person: str = "") -> list:
     person = (valid_subjects(person) or [""])[0]
     with pg.connection() as conn:
         rows = conn.execute(
-            """SELECT id, kind, caption, filename, created_at::date,
-                      length(text), subject_persons
-               FROM document WHERE chat_id = %s AND suppressed_by = '{}'
-                     AND (%s = '' OR %s = ANY(subject_persons))
-               ORDER BY created_at DESC LIMIT %s""",
+            """SELECT d.id, d.kind, d.caption, d.filename, d.created_at::date,
+                      length(d.text), d.subject_persons,
+                      (SELECT array_agg(r.caption) FROM document r
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
+               FROM document d WHERE d.chat_id = %s AND d.suppressed_by = '{}'
+                     AND (%s = '' OR %s = ANY(d.subject_persons))
+               ORDER BY d.created_at DESC LIMIT %s""",
             (chat_id, person, person, limit)).fetchall()
     return [{"id": str(i), "kind": k, "caption": c or f or "(untitled)",
-             "date": d.isoformat(), "chars": n, "subjects": list(s or [])}
-            for i, k, c, f, d, n, s in rows]
+             "date": d.isoformat(), "chars": n, "subjects": list(s or []),
+             "related": [x for x in (rel or []) if x]}
+            for i, k, c, f, d, n, s, rel in rows]
 
 
 def sweep_orphaned_files(min_age_s: int = 3600) -> int:
