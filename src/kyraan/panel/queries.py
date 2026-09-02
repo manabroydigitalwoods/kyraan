@@ -1030,7 +1030,10 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                     "       (SELECT count(*) FROM document_chunk c "
                     "        WHERE c.document_id = d.id), "
                     "       d.source_path, d.entities, d.event_date, "
-                    "       d.suppressed_by IS NOT NULL "
+                    # The index marks a live row with an EMPTY array, not
+                    # NULL. IS NOT NULL called every note dead, including
+                    # the current one.
+                    "       coalesce(d.suppressed_by, '{}') <> '{}' "
                     "FROM document d ORDER BY d.created_at DESC")
                 documents = cur.fetchall()
                 cur.execute("SELECT slug, name, created_at FROM face_template "
@@ -1094,8 +1097,30 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # obsidian:// deep link possible. Note-to-note wikilinks are NOT
     # stored, so none are drawn.
     tag_owners: dict = defaultdict(list)
-    for (doc_id, kind, caption, filename, subjects, created, chunks,
-         source_path, entities, event_date, suppressed) in documents:
+    # A note that was edited four times is one note with four versions,
+    # not four neurons. Collapse by vault path: keep the live row, or the
+    # newest if every version is superseded (the note was deleted), and
+    # carry the version count. Rows arrive newest first.
+    seen_paths: dict = {}
+    collapsed = []
+    for row in documents:
+        kind, source_path, suppressed = row[1], row[7], row[10]
+        if kind != "note" or not source_path:
+            collapsed.append(row)
+            continue
+        entry = seen_paths.get(source_path)
+        if entry is None:
+            seen_paths[source_path] = {"row": row, "versions": 1}
+        else:
+            entry["versions"] += 1
+            if entry["row"][10] and not suppressed:    # a live one beats a dead newer
+                entry["row"] = row
+    note_versions = {id(e["row"]): e["versions"] for e in seen_paths.values()}
+    collapsed.extend(e["row"] for e in seen_paths.values())
+
+    for row in collapsed:
+        (doc_id, kind, caption, filename, subjects, created, chunks,
+         source_path, entities, event_date, suppressed) = row
         is_note = kind == "note"
         node_id = f"d:{doc_id}"
         node = {
@@ -1114,9 +1139,10 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                 "relations": [e.split(":", 1)[1].strip() for e in (entities or [])
                               if str(e).startswith("relation:")],
                 "event_date": event_date.isoformat() if event_date else "",
-                # Superseded or deleted in the vault: kept, dimmed — history,
-                # like a superseded fact.
+                # Every version superseded means the note is gone from the
+                # vault: kept, dimmed. A live version is simply live.
                 "active": not suppressed,
+                "versions": note_versions.get(id(row), 1),
                 "obsidian_url": _obsidian_url(vault, source_path),
             })
             for tag in tags:

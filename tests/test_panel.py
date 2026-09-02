@@ -1162,3 +1162,50 @@ def test_a_tag_becomes_a_hub_only_when_it_joins_notes(monkeypatch, tmp_path, see
     tagged = {(e["a"], e["b"]) for e in graph["edges"] if e["kind"] == "tagged"}
     assert tagged == {("d:n1", "g:#friend"), ("d:n2", "g:#friend")}
     assert graph["vault"] == "Vault"
+
+
+
+def test_a_note_edited_four_times_is_one_neuron_with_four_versions(monkeypatch, tmp_path,
+                                                                  seeded_logs):
+    """Found live 2026-09-02 as four "Rakesh Chakraborty" squares. The
+    indexer keeps one row per EDIT and supersedes the old one — that is
+    history, not duplication. The brain drew every version as a neuron,
+    and read 'superseded' as IS NOT NULL when the index marks a live row
+    with an EMPTY array, so even the current version looked dead."""
+    import datetime as _dt
+    from kyraan.store import pg
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+    monkeypatch.setattr(queries, "_vault_name", lambda: "Vault")
+    t0 = _dt.datetime(2026, 9, 2, 15, 0, tzinfo=_dt.timezone.utc)
+    mk = lambda i, sup: (f"v{i}", "note", "Rakesh", "", [], t0 + _dt.timedelta(hours=i), 1,
+                         "people/Rakesh.md", ["#friend"], None, sup)
+    # newest first, as the query orders them; v4 is the live one
+    docs = [mk(4, False), mk(3, True), mk(2, True), mk(1, True)]
+    gone = [("g2", "note", "Old", "", [], t0, 1, "people/Old.md", [], None, True),
+            ("g1", "note", "Old", "", [], t0, 1, "people/Old.md", [], None, True)]
+
+    class _Cur:
+        def __init__(self): self.q = ""
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=()): self.q = sql
+        def fetchall(self): return docs + gone if "FROM document d" in self.q else []
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    monkeypatch.setattr(pg, "connection", lambda: _Conn())
+    graph = queries.brain_graph(fresh=True)
+    notes = {n["label"]: n for n in graph["nodes"] if n["type"] == "note"}
+    assert len(notes) == 2                                   # one per path, not six
+    assert notes["Rakesh"]["id"] == "d:v4"                   # the live version wins
+    assert notes["Rakesh"]["active"] is True
+    assert notes["Rakesh"]["versions"] == 4
+    assert notes["Old"]["active"] is False                   # gone from the vault, dimmed
+    assert notes["Old"]["versions"] == 2
+    # The query must use the index's own convention for "live".
+    import inspect
+    assert "coalesce(d.suppressed_by, '{}') <> '{}'" in inspect.getsource(queries.brain_graph)

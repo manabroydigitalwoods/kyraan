@@ -618,6 +618,32 @@ when measured), and a link that opens nothing is worse than a path.
 merge-refresh the graph like any other store change. Today: two indexed
 notes, both superseded, one with entities — the vault sync has run once.
 
+**Hover focus, the way Obsidian's graph does it** (owner: "when I hover a
+point, highlight only the connected points and links and dim the
+others"). The hovered neuron, its neighbours over visible wires, and the
+wires between them stay lit; everything else falls back to 10%, wires
+to 6%. The focus set is built once per hovered node, not per frame, and
+the dimming is multiplied through the same colour path search-dimming
+uses, so halos, somas and rings all fall back together. Neighbours name
+themselves while focused — that is half the point of the gesture. Eased
+in and out (0.28 of the remaining distance per frame) so the graph does
+not snap. Measured on `kiaan`: 15 in the set, neighbours 1.0, outsiders
+0.10, touching wires 1.0, strangers 0.06, and everything back to 1.0 with
+the focus cleared on release.
+
+**One note, one neuron** (owner: "are we duplicating Obsidian notes
+whenever we index?"). Four "Rakesh Chakraborty" squares looked like it.
+The rows said otherwise: four versions with four distinct hashes — the
+note was edited four times between syncs — and `index_file` returns
+`unchanged` when the live row's hash matches, so the indexer keeps one
+row per EDIT and supersedes the old one. History, by design. The
+duplication was the brain's, twice: it drew every version as a neuron,
+and it read "superseded" as `IS NOT NULL` when the index marks a live
+row with an EMPTY array, so even the current version was dimmed as dead.
+Now: one neuron per vault path — the live version, or the newest dimmed
+as "gone from the vault" if every version is superseded — with the
+version count in Selection.
+
 **Contacts, wired by evidence** (owner: "we have contacts, can we connect
 them with the brain?"). 395 entries in the book — more than the brain
 held in total — and measured first: 7 resolve to a registry person, none

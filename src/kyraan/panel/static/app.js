@@ -1213,6 +1213,9 @@ const brain = {
   signals: [],             // action potentials in flight
   query: "",               // search: dims what does not match
   matches: new Set(),
+  focusFor: null,          // hover focus: the hovered id the focus set was built for
+  focusSet: new Set(),     // hovered node + its neighbours over visible wires
+  focusMix: 0,             // 0 → nothing dimmed, 1 → full focus; eased per frame
 };
 
 /* Search dims rather than hides. Removing the misses would leave the hits
@@ -1270,6 +1273,47 @@ function runSearch(text) {
 function matchAlpha(node) {
   if (!brain.query) return 1;
   return brain.matches.has(node.id) ? 1 : 0.12;
+}
+
+/* Hover focus, the way Obsidian's graph does it: the hovered neuron, its
+   neighbours over visible wires, and the wires between them stay lit;
+   everything else falls back. Built once per hovered node, not per
+   frame, and eased in and out so the graph does not snap. */
+const FOCUS_DIM = 0.10;
+
+function focusSetFor(node) {
+  const set = new Set([node.id]);
+  for (const edge of brain.edges) {
+    if (!brain.showEdge[edge.kind]) continue;
+    if (edge.a === node.id) set.add(edge.b);
+    else if (edge.b === node.id) set.add(edge.a);
+  }
+  return set;
+}
+
+function updateFocus() {
+  const hover = brain.hover;
+  if (hover && brain.focusFor !== hover.id) {
+    brain.focusFor = hover.id;
+    brain.focusSet = focusSetFor(hover);
+  }
+  if (!hover) brain.focusFor = null;
+  const target = hover ? 1 : 0;
+  brain.focusMix += (target - brain.focusMix) * (REDUCED_MOTION ? 1 : 0.28);
+  if (Math.abs(brain.focusMix - target) < 0.01) brain.focusMix = target;
+}
+
+function focusAlpha(node) {
+  if (brain.focusMix === 0) return 1;
+  if (brain.focusSet.has(node.id)) return 1;
+  return 1 - (1 - FOCUS_DIM) * brain.focusMix;
+}
+
+function focusEdgeAlpha(edge) {
+  if (brain.focusMix === 0) return 1;
+  const hovered = brain.focusFor;
+  if (edge.a === hovered || edge.b === hovered) return 1;
+  return 1 - (1 - FOCUS_DIM * 0.6) * brain.focusMix;
 }
 
 /* Signalling. A firing tool does not just light its own soma — it sends a
@@ -1630,7 +1674,7 @@ function buildPalette() {
 }
 
 function nodeColour(node, alpha) {
-  alpha *= matchAlpha(node);
+  alpha *= matchAlpha(node) * focusAlpha(node);
   const hsl = brain.palette.get(groupKey(node)) || { h: 40, s: 80, l: 50 };
   // Superseded memories stay in the brain — they are part of what it
   // holds — but they no longer speak, so they are dimmed.
@@ -1834,6 +1878,7 @@ function drawGraph(canvas, view, opts) {
   const panel = styles.getPropertyValue("--panel").trim() || "#111";
   const nodes = visibleNodes();
   const shown = new Set(nodes.map((n) => n.id));
+  updateFocus();
   // Project once per frame. Everything below reads from this map, and the
   // somas are drawn back-to-front so the front of the brain occludes the
   // back instead of the last node in the array winning.
@@ -1908,7 +1953,7 @@ function drawGraph(canvas, view, opts) {
                  || carrying.has(edge.a < edge.b ? edge.a + "|" + edge.b
                                                  : edge.b + "|" + edge.a);
     // A wire is only as visible as the dimmer of its two ends.
-    const lit = Math.min(matchAlpha(a), matchAlpha(b));
+    const lit = Math.min(matchAlpha(a), matchAlpha(b)) * focusEdgeAlpha(edge);
     const pa = proj.get(edge.a), pb = proj.get(edge.b);
     const farness = 1 - 0.55 * (depthOf(pa.z) + depthOf(pb.z)) / 2;
     ctx.strokeStyle = edge.contested ? bad
@@ -2063,7 +2108,8 @@ function drawGraph(canvas, view, opts) {
     // a search hit or a selection has earned its name on the canvas.
     const named = view.scale > 1.7 || node.type === "person"
       || (node.type === "skill" && (node.uses || 0) > 200)
-      || selected || (brain.query && brain.matches.has(node.id));
+      || selected || (brain.query && brain.matches.has(node.id))
+      || (brain.focusMix > 0.5 && brain.focusSet.has(node.id));
     if (opts.labels !== false && named) {
       ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim;
@@ -2345,7 +2391,8 @@ function renderSelection() {
     kvRow(list, "relations", (node.relations || []).join(" · ") || "—");
     kvRow(list, "event", node.event_date || "—");
     kvRow(list, "chunks", String(node.chunks));
-    kvRow(list, "state", node.active === false ? "superseded in vault" : "indexed",
+    kvRow(list, "versions", String(node.versions || 1));
+    kvRow(list, "state", node.active === false ? "gone from the vault" : "indexed",
           node.active === false);
     if (node.obsidian_url) {
       list.appendChild(el("dt", null, "open"));
