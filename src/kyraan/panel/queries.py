@@ -1168,20 +1168,6 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # A tag becomes a node only when it joins notes: two or more sharing
     # #friend is a grouping worth a hub; one note's private tag is a
     # detail for its Selection panel, not a neuron.
-    # THE CORE (owner 2026-09-02: "put Kyraan at the centre of the brain,
-    # from where signals trigger and are received"). One node for Kyraan
-    # itself, wired to every skill it acts through (signals out), to the
-    # owner it talks with (signals in and out), and to every scheduled
-    # thing it will fire. With that many edges the physics centres it.
-    nodes.append({"id": "k:kyraan", "type": "core", "label": "kyraan",
-                  "lobe": "core", "group": "core"})
-    core_targets = [n["id"] for n in nodes
-                    if n["type"] in ("skill", "task") or n["id"] == "p:owner"]
-    for target in core_targets:
-        edges.append({"a": "k:kyraan", "b": target,
-                      "kind": "acts" if not target.startswith("p:") else "talks",
-                      "weight": 0.5 if target.startswith("s:") else 0.4})
-
     for tag, owners in tag_owners.items():
         if len(owners) < 2:
             continue
@@ -1294,6 +1280,27 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             node["orphan"] = node["id"] not in wired
         elif node["type"] == "skill":
             node["dead"] = node["registered"] and not node["uses"]
+
+    # THE CORE (owner 2026-09-02: "put Kyraan at the centre of the brain,
+    # from where signals trigger and are received"). One node for Kyraan
+    # itself, wired last so every lobe exists: signals OUT to the skills
+    # it acts through and the scheduled things it will fire; signals IN
+    # from every photo, file and note it received or indexed; and the
+    # owner it talks with both ways. No document can be an orphan — it
+    # was received, and that is a connection. The physics centres it.
+    nodes.append({"id": "k:kyraan", "type": "core", "label": "kyraan",
+                  "lobe": "core", "group": "core"})
+    for n in nodes:
+        if n["id"] == "k:kyraan":
+            continue
+        kind = ("acts" if n["type"] == "skill" else
+                "fires" if n["type"] == "task" else
+                "received" if n["type"] in ("document", "note") else
+                "talks" if n["id"] == "p:owner" else "")
+        if kind:
+            edges.append({"a": "k:kyraan", "b": n["id"], "kind": kind,
+                          "weight": {"acts": 0.5, "fires": 0.4,
+                                     "received": 0.15, "talks": 0.6}[kind]})
 
     counts: Counter = Counter(n["type"] for n in nodes)
     edge_counts: Counter = Counter(e["kind"] for e in edges)

@@ -27,7 +27,8 @@ _MAX = 10
 _GENERIC = frozenset(
     "photo image picture document text watermark screenshot page file "
     "receipt invoice card label bottle product item payment status "
-    "transaction txn id bank amount total date time online".split())
+    "transaction txn id bank amount total date time online address code "
+    "name number no distributor customer copy".split())
 _GENERIC_TAGS = frozenset({"#photo", "#image", "#picture", "#document",
                            "#screenshot", "#text", "#file"})
 
@@ -44,8 +45,12 @@ def extract(text: str, hint: str = "") -> list:
                            max_tokens=200, force_json=True)
         data = json.loads(router.strip_code_fence(resp.text or "{}"))
     except Exception as exc:
+        # the model is optional; the deterministic category is not
+        # (live 2026-09-02: a failed local call left a cash memo with
+        # no #receipt at all)
         log_event("entity_extract_failed", error=str(exc)[:100])
-        return []
+        fallback = category_from_words(f"{hint} {text[:400]}")
+        return [fallback] if fallback else []
     low = text.lower()
     cat = str(data.get("category") or "").strip().lower()
     out = []
@@ -62,4 +67,28 @@ def extract(text: str, hint: str = "") -> list:
             break
     if re.fullmatch(r"#[a-z][\w-]{1,30}", cat) and cat not in _GENERIC_TAGS:
         out.append(cat)
+    elif not any(e.startswith("#") for e in out):
+        fallback = category_from_words(f"{hint} {text[:400]}")
+        if fallback:
+            out.append(fallback)
     return out
+
+
+_CATEGORY_WORDS = (
+    ("#receipt", ("cash memo", "receipt", "invoice", "bill", "payment", "paid")),
+    ("#medical", ("prescription", "vaccination", "vaccine", "clinic", "hospital", "dose")),
+    ("#ticket", ("ticket", "boarding", "pnr", "seat")),
+    ("#card", ("visiting card", "business card", "id card", "aadhaar", "pan card")),
+    ("#supplement", ("supplement", "capsule", "tablet", "omega", "vitamin")),
+    ("#contract", ("agreement", "contract", "terms")),
+)
+
+
+def category_from_words(text: str) -> str:
+    """Deterministic category when the model offers none: the first
+    keyword family the text matches ("Cash Memo" -> #receipt)."""
+    low = str(text or "").lower()
+    for tag, words in _CATEGORY_WORDS:
+        if any(w in low for w in words):
+            return tag
+    return ""
