@@ -239,7 +239,12 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
         return "unchanged"
     parsed = parse_note(raw.decode("utf-8", errors="replace"), rel)
     if len(parsed["body"]) < 12:
-        return "skipped"
+        if not is_person_note(parsed, rel):
+            return "skipped"
+        # An EMPTY person-note still names a person (Obsidian shows the
+        # filename as the title; the owner's first one had no body yet,
+        # live 2026-09-02) — register them, index the name.
+        parsed["body"] = parsed["title"]
     from kyraan.store.episodes import sensitivity_flags
     flags = sensitivity_flags(parsed["body"])
     chunks = chunk_note(parsed["body"])

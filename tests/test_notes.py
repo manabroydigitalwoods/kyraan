@@ -173,16 +173,18 @@ def test_person_note_registers_person_and_aliases(tmp_path, monkeypatch):
     vault = tmp_path / "vault"
     (vault / "Kyraan" / "people").mkdir(parents=True)
     (vault / "Kyraan" / "people" / "Rakesh Chakraborty.md").write_text(PERSON_NOTE)
+    (vault / "Kyraan" / "people" / "Nalin B.md").write_text("")   # empty: still a person
     (vault / "Kyraan" / "trip.md").write_text("# Trip\nRocky is joining us in Goa.")
     with pg.connection() as conn:
         conn.execute("DELETE FROM document WHERE chat_id = 4444")
-        conn.execute("DELETE FROM person WHERE id = 'rakesh_chakraborty'")
+        conn.execute("DELETE FROM person WHERE id IN ('rakesh_chakraborty', 'nalin_b')")
         conn.commit()
     notes.sync(4444, vault)
     persons._cache.clear()
     nm = persons.name_map()
     assert nm.get("rakesh_chakraborty") == "rakesh_chakraborty"
     assert nm.get("rocky") == "rakesh_chakraborty"          # alias registered
+    assert nm.get("nalin_b") == "nalin_b"                    # empty note, still registered
     with pg.connection() as conn:
         rows = dict(conn.execute("""SELECT source_path, subject_persons FROM document
                                     WHERE chat_id = 4444 AND suppressed_by = '{}'""").fetchall())
