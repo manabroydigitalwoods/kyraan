@@ -229,6 +229,9 @@ tool_servers:
   routes:
     transport: builtin
     module: kyraan.tools.routes
+  spotify:
+    transport: builtin
+    module: kyraan.tools.spotify
   home_assistant:
     transport: builtin
     module: kyraan.tools.home_assistant
@@ -289,6 +292,17 @@ tools:
     failure:
       retries: 2
       timeout_s: 15
+      on_failure: surface
+  music.devices:
+    description: The owner's online Spotify Connect devices (Echos, phone, laptop) with which is active.
+    server: spotify
+    permission: auto
+    side_effects: read
+    params: {}
+    returns: "[{id, name, type, active, volume}]"
+    failure:
+      retries: 1
+      timeout_s: 12
       on_failure: surface
   web.open:
     description: Read ONE public web page as text (governance 2026-08-31 — provenance-locked to this turn's search results or the user's own message; SSRF-guarded at every redirect hop; fetched text is WEB_UNTRUSTED and locks writes for the turn).

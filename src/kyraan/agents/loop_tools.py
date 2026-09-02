@@ -1575,6 +1575,95 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
             "now": new_name}
 
 
+async def _music_devices(chat_id: int, args: dict, raw_text: str):
+    return await kernel.run_tool(kernel.ToolCall("music.devices", {}))
+
+
+async def _music_play(chat_id: int, args: dict, raw_text: str):
+    """Owner decision 2026-09-02 (MEDIA_AUTO_EXEMPT): playing is auto —
+    audible actions verify themselves, and the player state is re-read
+    anyway so the receipt is grounded."""
+    import asyncio as _aio
+
+    from kyraan.tools import spotify as _sp
+    if not _sp.configured():
+        raise kernel.ToolFailed(
+            "Spotify isn't connected yet — run "
+            "scripts/setup_spotify_oauth.py once (needs Premium)")
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("what should I play? give a song, artist, "
+                                "or playlist")
+    device = await _aio.to_thread(_sp.resolve_device,
+                                  str(args.get("device", "") or ""))
+    if device is None:
+        online = await _aio.to_thread(_sp.devices)
+        names = ", ".join(d["name"] for d in online) or "none online"
+        raise kernel.ToolFailed(
+            f"no matching Spotify device (online: {names}) — open Spotify "
+            "on a device or name one of those")
+    match = await _aio.to_thread(_sp.search_uri, query)
+    if match is None:
+        raise kernel.ToolFailed(f"Spotify found nothing for {query!r} — "
+                                "say so, offer a rephrase")
+    await _aio.to_thread(_sp.play, match["uri"], match["kind"], device["id"])
+    state = {}
+    try:
+        state = await _aio.to_thread(_sp.player_state)
+    except Exception:
+        pass
+    return {"playing": match["label"], "on": device["name"],
+            "verified": bool(state.get("is_playing")) or None,
+            "now": state.get("track", "")}
+
+
+async def _music_pause(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.tools import spotify as _sp
+    if not _sp.configured():
+        raise kernel.ToolFailed("Spotify isn't connected — run "
+                                "scripts/setup_spotify_oauth.py once")
+    await _aio.to_thread(_sp.pause)
+    try:
+        state = await _aio.to_thread(_sp.player_state)
+        return {"paused": True, "verified": not state.get("is_playing")}
+    except Exception:
+        return {"paused": True, "verified": None}
+
+
+_VOLUME_AUTO_MAX = 70
+_VOLUME_DND_MAX = 40
+
+
+async def _music_volume(chat_id: int, args: dict, raw_text: str):
+    """Auto up to 70%; above that asks first — 40% cap in quiet hours
+    (owner decisions 2026-09-02: no accidental midnight blast)."""
+    import asyncio as _aio
+
+    from kyraan.tools import spotify as _sp
+    if not _sp.configured():
+        raise kernel.ToolFailed("Spotify isn't connected — run "
+                                "scripts/setup_spotify_oauth.py once")
+    try:
+        percent = max(0, min(100, int(float(args.get("percent")))))
+    except (TypeError, ValueError):
+        raise kernel.ToolFailed("give the volume as a number 0-100")
+    limit = (_VOLUME_DND_MAX
+             if not kernel.can_send_proactively(chat_id=chat_id)
+             else _VOLUME_AUTO_MAX)
+    if percent > limit and not kernel.confirmed_context():
+        raise kernel.ConfirmationRequired("music.volume", dict(args))
+    prior = None
+    try:
+        prior = (await _aio.to_thread(_sp.player_state)).get("volume")
+    except Exception:
+        pass
+    await _aio.to_thread(_sp.set_volume, percent,
+                         str(args.get("device", "") or ""))
+    return {"volume": percent, "prior": prior}
+
+
 async def _contacts_find(chat_id: int, args: dict, raw_text: str):
     """Governance 2026-09-01: numbers/emails are LOCAL-ONLY — this
     composes the answer itself (__direct_reply__), so contact details
@@ -2042,6 +2131,31 @@ TOOLS = {
                   "matches, never invent one."),
         "run": _documents_search,
     },
+    "music.play": {
+        "params": '{"query": "<song / artist / playlist words>", "device": "<optional device name words, e.g. bedroom>"}',
+        "about": ("Play music on the user's Spotify devices (Echos "
+                  "included) — \"play Kishore Kumar\", \"play my sleep "
+                  "playlist in the bedroom\". Plays immediately, no "
+                  "confirm. The receipt names what ACTUALLY started — "
+                  "relay that, never assume."),
+        "run": _music_play,
+    },
+    "music.pause": {
+        "params": "{}",
+        "about": "Pause the music. Immediate, no confirm.",
+        "run": _music_pause,
+    },
+    "music.volume": {
+        "params": '{"percent": 50, "device": "<optional>"}',
+        "about": ("Set music volume 0-100. Auto up to 70; higher asks "
+                  "the user first (40 cap in quiet hours)."),
+        "run": _music_volume,
+    },
+    "music.devices": {
+        "params": "{}",
+        "about": "List the user's online Spotify devices and which is active.",
+        "run": _music_devices,
+    },
     "contacts.find": {
         "params": '{"name": "<person name words>"}',
         "about": ("Phone number / email from the owner's synced Google "
@@ -2219,6 +2333,9 @@ def _undo_reminders_reschedule(args, result, prior):
 #   undo_path        — executes only inside the orchestrator's undo
 #                      replay of a verified original
 VERIFICATION_CLASS = {
+    "music.play": "read_after_write",
+    "music.pause": "read_after_write",
+    "music.volume": "same_store",  # prior-capture; the set itself is audible
     "calendar.create_event": "read_after_write",
     "calendar.reschedule": "read_after_write",
     "calendar.delete_event": "read_after_write",
@@ -2256,6 +2373,14 @@ UNDO_MAP = {
                           "reopen_step": a["step_done"]})
         if a.get("step_done") and not (a.get("add_step") or a.get("note"))
         else None),
+    # media (2026-09-02): play's inverse is pause; pause has no safe
+    # inverse (resuming an unknown context is a guess); volume restores
+    # the observed prior when the state read captured it.
+    "music.play": lambda a, r, p: ("music.pause", {}),
+    "music.pause": lambda a, r, p: None,
+    "music.volume": lambda a, r, p: (
+        ("music.volume", {"percent": r["prior"]})
+        if isinstance(r, dict) and r.get("prior") is not None else None),
     "goals.create": lambda a, r, p: (
         "goals.set_status", {"goal": r["id"], "status": "paused"}),
     "goals.set_status": lambda a, r, p: (
@@ -2605,7 +2730,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
-                    "goals.list", "goals.show", "web.open", "contacts.find",
+                    "goals.list", "goals.show", "web.open", "contacts.find", "music.devices",
                     "memory.search_facts",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",

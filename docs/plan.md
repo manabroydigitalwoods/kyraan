@@ -199,6 +199,14 @@ alias-writes a separate decision.
   Normalized contact schema is provider-neutral so a second provider
   (iCloud) slots in *if* it ever clears its own gate.
 
+**Spotify — governance round held + BUILT 2026-09-02.** Official Web
+API; playback on Connect devices reaches the Echos without any Alexa
+API. Owner's decisions: play/pause auto (the registry's named
+MEDIA_AUTO_EXEMPT — the one ceremony-guarded exception to
+no-auto-writes), volume auto ≤70% / quiet-hours ≤40% / confirm above,
+any account device targetable. Alexa Media Player (HA, unofficial)
+remains open for announcements — owner-installed HACS step first.
+
 **Gated — each needs its own governance round (a `Decide:` line) before design**
 - WhatsApp (unofficial automation risks banning the owner's personal
   number — product decision, not an estimate line), Slack + GitHub (work

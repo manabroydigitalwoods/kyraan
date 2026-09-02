@@ -50,6 +50,15 @@ class ToolSpec:
     mcp_name: str = ""
 
 
+# The ONE exemption from the no-auto-writes rule, made here in code as
+# the rule's own comment demands (owner decision, 2026-09-02): media
+# playback is transient, reversible, and AUDIBLE — the owner hears
+# exactly what it did, which is verification no confirm dialog matches.
+# Volume keeps an executor-level confirm above 70% (40% in quiet
+# hours). Nothing else joins this set without the same ceremony.
+MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause", "music.volume"})
+
+
 def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:
     if spec.permission not in _PERMISSIONS:
         raise ValueError(f"tool {name!r}: unknown permission {spec.permission!r}")
@@ -58,7 +67,8 @@ def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:
     # The hard rule: a write/notify tool with auto permission must be
     # impossible, not discouraged. Relaxing this for a specific tool is an
     # explicit Phase 4 decision, made here, in code review — never by config.
-    if spec.side_effects in ("write", "notify") and spec.permission == "auto":
+    if (spec.side_effects in ("write", "notify") and spec.permission == "auto"
+            and name not in MEDIA_AUTO_EXEMPT):
         raise ValueError(
             f"tool {name!r}: side_effects={spec.side_effects!r} requires permission "
             "'confirm' (or 'disabled') — auto write tools are forbidden"

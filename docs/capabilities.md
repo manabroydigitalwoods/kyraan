@@ -107,6 +107,14 @@ scheduled runs get read-only tools by construction.
 - `routes.eta` — distance + duration with live traffic (Google Routes primary,
   TomTom fallback).
 
+### Music (Spotify)
+- `music.play` / `pause` / `volume` / `devices` — playback on any of the
+  owner's Spotify Connect devices, **Echos included** (no Alexa API
+  needed). Play/pause are the ONE named exemption from the
+  every-write-confirms rule (owner decision 2026-09-02 — audible
+  actions verify themselves); volume confirms above 70% (40% in quiet
+  hours); receipts re-read the player state. Owner-only.
+
 ### Home control
 - `home.get_state` / `turn_on` / `turn_off`, `switch.ac` — Home Assistant, via
   an explicit entity allowlist (currently: the bedroom AC plug + its sensors).
