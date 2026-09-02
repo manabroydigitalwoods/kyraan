@@ -198,3 +198,42 @@ def test_person_note_registers_person_and_aliases(tmp_path, monkeypatch):
 def test_typed_notes_carry_their_type_as_an_entity():
     p = notes.parse_note("---\ntype: event\ndate: 2026-10-20\n---\n# Trip\nGoing.", "Kyraan/e.md")
     assert p["meta"]["type"] == "event"
+
+
+OBSIDIAN_LISTS = """---
+type: milestone
+name: 1st wear sree krishna dress
+tags:
+  - milestone
+  - family
+date: 2026-09-02
+people:
+  - Kiaan Roy
+---
+# 1st wear sree krishna dress
+Today his mom dressed him up as lord krishna.
+"""
+
+
+def test_obsidian_block_lists_and_people_property(monkeypatch):
+    from kyraan.store import persons
+    monkeypatch.setattr(persons, "name_map", lambda: {
+        "kiaan": "kiaan", "ruma": "ruma", "owner": "owner"})
+    p = notes.parse_note(OBSIDIAN_LISTS, "Kyraan/milestone/kiaan/x.md")
+    assert p["tags"] == ["family", "milestone"]
+    assert p["meta"]["people"] == ["Kiaan Roy"]
+    # "Kiaan Roy" resolves to the existing kiaan (unique first name) —
+    # and the folder segment would have linked him anyway
+    assert notes.link_people(p, "Kyraan/milestone/kiaan/x.md") == ["kiaan"]
+    assert notes.link_people(notes.parse_note("# x\nnothing", "a.md"),
+                             "Kyraan/milestone/kiaan/a.md") == ["kiaan"]
+
+
+def test_resolve_name_never_guesses_between_two(monkeypatch):
+    nm = {"kiaan": "kiaan", "kiaan_sen": "kiaan_sen", "kiaan sen": "kiaan_sen"}
+    assert notes._resolve_name(nm, "Kiaan Roy") is None      # two 'kiaan' ids? no: one key
+    nm2 = {"ruma": "ruma", "ruma_das": "ruma_das"}
+    assert notes._resolve_name(nm2, "Ruma Roy") is None       # two Rumas: no guess
+    nm3 = {"ruma": "ruma", "kiaan": "kiaan", "owner": "owner"}
+    assert notes._resolve_name(nm3, "Ruma Roy") == "ruma"     # one Ruma: resolves
+    assert notes._resolve_name({"owner": "owner"}, "Manab Roy") is None

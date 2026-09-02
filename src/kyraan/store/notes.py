@@ -71,6 +71,15 @@ def _under(rel: str, folders: list) -> bool:
     return any(rel == f or rel.startswith(f + "/") for f in folders)
 
 
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(v) for v in value]
+    return [x.strip().strip("\"'") for x in str(value).strip("[]").split(",")
+            if x.strip()]
+
+
 def parse_note(text: str, rel_path: str) -> dict:
     """Frontmatter (title/tags/date/aliases), body, wikilinks, tags."""
     meta: dict = {}
@@ -78,14 +87,27 @@ def parse_note(text: str, rel_path: str) -> dict:
     m = _FRONTMATTER.match(text)
     if m:
         body = text[m.end():]
+        current = None
         for line in m.group(1).splitlines():
-            if ":" in line:
+            item = re.match(r"^\s+-\s*(.*)$", line)
+            if item and current:
+                # Obsidian writes list properties as YAML block lists
+                # (live 2026-09-02: a milestone's people: list was lost
+                # and linked nobody)
+                meta[current] = (meta.get(current) or []) + [
+                    item.group(1).strip().strip("\"'[]")]
+                continue
+            if ":" in line and not line.startswith((" ", "\t")):
                 k, v = line.split(":", 1)
-                meta[k.strip().lower()] = v.strip().strip("\"'")
+                current = k.strip().lower()
+                v = v.strip().strip("\"'")
+                meta[current] = ([x.strip().strip("\"'") for x in
+                                  v.strip("[]").split(",") if x.strip()]
+                                 if v.startswith("[") else v)
     title = meta.get("title") or Path(rel_path).stem.replace("_", " ")
     links = [l.strip() for l in _WIKILINK.findall(body) if l.strip()]
     tags = [t.lower() for t in _TAG.findall(body)]
-    for raw_tag in str(meta.get("tags", "")).strip("[]").split(","):
+    for raw_tag in _as_list(meta.get("tags")):
         raw_tag = raw_tag.strip().strip("#").lower()
         if raw_tag:
             tags.append(raw_tag)
@@ -138,7 +160,7 @@ def chunk_note(body: str) -> list:
     return chunks or [body[:CHUNK_CHARS]]
 
 
-def link_people(parsed: dict) -> list:
+def link_people(parsed: dict, rel: str = "") -> list:
     """Persons the note is ABOUT — registry-bounded: whole-word names or
     aliases in the body, plus [[wikilinks]] that resolve. Nothing the
     registry doesn't know can ever tag a note."""
@@ -154,11 +176,38 @@ def link_people(parsed: dict) -> list:
             continue
         if len(name) >= 3 and re.search(rf"\b{re.escape(name)}\b", low):
             found.append(pid)
-    for link in parsed["links"]:
-        pid = nm.get(link.lower()) or nm.get(link.lower().replace(" ", "_"))
+    candidates = list(parsed["links"]) + _as_list(parsed["meta"].get("people"))
+    for cand in candidates:
+        pid = _resolve_name(nm, cand)
+        if pid and pid != "owner" and pid not in found:
+            found.append(pid)
+    for seg in Path(rel).parts[:-1]:
+        # a folder named after a person (milestone/kiaan/…) IS a signal
+        pid = _resolve_name(nm, seg)
         if pid and pid != "owner" and pid not in found:
             found.append(pid)
     return sorted(found)
+
+
+def _resolve_name(nm: dict, raw: str) -> str | None:
+    """Registry resolution for a name in any form: exact key, underscored,
+    or — when unambiguous — its first word ("Kiaan Roy" -> kiaan when
+    exactly one registry key is "kiaan"). Never guesses between two."""
+    low = str(raw or "").strip().lower()
+    if not low:
+        return None
+    hit = nm.get(low) or nm.get(low.replace(" ", "_"))
+    if hit:
+        return hit
+    first = low.split()[0] if " " in low else ""
+    if first and len(first) >= 3:
+        # every identity whose ANY name starts with that first word —
+        # two Kiaans in the registry means no guess at all
+        ids = {pid for key, pid in nm.items()
+               if key.replace("_", " ").split()[0] == first}
+        if len(ids) == 1:
+            return ids.pop()
+    return None
 
 
 def _slug(name: str) -> str:
@@ -190,18 +239,24 @@ def register_person_note(parsed: dict, rel: str) -> str | None:
     except Exception:
         return None
     name = str(parsed["meta"].get("name") or parsed["title"]).strip()
-    pid = _slug(name)
-    if not pid or pid == "owner" or len(name) < 2:
+    if len(name) < 2:
         return None
     try:
-        existing = {p[0] for p in persons.list_persons()}
-        if pid not in existing:
+        # RESOLVE FIRST (live 2026-09-02: "Kiaan Roy" and "Ruma Roy" notes
+        # created kiaan_roy and ruma_roy beside the real kiaan and ruma).
+        # An existing identity gains the note's full name as an alias;
+        # only a genuinely unknown name creates a person.
+        pid = _resolve_name(persons.name_map(), name)
+        if pid == "owner":
+            return None
+        if not pid:
+            pid = _slug(name)
+            if not pid or pid == "owner":
+                return None
             persons.enroll(pid, None, "none", None)
             log_event("person_registered_from_note", person=pid, path=rel)
-        aliases = [a.strip().strip("[]\"'") for a in
-                   str(parsed["meta"].get("aliases", "")).strip("[]").split(",")]
-        for alias in [name] + aliases:
-            if alias and _slug(alias) != pid:
+        for alias in [name] + _as_list(parsed["meta"].get("aliases")):
+            if alias and _slug(alias) != pid and alias.lower() != pid:
                 persons.add_alias(pid, alias)
         return pid
     except Exception as exc:
@@ -221,7 +276,7 @@ def _exposure(parsed: dict, flags: list, rel: str = "") -> str:
     return "cloud_ok"
 
 
-def index_file(chat_id: int, root: Path, path: Path) -> str:
+def index_file(chat_id: int, root: Path, path: Path, force: bool = False) -> str:
     """Index one note. Returns 'unchanged' | 'indexed' | 'skipped'."""
     rel = str(path.relative_to(root))
     try:
@@ -235,7 +290,7 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
                WHERE chat_id = %s AND kind = 'note' AND source_path = %s
                      AND suppressed_by = '{}' ORDER BY updated_at DESC LIMIT 1""",
             (chat_id, rel)).fetchone()
-    if row and row[1] == sha:
+    if row and row[1] == sha and not force:
         return "unchanged"
     parsed = parse_note(raw.decode("utf-8", errors="replace"), rel)
     if len(parsed["body"]) < 12:
@@ -253,7 +308,7 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
     except Exception:
         vectors = [None] * len(chunks)
     doc_id = _note_uuid(chat_id, rel, sha)
-    people = link_people(parsed)
+    people = link_people(parsed, rel)
     entities = sorted(set(parsed["links"] + [f"#{t}" for t in parsed["tags"]]))
     note_type = str(parsed["meta"].get("type", "")).strip().lower()
     if note_type:
@@ -302,7 +357,7 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
     return "indexed"
 
 
-def sync(chat_id: int, root: Path | None = None) -> dict:
+def sync(chat_id: int, root: Path | None = None, force: bool = False) -> dict:
     """Walk the vault; index changed notes; suppress deleted ones."""
     root = root or vault_root()
     if root is None:
@@ -322,7 +377,7 @@ def sync(chat_id: int, root: Path | None = None) -> dict:
             continue  # outside the allowlist: does not exist for Kyraan
         seen.add(rel)
         try:
-            counts[index_file(chat_id, root, path)] += 1
+            counts[index_file(chat_id, root, path, force=force)] += 1
         except Exception as exc:
             log_event("note_index_failed", path=rel, error=str(exc)[:120])
             counts["skipped"] += 1
