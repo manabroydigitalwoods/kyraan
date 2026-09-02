@@ -63,6 +63,21 @@
 
 * { box-sizing: border-box; }
 
+/* The notched corner's missing side. clip-path cuts the corner off but
+   paints nothing along the cut, so every box's border simply stopped on
+   either side of a dark triangle (owner, 2026-09-03: "all boxes have a
+   top-right corner design issue"). This gradient is a 1px diagonal,
+   drawn just inside the cut, sized to each box's notch. */
+:root {
+  --notch-edge: linear-gradient(to top right,
+    transparent calc(50% - 1.7px), var(--line-hot) calc(50% - 1.7px),
+    var(--line-hot) calc(50% - 0.3px), transparent calc(50% - 0.3px));
+}
+/* A hidden element is hidden. `.console { display: flex }` outranked the
+   browser's own [hidden] rule, so the overview's parked schedule console
+   drew as an empty frame at the bottom of the page. */
+[hidden] { display: none !important; }
+
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -240,16 +255,19 @@ main {
     linear-gradient(var(--accent), var(--accent)),
     linear-gradient(var(--accent), var(--accent)),
     linear-gradient(var(--accent), var(--accent)),
-    linear-gradient(var(--accent), var(--accent));
+    linear-gradient(var(--accent), var(--accent)),
+    var(--notch-edge);
   background-repeat: no-repeat;
   background-position:
     left top, left top,            /* ┌ */
     left bottom, left bottom,      /* └ */
-    right bottom, right bottom;    /* ┘  (top-right is the notch) */
+    right bottom, right bottom,    /* ┘  (top-right is the notch) */
+    right top;                     /* the notch's own edge */
   background-size:
     11px 1px, 1px 11px,
     11px 1px, 1px 11px,
-    11px 1px, 1px 11px;
+    11px 1px, 1px 11px,
+    11px 11px;
   clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%);
 }
 .console.span2 { grid-column: span 2; }
@@ -655,6 +673,8 @@ footer::before {
   border: 1px solid var(--line-hot); background: var(--panel);
   clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 0 100%);
   overflow: hidden;
+  background-image: var(--notch-edge); background-repeat: no-repeat;
+  background-position: right top; background-size: 14px 14px;
 }
 .hub-title { padding: 14px 0 2px; text-align: center; }
 .hub-name {
@@ -736,6 +756,8 @@ footer::before {
   background: var(--panel); border: 1px solid var(--line-hot);
   box-shadow: 0 6px 18px rgba(0, 0, 0, .45);
   clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 9px, 100% 100%, 0 100%);
+  background-image: var(--notch-edge); background-repeat: no-repeat;
+  background-position: right top; background-size: 9px 9px;
 }
 .pick.open .pick-menu { display: flex; }
 .pick.open .pick-btn { color: var(--accent); border-color: var(--accent); }
@@ -777,6 +799,8 @@ footer::before {
   box-shadow: 0 0 18px var(--glow), 0 8px 24px rgba(0,0,0,.5);
   clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%);
   font-size: 11.5px;
+  background-image: var(--notch-edge); background-repeat: no-repeat;
+  background-position: right top; background-size: 11px 11px;
 }
 .hub .turn-card { width: 300px; top: 8px; right: 8px; }
 .tc-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
@@ -871,6 +895,19 @@ footer::before {
   .sector .sector-name { display: none; }
   .sector.on { border-left-color: transparent; border-bottom-color: var(--accent); }
 
+  /* Smaller type everywhere on a phone (owner: "overall font can be
+     smaller for mobile view"): 13px was a desktop reading distance. The
+     absolute sizes on chrome come down with it. */
+  body { font-size: 11.5px; }
+  .console h2 { font-size: 10px; }
+  .console h2 .verdict { font-size: 9.5px; }
+  .tag { font-size: 10px; }
+  label { font-size: 10.5px; }
+  .note, .sub, .hint { font-size: 10.5px; }
+  .figure { font-size: 18px; }
+  .lamp .detail, .kv, .census-row, .finding { font-size: 10.5px; }
+  input, select, button { padding: 2px 7px; }
+  .row { padding: 2px 8px; }
   main { padding: 6px; scrollbar-gutter: auto; }
   .grid { grid-template-columns: minmax(0, 1fr); }
   .console.span2, .console.span4 { grid-column: span 1; }
