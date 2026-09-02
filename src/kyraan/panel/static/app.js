@@ -599,6 +599,176 @@ async function refreshGraph(reason) {
   }
 }
 
+/* The turn card. Every stream event is stamped with a turn_id, so a
+   whole turn can be assembled live into one card on the canvas: what was
+   asked (the user's words, from the trace via /api/turn — one fetch per
+   turn), each step as it happens, what came back, and the effort — tokens,
+   cost, wall time, and any corrections the rails had to make. Nothing is
+   inferred: a step is an event, an effort figure is a sum of events. */
+const CARD_LINGER_MS = 12000;
+const CORRECTION_KINDS = new Set([
+  "agent_contract_corrected", "agent_tier_fallback", "agent_false_success_corrected",
+  "agent_deflection_corrected", "agent_referent_corrected", "tool_loop_detected",
+  "web_search_budget", "model_call_error", "agent_all_tiers_failed",
+]);
+const turnCard = { turnId: null, steps: [], totals: null, asked: "", replied: "",
+                   startedAt: 0, endedAt: 0, pinned: false, timer: null, host: null };
+
+function cardHost() {
+  return currentView === "memory" ? document.querySelector("#view-memory .starfield")
+       : currentView === "overview" ? document.querySelector(".hub") : null;
+}
+
+function newTurn(turnId) {
+  turnCard.turnId = turnId;
+  turnCard.steps = [];
+  turnCard.totals = { model_calls: 0, tools: 0, input_tokens: 0, output_tokens: 0,
+                      cost_usd: 0, model_ms: 0, corrections: 0 };
+  turnCard.asked = ""; turnCard.replied = "";
+  turnCard.startedAt = performance.now(); turnCard.endedAt = 0;
+  turnCard.pinned = false;
+  clearTimeout(turnCard.timer);
+  // The user's words are in the trace, not the events: fetch them once.
+  api("/api/turn?id=" + encodeURIComponent(turnId)).then((detail) => {
+    if (turnCard.turnId !== turnId) return;
+    const start = (detail.records || []).find((r) => r.kind === "turn_start");
+    if (start && start.user_text) { turnCard.asked = start.user_text; renderTurnCard(); }
+  }).catch(() => {});
+}
+
+function trackTurn(event) {
+  const turnId = event.turn_id;
+  if (!turnId) return;
+  if (turnId !== turnCard.turnId) newTurn(turnId);
+  const t = turnCard.totals;
+  const kind = event.kind || "";
+  let step = null;
+
+  if (kind === "model_call") {
+    t.model_calls++;
+    t.input_tokens += event.input_tokens || 0;
+    t.output_tokens += event.output_tokens || 0;
+    t.cost_usd += event.cost_usd || 0;
+    t.model_ms += event.latency_ms || 0;
+    step = { phase: "think", text: `${event.model || event.provider || "model"} · ${event.tier || ""}`.trim(),
+             detail: `${event.input_tokens ?? "?"} in · ${event.output_tokens ?? "?"} out · ${event.latency_ms ?? "?"}ms` };
+  } else if (kind === "episode_rag") {
+    step = { phase: "got", text: `recall → ${event.injected ?? 0} episodes`,
+             detail: event.best_sim != null ? `best match ${Number(event.best_sim).toFixed(2)}` : "" };
+  } else if (kind === "agent_tool_call" && event.tool) {
+    t.tools++;
+    step = { phase: "try", text: event.tool, detail: String(event.consider || "").slice(0, 160) };
+  } else if (kind === "tool_call" && event.tool) {
+    step = { phase: "try", text: `${event.tool} ${compactArgs(event.args)}`.trim(), detail: "" };
+  } else if (kind === "tool_result" && event.tool) {
+    step = { phase: "got", text: event.ok ? `${event.tool} → ok · ${event.duration_ms ?? "?"}ms`
+                                          : `${event.tool} → failed`,
+             detail: event.ok ? "" : String(event.error || "").slice(0, 160) };
+  } else if (CORRECTION_KINDS.has(kind)) {
+    t.corrections++;
+    step = { phase: "fix", text: kind.replace(/_/g, " "),
+             detail: String(event.reason || event.error || event.draft || "").slice(0, 160) };
+  } else if (kind === "agent_reply") {
+    step = { phase: "reply", text: `replied · ${event.steps ?? "?"} steps · ${event.tier || ""}`.trim(), detail: "" };
+    turnCard.endedAt = performance.now();
+    api("/api/turn?id=" + encodeURIComponent(turnId)).then((detail) => {
+      if (turnCard.turnId !== turnId) return;
+      const end = (detail.records || []).find((r) => r.kind === "turn_end");
+      if (end && end.reply) { turnCard.replied = end.reply; renderTurnCard(); }
+    }).catch(() => {});
+    if (!turnCard.pinned) {
+      clearTimeout(turnCard.timer);
+      turnCard.timer = setTimeout(() => { if (!turnCard.pinned) hideTurnCard(); }, CARD_LINGER_MS);
+    }
+  }
+  if (step) { step.at = new Date(); turnCard.steps.push(step); }
+  renderTurnCard();
+}
+
+function hideTurnCard() {
+  const card = $("turn-card");
+  if (card) card.remove();
+}
+
+function renderTurnCard() {
+  const host = cardHost();
+  if (!host || !turnCard.turnId) return;
+  let card = $("turn-card");
+  if (!card) {
+    card = el("div", "turn-card");
+    card.id = "turn-card";
+    card.addEventListener("mouseenter", () => clearTimeout(turnCard.timer));
+    card.addEventListener("mouseleave", () => {
+      if (turnCard.endedAt && !turnCard.pinned) {
+        turnCard.timer = setTimeout(hideTurnCard, CARD_LINGER_MS / 2);
+      }
+    });
+  }
+  if (card.parentElement !== host) host.appendChild(card);
+  clear(card);
+
+  const head = el("div", "tc-head");
+  head.appendChild(el("span", "tc-title", turnCard.endedAt ? "turn" : "turn · live"));
+  const idTag = el("span", "tag literal", turnCard.turnId.slice(0, 8));
+  idTag.title = "open in forensics";
+  idTag.style.cursor = "pointer";
+  idTag.addEventListener("click", () => { showView("turns"); showTurn(turnCard.turnId); });
+  head.appendChild(idTag);
+  const pin = el("button", "tc-btn", turnCard.pinned ? "unpin" : "pin");
+  pin.addEventListener("click", () => {
+    turnCard.pinned = !turnCard.pinned; clearTimeout(turnCard.timer); renderTurnCard();
+  });
+  head.appendChild(pin);
+  const close = el("button", "tc-btn", "\u00d7");
+  close.addEventListener("click", hideTurnCard);
+  head.appendChild(close);
+  card.appendChild(head);
+
+  if (turnCard.asked) {
+    const asked = el("div", "tc-asked", turnCard.asked.slice(0, 200));
+    asked.title = turnCard.asked;
+    card.appendChild(asked);
+  }
+
+  const steps = el("ol", "tc-steps");
+  for (const step of turnCard.steps) {
+    const li = el("li", "tc-step " + step.phase);
+    li.appendChild(el("span", "tc-phase", step.phase));
+    const body = el("span", "tc-text", step.text);
+    if (step.detail) body.title = step.detail;
+    li.appendChild(body);
+    if (step.detail) li.appendChild(el("div", "tc-detail", step.detail));
+    steps.appendChild(li);
+  }
+  card.appendChild(steps);
+
+  if (turnCard.replied) {
+    const replied = el("div", "tc-replied", turnCard.replied.slice(0, 220));
+    replied.title = turnCard.replied;
+    card.appendChild(replied);
+  }
+
+  // Effort: sums of the turn's own events, nothing estimated.
+  const t = turnCard.totals;
+  const wall = ((turnCard.endedAt || performance.now()) - turnCard.startedAt) / 1000;
+  const effort = el("div", "tc-effort");
+  const cells = [
+    [`${t.model_calls}`, "model calls"], [`${t.tools}`, "tools"],
+    [`${(t.input_tokens + t.output_tokens) >= 1000 ? ((t.input_tokens + t.output_tokens) / 1000).toFixed(1) + "k" : t.input_tokens + t.output_tokens}`, "tokens"],
+    [`$${t.cost_usd.toFixed(4)}`, "cost"],
+    [`${(t.model_ms / 1000).toFixed(1)}s`, "model time"],
+    [`${wall.toFixed(1)}s`, "wall"],
+  ];
+  if (t.corrections) cells.push([`${t.corrections}`, "corrections"]);
+  for (const [value, label] of cells) {
+    const cell = el("div", "tc-cell" + (label === "corrections" ? " warn" : ""));
+    cell.appendChild(el("b", null, value));
+    cell.appendChild(el("span", null, label));
+    effort.appendChild(cell);
+  }
+  card.appendChild(effort);
+}
+
 async function loadHub() {
   try {
     const graph = await ensureGraph();
@@ -1279,6 +1449,7 @@ function brainActivate(event) {
   const kind = event.kind || "";
   const who = personForChat(event.chat_id);
   if (STORE_CHANGE_KINDS.has(kind)) scheduleGraphRefresh(kind);
+  trackTurn(event);
 
   if (kind === "model_call") {
     // Thinking reads its facts about you: a few pulses out along the
@@ -3384,6 +3555,7 @@ function showView(name, options = {}) {
   if (name === "memory") restartBrain();
   else if (brain.raf) { cancelAnimationFrame(brain.raf); brain.raf = null; }
   if (name === "overview") { drawHub(); }
+  if (turnCard.turnId && $("turn-card")) renderTurnCard();
   else if (hub.raf) { cancelAnimationFrame(hub.raf); hub.raf = null; }
   if (name === "host") { drawHostGraph(); }
   else if (hostState.raf) { cancelAnimationFrame(hostState.raf); hostState.raf = null; }

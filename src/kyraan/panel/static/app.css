@@ -773,3 +773,45 @@ footer::before {
   text-transform: lowercase; text-shadow: none;
 }
 #view-memory.top-hidden .sector-console > .controls { display: none; }
+
+/* --------------------------------------------------------- turn card */
+/* A turn assembling itself on the canvas: asked, each step, what came
+   back, and the effort. HUD frame, top-right, out of the graph's way. */
+.turn-card {
+  position: absolute; top: 10px; right: 10px; z-index: 5; width: 360px;
+  max-height: calc(100% - 20px); overflow-y: auto;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+  border: 1px solid var(--accent); padding: 8px 10px 10px;
+  box-shadow: 0 0 18px var(--glow), 0 8px 24px rgba(0,0,0,.5);
+  clip-path: polygon(0 0, calc(100% - 11px) 0, 100% 11px, 100% 100%, 0 100%);
+  font-size: 11.5px;
+}
+.hub .turn-card { width: 300px; top: 8px; right: 8px; }
+.tc-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.tc-title { color: var(--accent); letter-spacing: .18em; text-transform: uppercase; font-size: 10.5px;
+            text-shadow: 0 0 7px var(--glow); }
+.tc-btn { margin-left: auto; font-size: 9.5px; padding: 0 7px; }
+.tc-btn + .tc-btn { margin-left: 0; }
+.tc-asked { color: var(--text); border-left: 2px solid var(--accent); padding-left: 8px;
+            margin: 4px 0 8px; white-space: pre-wrap; }
+.tc-asked::before { content: "asked  "; color: var(--dim); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+.tc-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.tc-step { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 2px 0;
+           border-bottom: 1px solid var(--line); }
+.tc-phase { flex: 0 0 40px; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
+.tc-step.try .tc-phase   { color: var(--accent); }
+.tc-step.got .tc-phase   { color: var(--ok); }
+.tc-step.think .tc-phase { color: var(--warn); }
+.tc-step.reply .tc-phase { color: var(--ok); }
+.tc-step.fix .tc-phase   { color: var(--bad); }
+.tc-text { flex: 1 1 auto; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-detail { flex: 0 0 100%; padding-left: 48px; color: var(--dim); font-size: 10.5px; white-space: normal; }
+.tc-replied { color: var(--text); border-left: 2px solid var(--ok); padding-left: 8px; margin: 8px 0 4px;
+              white-space: pre-wrap; }
+.tc-replied::before { content: "replied  "; color: var(--dim); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+.tc-effort { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 10px; margin-top: 8px;
+             border-top: 1px solid var(--line-hot); padding-top: 8px; }
+.tc-cell { display: flex; flex-direction: column; line-height: 1.2; }
+.tc-cell b { font-weight: normal; color: var(--accent); font-size: 13px; font-variant-numeric: tabular-nums; }
+.tc-cell span { color: var(--dim); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
+.tc-cell.warn b { color: var(--bad); }

@@ -595,6 +595,32 @@ control's state listener, so it read the previous state: hiding wrote
 nothing, restoring wrote "hidden" — one step late, for every control in
 that list. It defers a tick now.
 
+**The turn card** (owner: "when live, show a popup: what is Kyraan trying
+to do, what is he finding, what he got, how much effort, the steps he
+followed"). Every stream event is stamped with a `turn_id`, so a whole
+turn assembles itself live into one card on the canvas, top-right, out
+of the graph's way. What was ASKED comes from the trace — the events do
+not carry the user's words, so the card makes one `/api/turn` fetch when
+a turn begins, and one more when it ends for the REPLY. Between them,
+each step as it happens: THINK (model, tier, tokens in/out, latency), GOT
+(recall → n episodes, best match), TRY (the tool, with the model's own
+WANT/HAVE/NEED line, then the literal args), GOT (ok · ms, or failed with
+the error), FIX (any rail correction — contract, deflection, tier
+fallback, loop guard), REPLY (steps, tier). Then the effort: model calls,
+tools, tokens, cost, model time, wall time, corrections — sums of that
+turn's own events, nothing estimated.
+
+It lingers twelve seconds after the reply, stays while the pointer is on
+it, pins, closes, opens the turn in forensics from its id, and follows
+the reader between the brain and the overview hub. A new `turn_id`
+starts a fresh card. Built node by node — the no-HTML-from-data rule
+holds for the card as for everything else, and the card is made entirely
+of event text.
+
+Proven on a real turn id with a synthetic eight-event sequence stamped
+onto it: asked and replied text from the real trace, phases in order,
+effort cells summed, pin/close/follow/reset each measured.
+
 **New memories appear without a reload** (owner: "do I need to reload the
 page to see new memories?"). The answer was yes: the graph was fetched
 once per page load and the server memoised it for 30s, so a fact promoted
