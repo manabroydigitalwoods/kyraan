@@ -448,6 +448,34 @@ inside the episode loop. 0.55s once that was hoisted, and memoised for
 30s — keyed on demo mode, because without that the cache served whichever
 graph was built first under the wrong label.
 
+**The brain is three-dimensional** (owner's ask, 2026-08-31), and it
+took no library. The simulation gained a z axis — repulsion, springs and
+anchors all run in three dimensions, and each lobe's anchor is spread in
+depth deliberately, because with every anchor on one plane the orbit only
+ever showed a sheet turning edge-on. A camera (yaw, then pitch, then a
+perspective divide) projects it; somas draw back-to-front so the front of
+the brain occludes the back; near neurons are larger and brighter, far
+ones smaller and dimmer. three.js would have been ~600KB of vendored
+script — and the CSP forbids a CDN — to do a rotation matrix and a divide.
+
+Gestures moved with the axis: a plain drag on empty space now ORBITS, a
+node drag inverts the projection at that node's depth so the neuron stays
+under the pointer from any angle, alt-drag pans, shift-drag still bands.
+It turns slowly on its own (`spin`, in the URL like everything else) and
+pauses whenever the pointer is on a neuron, so a tooltip never drifts out
+from under the cursor. The hub on the overview shares the camera — same
+graph, same eye. Every existing feature — hover, select, band, search,
+signals — survived, because they all read projected screen positions.
+
+**Found while proving it in a fresh browser:** the `?token=` handshake
+only fired on `/`. A deep link such as `/brain?token=…` served the page
+(the query token authenticates that one request) and then 401'd its own
+`app.css` and `app.js`, which arrive with no token and no cookie — an
+unstyled page stuck on "connecting…". It had never shown up because every
+earlier check reused a browser that already held the cookie. The
+handshake now fires on any page path and bounces to it with only the
+token removed; a test pins it.
+
 **Memories are readable, not just plottable.** Owner's question, and a
 fair one: memory was the ONE node type the graph never labelled. People
 were named, busy skills were named, and the 43 facts — the actual content
