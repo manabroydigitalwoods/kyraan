@@ -122,6 +122,33 @@ def caption_people(caption: str) -> list:
     return sorted(out)
 
 
+def link_person_to_latest_moment(chat_id: int, person_id: str,
+                                 max_age_min: int = 20):
+    """The owner naming someone in the photo JUST sent ("that is ruma")
+    must stick to the stored moment (live 2026-09-02: the correction
+    was acknowledged and nothing changed). Returns (caption,
+    prior_subjects) or None when no recent moment exists."""
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT id, caption, subject_persons FROM document
+               WHERE chat_id = %s AND kind = 'moment'
+                     AND created_at > now() - make_interval(mins => %s)
+               ORDER BY created_at DESC LIMIT 1""",
+            (chat_id, max_age_min)).fetchone()
+        if row is None:
+            return None
+        doc_id, caption, subjects = row
+        subjects = list(subjects or [])
+        if person_id not in subjects:
+            conn.execute(
+                "UPDATE document SET subject_persons = %s WHERE id = %s",
+                (subjects + [person_id], doc_id))
+            conn.commit()
+    log_event("moment_person_linked", doc_id=str(doc_id),
+              person=person_id)
+    return caption, subjects
+
+
 FILES_DIR = Path(__file__).resolve().parents[3] / "data" / "documents"
 
 

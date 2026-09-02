@@ -316,3 +316,31 @@ def test_moment_captions_link_bare_names_and_self_words(monkeypatch):
     assert documents.caption_people("sunset") == []
     # document TITLES keep the strict rule — a shop is not a person
     assert documents.subjects_from_name("Ruma Stores receipt") == []
+
+
+@pytest.mark.pg
+def test_person_correction_links_the_latest_moment(monkeypatch):
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import documents
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4242")
+        conn.execute(
+            """INSERT INTO document (id, chat_id, kind, caption, text,
+                                     subject_persons)
+               VALUES (gen_random_uuid(), 4242, 'moment', 'garden photo',
+                       'x', ARRAY['kiaan'])""")
+        conn.commit()
+    got = documents.link_person_to_latest_moment(4242, "ruma")
+    assert got == ("garden photo", ["kiaan"])   # prior subjects returned
+    with pg.connection() as conn:
+        subs, = conn.execute("""SELECT subject_persons FROM document
+                                WHERE chat_id = 4242""").fetchone()
+    assert sorted(subs) == ["kiaan", "ruma"]
+    assert documents.link_person_to_latest_moment(9999, "ruma") is None
+    pg.reset_pool_for_tests()

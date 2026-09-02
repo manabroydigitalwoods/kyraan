@@ -793,6 +793,39 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        photo_person = _re.match(
+            r"^\s*(?:she|he|that|this)\s+is\s+([a-z][\w .-]{1,40}?)\s*[.!]?\s*$",
+            raw_text, _re.IGNORECASE)
+        if photo_person:
+            # After-photo person correction (live 2026-09-02: "she is
+            # kiaan's mom" was acknowledged and NOTHING stored changed;
+            # worse, the face matcher had named the adult "kiaan").
+            # Deterministic when the words resolve in the registry: link
+            # the person to the just-stored moment; a contradicting
+            # face match is flagged for the owner. Unresolvable words
+            # ("kiaan's mom") fall through to the loop as before.
+            from kyraan.store import documents as _docs
+            from kyraan.store import persons as _persons
+            pid = _persons.resolve(photo_person.group(1).strip())
+            if pid and pid != "owner":
+                linked = _docs.link_person_to_latest_moment(chat_id, pid)
+                if linked is not None:
+                    caption, prior = linked
+                    _skip_extraction.set(True)
+                    reply = (f'Linked {photo_person.group(1).strip()} to '
+                             f'that photo ("{caption}").')
+                    if prior and pid not in prior:
+                        other = [p for p in prior if p != pid]
+                        if other:
+                            log_event("face_match_suspect",
+                                      matched=other, corrected_to=pid)
+                            reply += (
+                                f"\n\n⚠️ My face match had named "
+                                f"{', '.join(other)} here — if that keeps "
+                                "happening, re-enroll their face from "
+                                "3-4 clear solo photos (\"remember this "
+                                "face as …\").")
+                    return reply
         if (_re.match(r"^\s*(?:show|explain)\s+(?:the\s+)?last\s+turn\s*[?!.]?\s*$"
                       r"|^\s*why\s+did\s+(?:that|the last)\s+turn\s+"
                       r"(?:end|fail|do that)\s*[?!.]?\s*$",
