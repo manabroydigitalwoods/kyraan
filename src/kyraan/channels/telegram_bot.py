@@ -1243,6 +1243,15 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
 
             await _stage("contacts_sync", _contacts_sync)
 
+            async def _vault_sync():
+                from kyraan.store import notes as _notes
+                if _notes.vault_root() is None:
+                    return
+                import asyncio as _aio6
+                await _aio6.to_thread(_notes.sync, _owner_id())
+
+            await _stage("vault_sync", _vault_sync)
+
         job_queue.run_daily(_review_job,
                             time=review_at.replace(tzinfo=local_now().tzinfo),
                             name="self_review", job_kwargs=_DAILY_GRACE)

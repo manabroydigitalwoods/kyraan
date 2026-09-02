@@ -72,6 +72,21 @@ scheduled runs get read-only tools by construction.
   rules (drafted locally, owner-approved into the persona, capped,
   retirable via "retire learned rule …").
 
+### Unified memory search
+- `memory.search` — **one search across everything remembered**: reviewed
+  facts, documents of every kind (cards, PDFs, photo moments, Obsidian
+  notes), and past conversations — merged and kind-labelled, optionally
+  narrowed to one registry person. The single-store tools remain for
+  precision.
+
+### Obsidian vault (notes as memory)
+- Every `.md` under `KYRAAN_VAULT_ROOT` is indexed nightly and on "index
+  my vault": heading-aware chunks, **persons linked through the registry**
+  (whole-word names, aliases, `[[wikilinks]]`), entities from links and
+  `#tags`, an event date from frontmatter or text. Read-only against the
+  vault; changed notes supersede, deleted notes are suppressed; notes with
+  sensitive markers stay local-only.
+
 ### Documents & files
 - Uploaded files (photos of cards, PDFs, etc.) are OCR'd/read, titled cleanly,
   linked to the people they're about (multi-person supported), byte-hash

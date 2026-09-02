@@ -1808,6 +1808,54 @@ async def _contacts_find(chat_id: int, args: dict, raw_text: str):
             "__history__": f"[showed contact details for {name}]"}
 
 
+async def _memory_search(chat_id: int, args: dict, raw_text: str):
+    """ONE search over everything (owner directive 2026-09-02: "retrieve
+    any memory from anywhere"): reviewed facts, documents of every kind
+    (cards, PDFs, photo moments, Obsidian notes), and past
+    conversations — merged, kind-labelled, optionally narrowed to one
+    registry person. Each store keeps its own visibility/exposure rules;
+    this only fans out and merges."""
+    import asyncio as _aio
+
+    query = str(args.get("query", "")).strip()
+    if len(query) < 2:
+        raise kernel.ToolFailed("give words to search for")
+    person = ""
+    if args.get("person"):
+        from kyraan.store import persons as _persons
+        person = _persons.resolve(str(args["person"])) or ""
+        if not person:
+            raise kernel.ToolFailed(f"no registered person matches "
+                                    f"{args['person']!r} — persons.list")
+    out = {"facts": [], "documents": [], "conversations": []}
+    try:
+        facts = await _memory_search_facts(chat_id, {"query": query}, raw_text)
+        out["facts"] = [m for m in facts.get("matches", [])
+                        if not person or person in m.lower()][:6]
+    except Exception as exc:
+        out["facts_note"] = f"facts unavailable ({str(exc)[:60]})"
+    try:
+        from kyraan.store import documents as _docs
+        hits = await _aio.to_thread(_docs.search, chat_id, query, 6, person)
+        out["documents"] = [
+            f"[{h['kind']}: {h['caption']}, {h['date']}] {h['text'][:240]}"
+            for h in hits]
+    except Exception as exc:
+        out["documents_note"] = f"documents unavailable ({str(exc)[:60]})"
+    if not person:
+        try:
+            from kyraan.store import episodes as _eps
+            out["conversations"] = (await _aio.to_thread(
+                _eps.recall, chat_id, query, 3))[:3]
+        except Exception as exc:
+            out["conversations_note"] = f"conversations unavailable ({str(exc)[:60]})"
+    if not any(out[k] for k in ("facts", "documents", "conversations")):
+        out["note"] = ("nothing anywhere matches — say so plainly, never "
+                       "invent; searching again with other words finds "
+                       "nothing more")
+    return out
+
+
 async def _memory_search_facts(chat_id: int, args: dict, raw_text: str):
     """Plan §3c (adopted 2026-08-28): direct search over REVIEWED facts.
     Before this, reviewed facts were only reachable via context assembly
@@ -2307,6 +2355,18 @@ TOOLS = {
                   "school\". The reply is composed locally: contact "
                   "details never pass through you — call it and STOP."),
         "run": _contacts_find,
+    },
+    "memory.search": {
+        "params": '{"query": "<topic words>", "person": "<optional registry person to narrow to>"}',
+        "about": ("THE one search across EVERYTHING remembered — reviewed "
+                  "facts, saved documents and cards, photo moments, the "
+                  "owner's Obsidian notes, and past conversations — "
+                  "\"anything about the Darjeeling trip?\", \"what do we "
+                  "have on Kiaan's school\". Results are kind-labelled: "
+                  "cite the kind and date. Prefer this over the "
+                  "single-store tools when the ask is 'anything, "
+                  "anywhere'."),
+        "run": _memory_search,
     },
     "memory.search_facts": {
         "params": '{"query": "<topic words>"}',
@@ -2918,7 +2978,7 @@ _READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
                     "goals.list", "goals.show", "web.open", "contacts.find", "music.devices",
-                    "memory.search_facts",
+                    "memory.search_facts", "memory.search",
                     "memory.relations", "documents.search", "documents.list",
                     "documents.read", "rules.list", "faces.list",
                     "faces.check_photo", "persons.profile", "persons.list",

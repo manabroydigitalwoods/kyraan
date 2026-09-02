@@ -289,10 +289,12 @@ def _allowed_exposures() -> tuple:
     return ("cloud_ok",)
 
 
-def search(chat_id: int, query: str, k: int = 3) -> list:
+def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
     """Hybrid chunk retrieval: FTS (exact strings, DIGITS) + ANN
     (meaning), chat-scoped, suppression- and exposure-filtered. Returns
-    [{'caption','date','text','sim','fts'}] best-first."""
+    [{'doc_id','kind','caption','date','text','sim','fts'}] best-first.
+    `person` (2026-09-02, unified index) narrows to rows linked to that
+    registry person — the precise-linking model made queryable."""
     import re as _re
 
     from kyraan.memory.engine import _words
@@ -311,19 +313,21 @@ def search(chat_id: int, query: str, k: int = 3) -> list:
                       CASE WHEN %s::vector IS NOT NULL AND c.embedding IS NOT NULL
                            THEN 1 - (c.embedding <=> %s::vector) END AS sim,
                       (%s <> '' AND to_tsvector('english', c.text)
-                                    @@ to_tsquery('english', %s)) AS fts
+                                    @@ to_tsquery('english', %s)) AS fts,
+                      d.kind
                FROM document_chunk c JOIN document d ON d.id = c.document_id
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
                      AND d.exposure = ANY(%s)
+                     AND (%s = '' OR %s = ANY(d.subject_persons))
                ORDER BY fts DESC, sim DESC NULLS LAST
                LIMIT 30""",
             (qvec, qvec, tsquery, tsquery or "x", chat_id,
-             list(_allowed_exposures()))).fetchall()
+             list(_allowed_exposures()), person or "", person or "")).fetchall()
     results = []
-    for doc_id, caption, filename, day, text, sim, fts in rows:
+    for doc_id, caption, filename, day, text, sim, fts, kind in rows:
         if not fts and (sim is None or sim < SEARCH_MIN_SIM):
             continue  # neither arm actually matched
-        results.append({"doc_id": str(doc_id),
+        results.append({"doc_id": str(doc_id), "kind": kind,
                         "caption": caption or filename or "(untitled)",
                         "date": day.isoformat(), "text": text,
                         "sim": float(sim) if sim is not None else None,
