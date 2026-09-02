@@ -245,6 +245,16 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
                       if len(ln.strip()) >= 4), "")
         caption = first[:60]
     doc_id = _doc_uuid(chat_id, text)
+    if not entities and kind in ("pdf", "text", "docx", "file"):
+        # photos bring entities from the vision pass; file uploads get
+        # the same hubs from a local-tier extraction (2026-09-02), so a
+        # PDF invoice connects through its vendor and #invoice like a
+        # photographed one. Contained: a failed extraction is just none.
+        try:
+            from kyraan.store import entities as _entities
+            entities = _entities.extract(text, hint=caption)
+        except Exception:
+            entities = []
     from kyraan.store.episodes import sensitivity_flags
     flags = sensitivity_flags(text)
     try:

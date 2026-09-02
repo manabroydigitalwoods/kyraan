@@ -1168,6 +1168,20 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # A tag becomes a node only when it joins notes: two or more sharing
     # #friend is a grouping worth a hub; one note's private tag is a
     # detail for its Selection panel, not a neuron.
+    # THE CORE (owner 2026-09-02: "put Kyraan at the centre of the brain,
+    # from where signals trigger and are received"). One node for Kyraan
+    # itself, wired to every skill it acts through (signals out), to the
+    # owner it talks with (signals in and out), and to every scheduled
+    # thing it will fire. With that many edges the physics centres it.
+    nodes.append({"id": "k:kyraan", "type": "core", "label": "kyraan",
+                  "lobe": "core", "group": "core"})
+    core_targets = [n["id"] for n in nodes
+                    if n["type"] in ("skill", "task") or n["id"] == "p:owner"]
+    for target in core_targets:
+        edges.append({"a": "k:kyraan", "b": target,
+                      "kind": "acts" if not target.startswith("p:") else "talks",
+                      "weight": 0.5 if target.startswith("s:") else 0.4})
+
     for tag, owners in tag_owners.items():
         if len(owners) < 2:
             continue
