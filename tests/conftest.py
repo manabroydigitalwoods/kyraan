@@ -115,3 +115,17 @@ def _isolated_data_stores(monkeypatch, tmp_path):
     # file path above.
     from kyraan.store import persons as _persons_store
     _persons_store._cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _never_flushall(monkeypatch):
+    """The suite shares one Redis with the LIVE bot (db 0). FLUSHALL from
+    a test wiped the owner's conversation window mid-chat (2026-09-03);
+    tests own db 9 and may flushdb it, nothing more."""
+    try:
+        import redis
+    except ImportError:
+        return
+    def _refuse(self, *a, **k):
+        raise AssertionError("FLUSHALL is forbidden in tests — use flushdb on the test db")
+    monkeypatch.setattr(redis.Redis, "flushall", _refuse, raising=False)

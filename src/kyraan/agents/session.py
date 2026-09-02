@@ -248,8 +248,22 @@ def seed_history_from_log(max_per_chat: int = 40) -> None:
                     text = placeholder
             per_chat[entry["chat_id"]].append((role, text))
     for chat_id, entries in per_chat.items():
-        if not _history[chat_id]:  # never clobber a live conversation
-            _history[chat_id].extend(entries[-max_per_chat:])
+        tail = entries[-max_per_chat:]
+        live = list(_history[chat_id])
+        if not live:
+            _history[chat_id].extend(tail)
+            continue
+        # A live window that is a SUBSET of the log's tail is the log's
+        # tail with a hole in it (live 2026-09-03: a FLUSHALL emptied
+        # Redis mid-chat; the restart found four post-wipe exchanges and
+        # kept the hole — the photo sent 15 minutes earlier stayed
+        # forgotten). The log is the superset of everything the window
+        # ever held, so restoring its tail clobbers nothing; a window
+        # holding anything the log does not is left alone.
+        if set(live) <= set(tail) and len(live) < len(tail):
+            _history[chat_id] = tail
+            log_event("history_restored", chat_id=chat_id,
+                      had=len(live), now=len(tail))
     log_event("history_seeded", chats=len(per_chat))
 
 

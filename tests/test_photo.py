@@ -448,3 +448,25 @@ def test_capture_and_milestone_note_relate_both_ways(monkeypatch):
     by = {d["caption"]: d for d in listing}
     assert by["1st wear sree krishna dress"]["related"] == ["today kiaan with lord shree krishna dressed"]
     pg.reset_pool_for_tests()
+
+
+def test_did_you_save_it_answers_from_the_store(monkeypatch):
+    """Live 2026-09-03: 15 minutes after a photo, "did you save it?" got
+    "what do you mean by it?". The latest capture is the referent."""
+    import asyncio, datetime
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.store import documents
+    cap = {"doc_id": "x", "kind": "moment", "caption": "today kiaan with lord shree krishna dressed",
+           "created": datetime.datetime(2026, 9, 3, 0, 30, tzinfo=datetime.timezone.utc),
+           "subjects": ["kiaan"], "entities": ["Lord Shree Krishna"],
+           "tags": ["#festival", "#milestone"], "related": ["1st wear sree krishna dress"]}
+    monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: cap)
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    for q in ("did you save it?", "Did u save the image?", "links?", "what is it linked to?"):
+        out = asyncio.run(orchestrator.handle_message(1, q))
+        assert out.startswith('Yes — saved as "today kiaan with lord shree krishna dressed"'), q
+        assert 'Linked to: "1st wear sree krishna dress"' in out and "#milestone" in out
+    # nothing recent -> not our rail (the loop would answer)
+    monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: None)
+    assert documents.describe_capture(cap).count("\n") == 4

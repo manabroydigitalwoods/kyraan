@@ -3952,6 +3952,28 @@ $("cost-refresh").addEventListener("click", loadCost);
 $("health-refresh").addEventListener("click", () => loadHealth(true));
 
 initPhosphor();
+
+/* Phone: the status bar tucks itself away (owner, 2026-09-03: "top panel
+   on mobile should be auto hidden"). It shows for a few seconds on load
+   and whenever the handle is tapped, then folds up and gives the brain
+   its 60px. The readouts keep updating underneath; nothing is lost. */
+(function tuckTop() {
+  const handle = $("top-handle");
+  if (!handle || !PHONE.matches) return;
+  const IDLE_MS = 5000;
+  let timer = null;
+  const tuck = () => { document.body.classList.add("top-tucked"); timer = null; };
+  const show = () => {
+    document.body.classList.remove("top-tucked");
+    clearTimeout(timer);
+    timer = setTimeout(tuck, IDLE_MS);
+  };
+  handle.addEventListener("click", () => {
+    if (document.body.classList.contains("top-tucked")) show(); else tuck();
+  });
+  document.querySelector("header").addEventListener("click", show);
+  show();
+})();
 wirePickers();
 wireMemory();
 wireHub();

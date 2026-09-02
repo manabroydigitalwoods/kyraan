@@ -127,9 +127,13 @@ async def test_closure_asks_do_not_persist(redis_confirms):
 # --- P3.4c: a Redis flush loses no spend ----------------------------------
 
 @pytest.mark.pg
-def test_flushall_and_restart_still_know_todays_spend(redis_confirms):
+def test_flush_and_restart_still_know_todays_spend(redis_confirms):
     from kyraan.model_router import router
     router._record_cost(0.42)
-    redis_kv.client().flushall()
+    # flushDB, never flushALL: the suite shares one Redis with the LIVE
+    # bot (db 0) and FLUSHALL wiped its conversation window mid-chat
+    # (live 2026-09-03 00:33: "did you save it?" -> "what do you mean
+    # by it?"). The proof is identical — the ledger never lived in Redis.
+    redis_kv.client().flushdb()
     _restart()
     assert router.today_cost_usd() == 0.42  # the ledger never lived in Redis

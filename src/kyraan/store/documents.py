@@ -161,6 +161,49 @@ def link_person_to_latest_moment(chat_id: int, person_id: str,
     return caption, subjects
 
 
+def latest_capture(chat_id: int, max_age_h: int = 24) -> dict | None:
+    """The photo/file the owner sent most recently, with everything it
+    connects to — the deterministic answer to "did you save it?" / "links?"
+    (live 2026-09-03: asked 15 minutes after a photo, the loop replied
+    "what do you mean by it?"; the capture is the referent, always)."""
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT d.id, d.kind, d.caption, d.created_at, d.subject_persons,
+                      d.entities,
+                      (SELECT array_agg(r.caption) FROM document r
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
+               FROM document d
+               WHERE d.chat_id = %s AND d.suppressed_by = '{}'
+                     AND d.kind IN ('photo', 'moment', 'pdf', 'file', 'docx', 'text')
+                     AND d.created_at > now() - make_interval(hours => %s)
+               ORDER BY d.created_at DESC LIMIT 1""",
+            (chat_id, max_age_h)).fetchone()
+    if row is None:
+        return None
+    doc_id, kind, caption, created, subjects, ents, related = row
+    ents = list(ents or [])
+    return {"doc_id": str(doc_id), "kind": kind, "caption": caption or "(untitled)",
+            "created": created, "subjects": list(subjects or []),
+            "entities": [e for e in ents if not e.startswith("#")],
+            "tags": [e for e in ents if e.startswith("#")],
+            "related": [r for r in (related or []) if r]}
+
+
+def describe_capture(cap: dict) -> str:
+    kind = {"moment": "photo memory", "photo": "document photo"}.get(cap["kind"], cap["kind"])
+    when = cap["created"].astimezone().strftime("%d %b %Y %H:%M") if cap.get("created") else ""
+    lines = [f'Yes — saved as "{cap["caption"]}" ({kind}, {when}).']
+    if cap["subjects"]:
+        lines.append("About: " + ", ".join(cap["subjects"]))
+    if cap["related"]:
+        lines.append("Linked to: " + "; ".join(f'"{r}"' for r in cap["related"]))
+    if cap["entities"]:
+        lines.append("Named things: " + ", ".join(cap["entities"]))
+    if cap["tags"]:
+        lines.append("Filed under: " + " ".join(cap["tags"]))
+    return "\n".join(lines)
+
+
 def claim_latest_moment(chat_id: int, phrase: str, max_age_min: int = 20):
     """The owner captioning the photo JUST sent as theirs ("this is my
     medicine", live 2026-09-03: acknowledged twice, nothing stored

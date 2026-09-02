@@ -796,6 +796,25 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        saved_q = _re.match(
+            r"^\s*(?:did|have|had)\s+(?:you|u)\s+(?:save|store|keep|remember|index|link)(?:d|ed)?\s+"
+            r"(?:it|that|this|them|the\s+(?:photo|image|picture|pic|doc|document|file|screenshot)|my\s+\w+)"
+            r"\s*[?!.]*\s*$"
+            r"|^\s*(?:links?|connections?|relations?)\s*[?!.]*\s*$"
+            r"|^\s*(?:what\s+(?:is|are)\s+(?:it|that|they)\s+(?:linked|connected|related)\s+to)\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
+        if saved_q and kernel.viewer_person() == "owner":
+            # "Did you save it?" / "links?" after a capture (live
+            # 2026-09-03 00:45: a photo sent 15 minutes earlier got
+            # "what do you mean by it?" — the window had been wiped).
+            # The referent is the latest capture, by the store, never
+            # by the model's memory of the conversation. Nothing recent:
+            # the loop answers as before.
+            from kyraan.store import documents as _docs_q
+            cap = _docs_q.latest_capture(chat_id)
+            if cap is not None:
+                _skip_extraction.set(True)
+                return _docs_q.describe_capture(cap)
         photo_mine = _re.match(
             r"^\s*(?:this|that|it|here|these|those)\s+(?:is|are|'s)\s+"
             r"(my\s+[a-z][\w .'-]{1,60}?)\s*[.!]?\s*$",

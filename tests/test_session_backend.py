@@ -122,3 +122,28 @@ def test_redis_down_degrades_to_memory_with_one_event(monkeypatch):
                                          ("user", "more"), ("assistant", "text")]
     assert events.count("session_backend_fallback") == 1  # once, not per op
     redis_kv.reset_for_tests()
+
+
+def test_seed_restores_a_wiped_window_from_the_log(monkeypatch, tmp_path):
+    """Live 2026-09-03: a FLUSHALL emptied Redis mid-chat; the restart
+    found four post-wipe exchanges and kept the hole. A live window that
+    is a subset of the log's tail IS the log's tail with a hole: restore
+    it. A window holding anything the log lacks is left alone."""
+    import json
+    from kyraan.agents import session
+    from kyraan.control_plane import logging_setup
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    log = tmp_path / "chat.jsonl"
+    rows = [("user", "[sent a photo: kiaan as krishna]"), ("assistant", "A photo of kiaan..."),
+            ("user", "did you save it?"), ("assistant", "what do you mean by it?")]
+    log.write_text("\n".join(json.dumps({"chat_id": 77, "role": r, "text": t}) for r, t in rows) + "\n")
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    session._history[77] = rows[2:]                     # the post-wipe window
+    session.seed_history_from_log()
+    assert list(session._history[77]) == rows            # hole filled
+    session._history[78] = [("user", "only live"), ("assistant", "ok")]
+    log.write_text(json.dumps({"chat_id": 78, "role": "user", "text": "older"}) + "\n")
+    session.seed_history_from_log()
+    assert list(session._history[78]) == [("user", "only live"), ("assistant", "ok")]
+    session._history[77] = []
+    session._history[78] = []

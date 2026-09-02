@@ -73,7 +73,9 @@ body {
      the panels scroll. Letting the PAGE scroll dragged the header, the
      sector rail and every console heading off the top together, so the
      one thing you always want visible was the first thing to go. */
-  height: 100vh; overflow: hidden;
+  /* dvh where it exists: on a phone 100vh includes the strip under the
+     browser's toolbar, so the bottom of every sector sat behind it. */
+  height: 100vh; height: 100dvh; overflow: hidden;
   display: flex; flex-direction: column;
   /* Terminals ship one glyph width; keeping ligatures off preserves it. */
   font-variant-ligatures: none;
@@ -813,6 +815,8 @@ footer::before {
    brain; the canvas owns its touches. */
 #mem-canvas, #hub-canvas { touch-action: none; }
 
+#top-handle { display: none; }
+
 /* ------------------------------------------------------------- phone */
 /* One layout model for a 375px screen, in one place. The desktop model
    is "the shell never scrolls, the consoles do": on a phone that crushed
@@ -825,7 +829,22 @@ footer::before {
    jump rule matters here too), and the rail is nine equal slots instead
    of a row that needed 394px of a 375px screen. */
 @media (max-width: 720px) {
-  header { height: 60px; padding: 0 8px; gap: 0; }
+  header {
+    height: 60px; padding: 0 8px; gap: 0;
+    transition: height .22s ease, padding .22s ease, border-color .22s ease;
+  }
+  /* Tucked: the readouts fold up and the brain gets the 60px. The handle
+     is the way back; app.js tucks after a few idle seconds. */
+  body.top-tucked header { height: 0; padding: 0; border-bottom-color: transparent; }
+  #top-handle {
+    display: flex; justify-content: center; align-items: center;
+    height: 14px; flex: 0 0 auto; padding: 0; border: none;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+    color: var(--dim); font-size: 10px; line-height: 1; cursor: pointer;
+  }
+  #top-handle span { transition: transform .22s ease; }
+  body:not(.top-tucked) #top-handle span { transform: rotate(180deg); }
+  main { padding-bottom: calc(6px + env(safe-area-inset-bottom, 0px)); }
   header h1, #phosphor, .stamp, .spacer { display: none; }
   .readouts {
     display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 26px;

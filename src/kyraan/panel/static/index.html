@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <title>Kyraan — mission control</title>
 <meta name="color-scheme" content="dark">
@@ -23,6 +23,10 @@
   </div>
   <span class="stamp" id="stamp">connecting…</span>
 </header>
+
+<!-- Phone only: the tucked header's handle. Tap to bring the readouts
+     back; they tuck themselves away again after a few seconds. -->
+<button id="top-handle" type="button" aria-label="show or hide the status bar"><span>▾</span></button>
 
 <div id="deck">
   <!-- Sector rail: the six consoles, always in the same place, so the
