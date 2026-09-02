@@ -1956,6 +1956,14 @@ function canvasPoint(canvas, event) {
    metaphor for the brain — it is the SAME graph, the same nodes, edges,
    lobes and colours, drawn small. Two drawings of one system that do not
    match teach the reader that neither is the system. */
+/* A synapse's brightness is its cosine: at the floor it is faint, at 0.95
+   it is as bright as the style allows. Structural wires are flat. */
+function edgeStrength(edge) {
+  if (edge.kind !== "synapse" || edge.weight == null) return 1;
+  const span = Math.max(0.05, 0.95 - brain.floor);
+  return 0.45 + 0.55 * Math.min(1, Math.max(0, (edge.weight - brain.floor) / span));
+}
+
 function drawGraph(canvas, view, opts) {
   opts = opts || {};
   const ctx = canvas.getContext("2d");
@@ -1978,7 +1986,8 @@ function drawGraph(canvas, view, opts) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   // Lobe halos — the brain has regions, and they should read as regions.
-  const drawnLabels = [];
+  const drawnLabels = [];   // rects {x, y, w, h} of every label on this frame
+  brain.labelStats = { drawn: 0, skipped: 0 };
   {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
@@ -2015,7 +2024,7 @@ function drawGraph(canvas, view, opts) {
           ly = placed.y - 14 * ratio;
         }
       }
-      drawnLabels.push({ x: lx, y: ly, w: captionWidth });
+      drawnLabels.push({ x: lx, y: ly - 11 * ratio, w: captionWidth, h: 13 * ratio });
       ctx.fillText(caption, lx, ly);
       ctx.globalAlpha = 1;
     }
@@ -2048,9 +2057,10 @@ function drawGraph(canvas, view, opts) {
     const farness = 1 - 0.55 * (depthOf(pa.z) + depthOf(pb.z)) / 2;
     ctx.strokeStyle = edge.contested ? bad
       : (styles.getPropertyValue(style.key).trim() || dim);
+    const strength = edgeStrength(edge);
     ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha)
-                    * lit * farness;
-    ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio;
+                    * lit * farness * strength;
+    ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio * (0.6 + 0.4 * strength);
     if (style.dash) ctx.setLineDash([4 * ratio, 4 * ratio]);
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
@@ -2220,7 +2230,11 @@ function drawGraph(canvas, view, opts) {
     const named = view.scale > 1.7 || node.type === "person"
       || (node.type === "skill" && (node.uses || 0) > 200)
       || selected || (brain.query && brain.matches.has(node.id))
-      || (brain.focusMix > 0.5 && brain.focusSet.has(node.id));
+      // A focused neighbourhood is named only while it is small enough
+      // to read (or zoomed in): the owner's 251 neighbours as text was
+      // a wall, not a label.
+      || (brain.focusMix > 0.5 && brain.focusSet.has(node.id)
+          && (brain.focusSet.size <= 24 || view.scale > 1.7));
     if (node.type === "core" && opts.labels !== false) {
       ctx.font = `${10.5 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = nodeColour(node, 0.95);
@@ -2228,9 +2242,26 @@ function drawGraph(canvas, view, opts) {
       ctx.fillText("K Y R A A N", p.x, p.y + radius + 24 * ratio);
       ctx.textAlign = "start";
     } else if (opts.labels !== false && named) {
+      // No overprinting: a label that would land on one already drawn
+      // this frame is skipped, unless it has been asked for (selected,
+      // hovered, searched). The dense skill lobe printed a dozen names
+      // on top of each other and none of them could be read.
       ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
-      ctx.fillStyle = dim;
-      ctx.fillText(node.label.slice(0, 26), p.x + radius + 4 * ratio, p.y + 3 * ratio);
+      const text_ = node.label.slice(0, 26);
+      const rect = { x: p.x + radius + 4 * ratio, y: p.y - 6 * ratio,
+                     w: ctx.measureText(text_).width, h: 11 * ratio };
+      const wanted = selected || node === brain.hover
+        || (brain.query && brain.matches.has(node.id));
+      const collides = !wanted && drawnLabels.some((r) =>
+        rect.x < r.x + r.w && r.x < rect.x + rect.w && rect.y < r.y + r.h && r.y < rect.y + rect.h);
+      if (collides) {
+        brain.labelStats.skipped++;
+      } else {
+        drawnLabels.push(rect);
+        brain.labelStats.drawn++;
+        ctx.fillStyle = dim;
+        ctx.fillText(text_, rect.x, p.y + 3 * ratio);
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -2246,22 +2277,47 @@ function drawGraph(canvas, view, opts) {
     ctx.setLineDash([]); ctx.globalAlpha = 1;
   }
 
-  if (brain.hover && opts.hover !== false) {
-    const p = toScreen(canvas, brain.hover, view);
-    const label = brain.hover.label.slice(0, 76);
-    ctx.font = `${12 * ratio}px ui-monospace, monospace`;
-    const width = ctx.measureText(label).width + 14 * ratio;
-    let bx = p.x + 12 * ratio;
-    if (bx + width > canvas.width) bx = p.x - 12 * ratio - width;
-    const by = p.y - 27 * ratio;
-    ctx.fillStyle = panel; ctx.globalAlpha = 0.96;
-    ctx.fillRect(bx, by, width, 20 * ratio);
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = nodeColour(brain.hover, 0.85);
-    ctx.lineWidth = ratio;
-    ctx.strokeRect(bx, by, width, 20 * ratio);
-    ctx.fillStyle = text;
-    ctx.fillText(label, bx + 7 * ratio, by + 14 * ratio);
+  // The callout: a hovered neuron's name, or — when the side consoles are
+  // folded, as they are on a phone — the selected neuron's name, type and
+  // wire count, so a tap tells you what you tapped.
+  brain.calloutFor = null;
+  if (opts.hover !== false) {
+    let target = null, lines = [];
+    if (brain.hover) {
+      target = brain.hover; lines = [brain.hover.label.slice(0, 76)];
+    } else if (brain.selection.size === 1 && (brain.sideHidden || PHONE.matches)) {
+      const id = [...brain.selection][0];
+      const node = brain.byId.get(id);
+      if (node && shown.has(id)) {
+        const wires = brain.edges.filter((e) => e.a === id || e.b === id).length;
+        target = node;
+        lines = [node.label.slice(0, 44),
+                 `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap zooms in`];
+      }
+    }
+    if (target) {
+      brain.calloutFor = target.id;
+      const p = toScreen(canvas, target, view);
+      ctx.font = `${(lines.length > 1 ? 11 : 12) * ratio}px ui-monospace, monospace`;
+      const width = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 14 * ratio;
+      const height = (lines.length > 1 ? 34 : 20) * ratio;
+      let bx = p.x + 12 * ratio;
+      if (bx + width > canvas.width) bx = Math.max(4 * ratio, p.x - 12 * ratio - width);
+      let by = p.y - 7 * ratio - height;
+      if (by < 4 * ratio) by = p.y + 12 * ratio;
+      ctx.fillStyle = panel; ctx.globalAlpha = 0.96;
+      ctx.fillRect(bx, by, width, height);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = nodeColour(target, 0.85);
+      ctx.lineWidth = ratio;
+      ctx.strokeRect(bx, by, width, height);
+      ctx.fillStyle = text;
+      ctx.fillText(lines[0], bx + 7 * ratio, by + 14 * ratio);
+      if (lines[1]) {
+        ctx.fillStyle = dim; ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
+        ctx.fillText(lines[1], bx + 7 * ratio, by + 27 * ratio);
+      }
+    }
   }
 
 }
@@ -3098,10 +3154,28 @@ function wireMemory() {
     if (touchState.mode === "one" && touchState.start && touchState.last
         && Math.hypot(touchState.last.x - touchState.start.x,
                       touchState.last.y - touchState.start.y) < 8 * (window.devicePixelRatio || 1)) {
-      // A tap: select what is under the finger, like a click.
+      // A tap: select what is under the finger, like a click. Two taps
+      // within a third of a second zoom into what the neuron is wired to
+      // (its focus set), or fit the whole brain when on empty space.
       const t = event.changedTouches[0];
       const hit = t ? nodeAt(canvas, { clientX: t.clientX, clientY: t.clientY }) : null;
-      brain.selection = hit ? new Set([hit.id]) : new Set();
+      const now = performance.now();
+      const prev = touchState.lastTap;
+      const isDouble = prev && now - prev.t < 340
+        && Math.hypot(touchState.start.x - prev.x, touchState.start.y - prev.y) < 24 * (window.devicePixelRatio || 1);
+      touchState.lastTap = isDouble ? null : { t: now, x: touchState.start.x, y: touchState.start.y };
+      if (isDouble) {
+        if (hit) {
+          brain.selection = new Set([hit.id]);
+          const hood = [...focusSetFor(hit)].map((id) => brain.byId.get(id))
+            .filter((n) => n && brain.showType[n.type]);
+          focusOn(canvas, hood);
+        } else {
+          fitAll();
+        }
+      } else {
+        brain.selection = hit ? new Set([hit.id]) : new Set();
+      }
       renderSelection();
       syncUrl(false);
     }
