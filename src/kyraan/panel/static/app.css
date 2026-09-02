@@ -263,19 +263,6 @@ main {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .console.span4 { grid-column: span 2; }
 }
-@media (max-width: 720px) {
-  .grid { grid-template-columns: minmax(0, 1fr); }
-  .console.span2, .console.span4 { grid-column: span 1; }
-  #deck { flex-direction: column; }
-  #rail {
-    flex: 0 0 auto; flex-direction: row; overflow-x: auto;
-    border-right: none; border-bottom: 1px solid var(--line-hot);
-  }
-  .sector { border-left: none; border-bottom: 3px solid transparent; padding: 6px 12px; }
-  .sector .sector-name { display: none; }
-  #rail-foot { display: none; }
-  .sector.on { border-left-color: transparent; border-bottom-color: var(--accent); }
-}
 .console h2 {
   margin: 0; padding: 5px 10px 4px; font-size: 10.5px; font-weight: normal;
   color: var(--accent); letter-spacing: .2em; text-transform: uppercase;
@@ -613,7 +600,6 @@ footer::before {
   font-size: 8.5px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--dim); opacity: .65;
 }
-@media (max-width: 720px) { #rail-foot { display: none; } }
 
 /* ---------------------------------------------------------- host view */
 
@@ -822,10 +808,113 @@ footer::before {
 /* A phone must not scroll or pinch the page when the finger is on the
    brain; the canvas owns its touches. */
 #mem-canvas, #hub-canvas { touch-action: none; }
-/* On a phone the header cannot hold four readouts on one line. Two lines,
-   still a FIXED height — the jump the desktop rule prevents matters here
-   too. */
+
+/* ------------------------------------------------------------- phone */
+/* One layout model for a 375px screen, in one place. The desktop model
+   is "the shell never scrolls, the consoles do": on a phone that crushed
+   the overview's five consoles to 2px each (bodies 0px) because nothing
+   fits in one screen. So on a phone the overview and host sectors scroll
+   as a page with consoles at their natural height, while the list
+   sectors (stream, turns, schedule, spend, actions) keep scrolling inside
+   their frame — a list is the one thing that still fits the desktop
+   model on a phone. The header is a 2×2 grid at a FIXED height (the
+   jump rule matters here too), and the rail is nine equal slots instead
+   of a row that needed 394px of a 375px screen. */
 @media (max-width: 720px) {
-  header { height: 86px; flex-wrap: wrap; align-content: center; }
-  .readouts { flex-wrap: wrap; row-gap: 4px; }
+  header { height: 60px; padding: 0 8px; gap: 0; }
+  header h1, #phosphor, .stamp, .spacer { display: none; }
+  .readouts {
+    display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 26px;
+    width: 100%; overflow: hidden; align-content: center; row-gap: 2px;
+  }
+  .readout { padding: 0 8px; min-width: 0; }
+  .readout:last-child { border-right: none; }
+  .readout .label { font-size: 8.5px; letter-spacing: .12em; }
+  .readout .value { font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+
+  #deck { flex-direction: column; }
+  #rail {
+    flex: 0 0 auto; flex-direction: row; gap: 0; overflow: hidden;
+    padding: 2px 0 0; border-right: none; border-bottom: 1px solid var(--line-hot);
+  }
+  #rail::before { display: none; }
+  #rail-foot { display: none; }
+  .sector {
+    flex: 1 1 0; min-width: 0; padding: 5px 0 3px; gap: 1px;
+    border-left: none; border-bottom: 3px solid transparent;
+  }
+  .sector svg { width: 16px; height: 16px; }
+  .sector b { font-size: 8px; letter-spacing: 0; }
+  .sector .sector-name { display: none; }
+  .sector.on { border-left-color: transparent; border-bottom-color: var(--accent); }
+
+  main { padding: 6px; scrollbar-gutter: auto; }
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .console.span2, .console.span4 { grid-column: span 1; }
+  .console h2 { padding: 5px 8px 4px; letter-spacing: .14em; gap: 6px; }
+  /* A header line's verdict truncates rather than wrapping the title
+     into four lines ("369 neurons · 923 connections · mesh 0.45"). */
+  .console h2 .verdict {
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 58%;
+  }
+  .console-body { padding: 8px; }
+
+  /* Overview and host: page scroll, natural heights. */
+  #view-overview.on { flex: 0 0 auto; min-height: auto; gap: 8px; }
+  .deckgrid { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; min-height: auto; }
+  .deckcol { min-height: auto; gap: 8px; }
+  .deckcol > .console.grow { flex: 0 0 auto; }
+  .deckcol > .console .console-body.scrolls,
+  #view-overview > .console > .console-body.scrolls { max-height: 200px; }
+  .hub { flex: 0 0 auto; height: 58vh; min-height: 380px; }
+  .hub-title { padding: 10px 0 0; }
+  .hub-name { font-size: 15px; letter-spacing: .3em; }
+  .hub-sub { font-size: 8.5px; letter-spacing: .16em; padding: 0 8px; }
+  #view-host.on { flex: 0 0 auto; min-height: auto; }
+  /* stretch, not start: in a column, start sizes each console to its
+     content — 09 came out 160px narrower than 08 and 10 spilled past the
+     frame. */
+  #view-host .grid { display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto; align-items: stretch; }
+  #view-host .console { width: 100%; min-width: 0; }
+  #view-host .console.tall { min-height: 220px; max-height: 220px; }
+  .matrix { grid-template-columns: 1fr; }
+  .gauges { grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+
+  /* Rows: the kind column stops hogging 178px of a 359px row. */
+  .row { gap: 7px; padding: 3px 8px; }
+  .kind { min-width: 0; max-width: 36%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .num, .undo-state, .routine-status { min-width: 0; }
+  .tag { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The columns a phone drops. The turn id and tools live in the turn's
+     detail (one tap away); the stream's turn-id chip is what was pushing
+     the summary text off the row. */
+  #turns-rows .row > :nth-child(6),     /* ms */
+  #turns-rows .row > :nth-child(7),     /* tools */
+  #stream-rows .row > .tag,
+  #ticker-body .row > .tag { display: none; }
+  /* Spend: the model list wrapped every row to 140px tall. Cost stays;
+     cached and models are in the wider view. */
+  th, td { padding: 4px 6px; }
+  #cost-body th:nth-child(5), #cost-body td:nth-child(5),
+  #cost-body th:nth-child(7), #cost-body td:nth-child(7) { display: none; }
+
+  .controls { gap: 8px 10px; }
+  .sector-console > .controls { padding: 6px 8px; }
+  .controls input[type=search] { min-width: 0; width: 100%; }
+  input[type=range] { width: 70px; }
+  .sector-console > .detail { padding: 8px 8px 0; }
+  .action-tools { padding: 6px 8px; gap: 4px; }
+  .head-tools { margin-left: 6px; gap: 4px; }
+  .head-tools button { white-space: nowrap; padding: 0 5px; font-size: 9px; }
+
+  /* Brain: the canvas is the sector. Controls and side consoles start
+     folded (app.js), and when the side is opened it shares the height. */
+  .memory-layout { flex-direction: column; gap: 6px; }
+  .starfield { flex: 1 1 auto; min-height: 42vh; }
+  .memory-side { flex: 0 0 40vh; }
+  #view-memory.side-hidden .starfield { flex: 1 1 auto; }
+  .legend { max-width: 55%; }
+  .turn-card, .hub .turn-card {
+    width: auto; left: 8px; right: 8px; top: 8px; font-size: 11px; max-height: 58%;
+  }
 }

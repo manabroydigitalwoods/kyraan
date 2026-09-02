@@ -156,6 +156,10 @@ function eventRow(event, anomalyKinds) {
 
 /* --------------------------------------------------------------- tube */
 
+/* The phone breakpoint, shared with app.css. matchMedia is absent only
+   in a test harness, where nothing is a phone. */
+const PHONE = window.matchMedia ? window.matchMedia("(max-width: 720px)") : { matches: false };
+
 const PHOSPHORS = ["amber", "green", "blue"];
 const TUBE_KEY = "kyraan.phosphor";
 
@@ -1795,7 +1799,11 @@ function reheat(to = 1) { brain.alpha = to; }
    would be 600KB of vendored script to do two multiplies. */
 const brainCam = { yaw: -0.55, pitch: 0.32, spin: true };
 const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
-const ORBIT_GAIN = 0.0022;       // radians per pixel of drag
+// Negative on purpose: a drag turns the GRAPH, not the camera — drag
+// right and the near face goes right, the way a globe spins under a
+// finger. Positive orbited the camera, which reads as the opposite.
+// One sign flips every orbit gesture (mouse, touch) on both axes.
+const ORBIT_GAIN = -0.0022;      // radians per pixel of drag
 const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
 const HOME_CAM = { yaw: -0.55, pitch: 0.32 };
@@ -3573,6 +3581,10 @@ function collectState(view) {
     if (brain.dragMode !== "orbit") params.set("drag", brain.dragMode);
     if (brain.sideHidden) params.set("side", "0");
     if (brain.topHidden) params.set("top", "0");
+    // On a phone the folded state is the default, so it is the OPEN state
+    // that must be named or a reload folds the panel again.
+    if (PHONE.matches && !brain.sideHidden) params.set("side", "1");
+    if (PHONE.matches && !brain.topHidden) params.set("top", "1");
     if (brain.floor !== 0.45) params.set("floor", brain.floor.toFixed(2));
     const lobes = Object.entries(brain.showType)
       .filter(([, on]) => on).map(([type]) => type);
@@ -3645,6 +3657,23 @@ function applyState(view, params) {
       $("view-memory").classList.add("side-hidden");
       const toggle = $("side-toggle");
       if (toggle) toggle.textContent = "\u25c2 panels";
+    }
+    // A phone has no room for a controls row and a column of consoles
+    // beside the canvas: both start folded there, and the two header
+    // toggles bring them back. A URL that names the state wins.
+    if (PHONE.matches) {
+      if (!params.has("top") && !brain.topHidden) {
+        brain.topHidden = true;
+        $("view-memory").classList.add("top-hidden");
+        const t = $("top-toggle");
+        if (t) t.textContent = "controls \u25be";
+      }
+      if (!params.has("side") && !brain.sideHidden) {
+        brain.sideHidden = true;
+        $("view-memory").classList.add("side-hidden");
+        const toggle = $("side-toggle");
+        if (toggle) toggle.textContent = "\u25c2 panels";
+      }
     }
     if (params.get("drag") === "pan") {
       brain.dragMode = "pan";

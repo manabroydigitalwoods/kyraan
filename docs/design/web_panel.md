@@ -831,3 +831,13 @@ goal continuity and the first MCP mounts**, because managing capabilities
 we have not built yet is premature.
 
 Proof on a 375×812 phone viewport (hidden pane, synthetic TouchEvents, hand-driven because the pane stalls RAF): header wraps to 86px, no horizontal scroll, canvas `touch-action: none`, canvas 485px tall; one-finger drag orbits (yaw +0.264, pitch +0.132), two-finger pinch scales ×2.25 about the midpoint, a tap on a person node selects it; no console errors. LAN bind verified at the wire: phone `Host` → 200, mDNS name → 200, foreign host → 421, and after restarting on loopback the LAN address refuses the connection.
+
+## Phone-friendly views
+
+The desktop model is "the shell never scrolls, the consoles do". On a 375px screen that crushed the overview's five consoles to 2px each (bodies 0px) because nothing fits in one screen, the rail's ten children needed 394px, the header burned 86px on four readouts, every list clipped its right-hand columns (the `.kind` column alone reserved 178px of a 359px row), spend's rows were 140px tall because the model list wrapped, and the brain's controls took 400px above a 485px canvas.
+
+One `@media (max-width: 720px)` section now holds the phone model: header is a 2×2 readout grid at a fixed 60px (the jump rule still applies); the rail is nine equal slots (375px, no scroll); overview and host scroll as a page with natural-height consoles (`flex: 0 0 auto`, host column `align-items: stretch` — `start` sized console 09 160px narrower than 08); the list sectors keep scrolling inside their frame. Columns a phone drops: turns' ms and tools (in the detail, one tap away), the stream's turn-id chip, spend's cached and models. The brain starts with controls and side consoles folded (app.js, `PHONE.matches`; the header toggles bring them back, and on a phone the URL names the OPEN state — `top=1`/`side=1` — because folded is the default there).
+
+Measured at 375×812: header 60px, rail 43px and 375px wide, overview console bodies 190/141/277/162/200/150px, hub 471px with a one-line caption, turns/stream/schedule/actions/host rows 0 overflowing, spend rows 30px with 5 columns, brain canvas 650px (was 485), graph centre within 2px of canvas centre after fit, host consoles all 363px.
+
+Orbit direction: `ORBIT_GAIN` is negative — a drag turns the graph, not the camera (drag right, near face goes right). One sign covers mouse and touch on both axes.
