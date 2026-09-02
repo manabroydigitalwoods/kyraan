@@ -595,6 +595,27 @@ control's state listener, so it read the previous state: hiding wrote
 nothing, restoring wrote "hidden" — one step late, for every control in
 that list. It defers a tick now.
 
+**Contacts, wired by evidence** (owner: "we have contacts, can we connect
+them with the brain?"). 395 entries in the book — more than the brain
+held in total — and measured first: 7 resolve to a registry person, none
+match an enrolled face, none name a relation entity. And one of the seven
+is false: "Suman Sutradhar" resolved to `suman_ghosh` on first name
+alone. So a contact becomes a neuron only where it provably names a
+registry person: an exact full-name match is a solid `is` wire; a match
+on one alias token ("Habu New" → kamal via the alias "habu") is a dashed
+`maybe` wire, listed in Findings as a candidate to confirm, never
+asserted. The other 388 stay out of the graph — dropping them in would
+have drowned it — and answer the search box instead, marked "outside",
+from a Contact book console that reads the store's own `find`.
+
+Phones and emails appear in the Selection panel and nowhere else. The
+store's rule is that they leave only through a direct reply and never
+toward a model; the canvas is the closest thing this panel has to a
+prompt, so they never become a label or a tooltip on it. A
+`contacts_synced` event merge-refreshes the graph like any other store
+change. The lobe caption reads "CONTACTS 7 of 395", which is the finding:
+the book is almost entirely outside the brain.
+
 **The turn card** (owner: "when live, show a popup: what is Kyraan trying
 to do, what is he finding, what he got, how much effort, the steps he
 followed"). Every stream event is stamped with a `turn_id`, so a whole

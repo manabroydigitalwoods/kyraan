@@ -477,6 +477,7 @@ function ensureGraph(force) {
     brain.nodes = graph.nodes;
     brain.edges = graph.edges;
     brain.byId = new Map(graph.nodes.map((n) => [n.id, n]));
+    brain.contactsTotal = graph.contacts_total || 0;
     seedPositions();
     buildPalette();
     reheat(1);
@@ -500,6 +501,7 @@ const STORE_CHANGE_KINDS = new Set([
   "memory_short_term_expired", "episodes_ingested", "episodes_suppressed",
   "triples_extracted", "document_ingested", "document_renamed",
   "face_enrolled", "person_enrolled", "person_episodes_deleted",
+  "contacts_synced",
 ]);
 const REFRESH_SETTLE_MS = 2500;      // let the write land; coalesce a burst
 let refreshTimer = null;
@@ -564,6 +566,7 @@ async function refreshGraph(reason) {
   }
   graphPromise = Promise.resolve(graph);      // later ensureGraph() callers see this
   const { added, removed } = mergeGraph(graph);
+  brain.contactsTotal = graph.contacts_total || 0;
   brain.refreshes++;
   buildPalette();
   if (brain.query) runSearch(brain.query);
@@ -1155,6 +1158,7 @@ const LOBES = {
   face:     { anchor: [0.30, 0.55, -0.45], label: "faces" },
   document: { anchor: [0.85, 0.85, 0.35], label: "documents" },
   task:     { anchor: [0.45, -0.90, -0.60], label: "work" },
+  contact:  { anchor: [-0.40, -0.70, 0.45], label: "contacts" },
   skill:    { anchor: [1.10, 0.05, 0.30], label: "skills" },
 };
 
@@ -1171,13 +1175,17 @@ const EDGE_STYLE = {
   spoke:       { alpha: 0.10, width: 0.7, rest: 260, key: "--dim" },
   about:       { alpha: 0.45, width: 1.1, rest: 140, key: "--dim" },
   recognises:  { alpha: 0.6,  width: 1.3, rest: 90,  key: "--warn" },
+  // A contact IS a person (exact name) or MAYBE is (one alias token):
+  // the second is drawn dashed, because it is a candidate, not a claim.
+  is:          { alpha: 0.65, width: 1.3, rest: 80,  key: "--ok" },
+  maybe:       { alpha: 0.5,  width: 1.1, rest: 110, key: "--warn", dash: true },
 };
 
 const brain = {
   nodes: [], edges: [], byId: new Map(),
   colour: "lobe",
   showType: { memory: true, person: true, episode: true, face: true,
-              document: true, task: true, skill: true },
+              document: true, task: true, skill: true, contact: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
   pan: null, orbit: null, nodeDrag: null, band: null,
@@ -1192,6 +1200,7 @@ const brain = {
   liveLog: [],             // the recent sequence: trying → got
   callWires: [],           // transient person↔skill wires: asked, answered
   refreshes: 0,            // merge-refreshes since load (the tests count these)
+  contactsTotal: 0,        // the whole book; only the linked ones are neurons
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -1205,9 +1214,40 @@ const brain = {
 /* Search dims rather than hides. Removing the misses would leave the hits
    floating with nothing around them — and in a graph the answer to "where
    is this" is mostly "next to what", so the context has to stay on screen. */
+let contactLookup = null;
+
+/* The book beyond the brain. A name with no neuron still answers the
+   search, marked as outside the brain — that is what "connect contacts"
+   means for the 388 that touch nothing yet. */
+function searchContactBook(query) {
+  clearTimeout(contactLookup);
+  const body = $("contacts-body");
+  if (!body) return;
+  if (!query) { clear(body); verdictInto("contacts-verdict", "—"); return; }
+  contactLookup = setTimeout(async () => {
+    try {
+      const data = await api("/api/contacts?q=" + encodeURIComponent(query));
+      clear(body);
+      if (!data.contacts.length) { empty(body, `no contact matches "${query}"`); verdictInto("contacts-verdict", "0"); return; }
+      const inBrain = new Set(brain.nodes.filter((n) => n.type === "contact").map((n) => n.label.toLowerCase()));
+      const rows = el("div", "rows");
+      for (const c of data.contacts) {
+        const row = el("div", "row");
+        row.appendChild(el("span", "body", c.name));
+        row.appendChild(el("span", "tag", inBrain.has(c.name.toLowerCase()) ? "in brain" : "outside"));
+        row.title = [(c.phones || []).join(", "), (c.emails || []).join(", ")].filter(Boolean).join(" · ");
+        rows.appendChild(row);
+      }
+      body.appendChild(rows);
+      verdictInto("contacts-verdict", `${data.contacts.length} in the book`);
+    } catch (_) { /* the book is optional */ }
+  }, 250);
+}
+
 function runSearch(text) {
   brain.query = (text || "").trim().toLowerCase();
   brain.matches = new Set();
+  searchContactBook(brain.query);
   if (!brain.query) { renderLegend(); renderMemories(); return; }
   for (const node of brain.nodes) {
     const hay = `${node.label} ${node.type} ${node.group || ""} `
@@ -1601,6 +1641,7 @@ function nodeRadius(node) {
   if (node.type === "episode") return 2.8;
   if (node.type === "document") return 4 + Math.min(4, (node.chunks || 1) * 0.6);
   if (node.type === "face") return 5.5 + (node.templates || 1) * 0.7;
+  if (node.type === "contact") return 4.2;
   if (node.type === "skill") {
     // Log scale: home.get_state ran 1236 times and calendar.list_events 69.
     // Linear would make one node the size of the lobe.
@@ -1816,7 +1857,8 @@ function drawGraph(canvas, view, opts) {
       ctx.beginPath(); ctx.arc(cx, cy, spread, 0, Math.PI * 2); ctx.fill();
       ctx.font = `${11 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim; ctx.globalAlpha = 0.8;
-      const caption = lobe.label.toUpperCase() + "  " + members.length;
+      const caption = lobe.label.toUpperCase() + "  " + members.length
+        + (type === "contact" && brain.contactsTotal ? ` of ${brain.contactsTotal}` : "");
       const captionWidth = ctx.measureText(caption).width;
       // Clamped into the canvas: a lobe drifting off the top edge took
       // its own label with it and the regions went unnamed.
@@ -1868,12 +1910,14 @@ function drawGraph(canvas, view, opts) {
     ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha)
                     * lit * farness;
     ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio;
+    if (style.dash) ctx.setLineDash([4 * ratio, 4 * ratio]);
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
     // A slight bow keeps parallel edges between the same regions apart.
     ctx.quadraticCurveTo((pa.x + pb.x) / 2 - (pb.y - pa.y) * 0.12,
                          (pa.y + pb.y) / 2 + (pb.x - pa.x) * 0.12, pb.x, pb.y);
     ctx.stroke();
+    if (style.dash) ctx.setLineDash([]);
   }
   ctx.globalAlpha = 1;
 
@@ -2289,6 +2333,12 @@ function renderSelection() {
     kvRow(list, "kind", node.doc_kind);
     kvRow(list, "chunks", String(node.chunks));
     kvRow(list, "file", node.filename || "—");
+  } else if (node.type === "contact") {
+    kvRow(list, "match", node.match === "is" ? "exact name" : "alias token — confirm",
+          node.match !== "is");
+    kvRow(list, "person", node.person);
+    kvRow(list, "phones", (node.phones || []).join(", ") || "—");
+    kvRow(list, "emails", (node.emails || []).join(", ") || "—");
   } else if (node.type === "face") {
     kvRow(list, "templates", String(node.templates));
     const linked = neighboursOf(node.id).some((n) => n.edge.kind === "recognises");
@@ -2350,6 +2400,10 @@ function renderFindings(graph) {
   for (const label of graph.dead_skills) {
     rows.push({ label, tag: "never called", ids: ["s:" + label] });
   }
+  for (const label of graph.maybe_contacts || []) {
+    const node = brain.nodes.find((n) => n.type === "contact" && label.startsWith(n.label + " "));
+    rows.push({ label, tag: "confirm", ids: node ? [node.id] : [] });
+  }
   if (!rows.length) { empty(body, "nothing loose"); verdictInto("findings-verdict", "clean", "ok"); return; }
 
   for (const row of rows.slice(0, 24)) {
@@ -2379,7 +2433,7 @@ function renderMemories() {
   if (!body) return;
   clear(body);
   const REMEMBERED = { memory: "fact", episode: "recall",
-                       document: "doc", face: "face" };
+                       document: "doc", face: "face", contact: "contact" };
   let facts = brain.nodes.filter((n) => REMEMBERED[n.type]
                                      && brain.showType[n.type]);
   if (brain.query) facts = facts.filter((n) => brain.matches.has(n.id));
@@ -2867,7 +2921,7 @@ function wireMemory() {
   });
   for (const [id, type] of [["show-memory", "memory"], ["show-person", "person"],
                             ["show-episode", "episode"], ["show-document", "document"],
-                            ["show-face", "face"],
+                            ["show-face", "face"], ["show-contact", "contact"],
                             ["show-task", "task"], ["show-skill", "skill"]]) {
     const box = $(id);
     if (box) box.addEventListener("change", (e) => {
@@ -2882,7 +2936,7 @@ function wireMemory() {
     if (box) box.addEventListener("change", (e) => {
       if (kind === "structure") {
         for (const k of ["subject", "owns", "managed_by", "spoke", "about",
-                         "recognises", "recalls"]) {
+                         "recognises", "recalls", "is", "maybe"]) {
           brain.showEdge[k] = e.target.checked;
         }
       } else {
@@ -3573,7 +3627,7 @@ for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
                   // Added with the recall/docs/faces lobes — but not here, so
                   // hiding any of the three changed the view and never the
                   // URL. Found by toggling one inside the new picker.
-                  "show-episode", "show-document", "show-face", "edge-synapse",
+                  "show-episode", "show-document", "show-face", "show-contact", "edge-synapse",
                   "edge-relation", "edge-coactivation", "edge-structure",
                   "actions-days"]) {
   const node = $(id);

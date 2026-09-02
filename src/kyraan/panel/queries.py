@@ -806,6 +806,66 @@ _graph_cache: dict = {}
 GRAPH_TTL_S = 30
 
 
+def _slug(value: str) -> str:
+    import re as _re
+    return _re.sub(r"[\s,]+", "_", str(value or "").strip().lower())
+
+
+def _contact_links(person_ids: set) -> tuple:
+    """(total contacts, [links]) — a link only where a contact provably
+    names a registry person. `is`: the whole name is a registry name or
+    alias. `maybe`: one token of the name is an alias — a candidate, not
+    a claim. Phones/emails ride along for the Selection panel and nowhere
+    else."""
+    from kyraan.store import pg
+    try:
+        from kyraan.store import persons
+        name_map = persons.name_map()
+    except Exception:
+        name_map = {}
+    try:
+        with pg.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT resource, name, phones, emails FROM contact ORDER BY name")
+            rows = cur.fetchall()
+    except Exception:
+        return 0, []
+
+    aliases = {_slug(alias): pid for alias, pid in name_map.items()}
+    links = []
+    for resource, name, phones, emails in rows:
+        whole = _slug(name)
+        kind, person = None, None
+        if whole in aliases:
+            kind, person = "is", aliases[whole]
+        else:
+            tokens = [_slug(t) for t in str(name or "").split()]
+            hits = {aliases[t] for t in tokens if t in aliases}
+            if len(hits) == 1:
+                kind, person = "maybe", hits.pop()
+        if not kind or f"p:{person}" not in person_ids:
+            continue
+        links.append({
+            "id": f"c:{resource}", "resource": resource, "name": name,
+            "kind": kind, "person": f"p:{person}",
+            "phones": list(phones or []), "emails": list(emails or []),
+        })
+    return len(rows), links
+
+
+def contacts_search(query: str, limit: int = 8) -> dict:
+    """The rest of the book, by name. For the search box: a name that has
+    no neuron still answers, marked as outside the brain."""
+    if not query.strip():
+        return {"contacts": [], "query": query}
+    try:
+        from kyraan.store import contacts
+        rows = contacts.find(query, limit=limit) or []
+    except Exception as exc:
+        return {"contacts": [], "query": query, "degraded": f"{type(exc).__name__}: {exc}"}
+    return {"contacts": [{"name": r["name"], "phones": r["phones"], "emails": r["emails"]}
+                         for r in rows], "query": query}
+
+
 def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> dict:
     """One graph over the whole second brain: memories, the people they
     are about, the scheduled work, and the skills that act.
@@ -1031,6 +1091,28 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             edges.append({"a": entry["id"], "b": target, "kind": "recognises",
                           "weight": 0.8})
 
+    # --- contacts ---------------------------------------------------------
+    # 395 entries in the book; the brain knows a handful. Only the ones
+    # that provably touch a registry person become neurons: an EXACT
+    # full-name match is an `is` wire, a match on a single alias token
+    # ("Habu New" → kamal via the alias "habu") is a `maybe` wire — listed
+    # as a candidate, never asserted, because first names are ambiguous
+    # in a book this size ("Suman Sutradhar" is not Suman Ghosh). The rest
+    # stay out of the graph and reachable through search.
+    contacts_total, contact_links = 0, []
+    if not _demo.enabled():
+        contacts_total, contact_links = _contact_links(person_ids)
+        for link in contact_links:
+            nodes.append({
+                "id": link["id"], "type": "contact", "lobe": "contacts",
+                "label": link["name"], "group": link["kind"],
+                "phones": link["phones"], "emails": link["emails"],
+                "resource": link["resource"], "match": link["kind"],
+                "person": link["person"][2:],
+            })
+            edges.append({"a": link["id"], "b": link["person"],
+                          "kind": link["kind"], "weight": 0.7 if link["kind"] == "is" else 0.3})
+
     # --- task lobe --------------------------------------------------------
     board = triggers()
     for item in board["triggers"]:
@@ -1098,12 +1180,16 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
 
     counts: Counter = Counter(n["type"] for n in nodes)
     edge_counts: Counter = Counter(e["kind"] for e in edges)
+    maybe_contacts = [n["label"] + " → " + n["person"]
+                      for n in nodes if n["type"] == "contact" and n["match"] == "maybe"]
     result = {
         "nodes": nodes, "edges": edges,
         "counts": dict(counts), "edge_counts": dict(edge_counts),
         "contested": links.get("contested", []),
         "variants": links.get("variants", []),
         "orphans": [n["id"] for n in nodes if n.get("orphan")],
+        "contacts_total": contacts_total,
+        "maybe_contacts": maybe_contacts,
         "dead_skills": [n["label"] for n in nodes if n.get("dead")],
         "synapse_floor": synapse_floor,
         "degraded": memory.get("degraded", ""),

@@ -246,6 +246,8 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(queries.host_history())
             elif path == "/api/workload":
                 self._json(queries.workload(hours=arg("hours", 24, float)))
+            elif path == "/api/contacts":
+                self._json(queries.contacts_search(arg("q", ""), limit=arg("limit", 8, int)))
             elif path == "/api/brain":
                 self._json(queries.brain_graph(
                     synapse_floor=arg("floor", queries._SYNAPSE_FLOOR, float),

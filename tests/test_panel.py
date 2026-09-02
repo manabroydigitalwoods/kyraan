@@ -1027,3 +1027,70 @@ def test_a_fresh_brain_fetch_bypasses_the_memo(monkeypatch, tmp_path, seeded_log
     assert queries.brain_graph(fresh=True)["counts"] != {"memory": -1}  # recomputed
     # And the recomputation replaced the memo, so the next plain read is right.
     assert queries.brain_graph()["counts"] != {"memory": -1}
+
+
+
+# ---------------------------------------------------------------- contacts
+
+
+def _fake_contacts(monkeypatch, rows, name_map):
+    class _Cur:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params=()): pass
+        def fetchall(self): return rows
+
+    class _Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _Cur()
+
+    from kyraan.store import persons, pg
+    monkeypatch.setattr(pg, "connection", lambda: _Conn())
+    monkeypatch.setattr(persons, "name_map", lambda: name_map)
+
+
+def test_a_contact_links_only_where_it_provably_names_a_person(monkeypatch):
+    """395 in the book, a handful the brain knows. An exact full-name
+    match is an `is` wire; one alias token is a `maybe` — a candidate, not
+    a claim, because first names are ambiguous in a book this size: Suman
+    Sutradhar is not Suman Ghosh."""
+    name_map = {"suman ghosh": "suman_ghosh", "suman": "suman_ghosh",
+                "habu": "kamal", "kamal": "kamal", "manab roy": "owner"}
+    rows = [
+        ("people/1", "Manab Roy", ["+91"], []),             # exact -> is
+        ("people/2", "Habu New", ["+91"], []),              # alias token -> maybe
+        ("people/3", "Suman Sutradhar", [], []),            # first name only -> maybe
+        ("people/4", "Raunak Roy", [], []),                 # nothing -> no wire
+        ("people/5", "Suman Ghosh", [], ["s@x"]),           # exact -> is
+    ]
+    _fake_contacts(monkeypatch, rows, name_map)
+    total, links = queries._contact_links({"p:owner", "p:kamal", "p:suman_ghosh"})
+    by = {l["name"]: l for l in links}
+    assert total == 5
+    assert by["Manab Roy"]["kind"] == "is" and by["Manab Roy"]["person"] == "p:owner"
+    assert by["Suman Ghosh"]["kind"] == "is"
+    assert by["Habu New"]["kind"] == "maybe" and by["Habu New"]["person"] == "p:kamal"
+    # The false friend is surfaced as a candidate, never asserted.
+    assert by["Suman Sutradhar"]["kind"] == "maybe"
+    assert "Raunak Roy" not in by
+    # A link to a person the graph does not hold is dropped, not dangled.
+    _, narrowed = queries._contact_links({"p:owner"})
+    assert {l["name"] for l in narrowed} == {"Manab Roy"}
+
+
+def test_contacts_degrade_to_nothing_when_postgres_is_down(monkeypatch):
+    from kyraan.store import pg
+    monkeypatch.setattr(pg, "connection",
+                        lambda: (_ for _ in ()).throw(RuntimeError("pg down")))
+    assert queries._contact_links({"p:owner"}) == (0, [])
+    assert queries.contacts_search("raunak")["contacts"] == []
+
+
+def test_contact_book_search_is_by_name_and_empty_query_returns_nothing(monkeypatch):
+    from kyraan.store import contacts
+    monkeypatch.setattr(contacts, "find", lambda name, limit=5: [
+        {"name": "Raunak Roy", "phones": ["+91 1"], "emails": []}] if "rau" in name.lower() else [])
+    assert queries.contacts_search("")["contacts"] == []
+    hit = queries.contacts_search("Raunak")["contacts"]
+    assert hit and hit[0]["name"] == "Raunak Roy"

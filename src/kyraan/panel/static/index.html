@@ -230,6 +230,7 @@
             <label><input type="checkbox" id="show-episode" checked> recall</label>
             <label><input type="checkbox" id="show-document" checked> docs</label>
             <label><input type="checkbox" id="show-face" checked> faces</label>
+            <label><input type="checkbox" id="show-contact" checked> contacts</label>
             <label><input type="checkbox" id="show-skill" checked> skills</label>
           </div>
         </div>
@@ -280,6 +281,10 @@
           <!-- The memories, as text. They are the CONTENT of the second
                brain and were the one node type the graph never labelled —
                readable only by hovering a dot you had already found. -->
+          <section class="console" id="con-contacts">
+            <h2>Contact book <span class="verdict" id="contacts-verdict">—</span></h2>
+            <div class="console-body tight scrolls" id="contacts-body"></div>
+          </section>
           <section class="console" id="con-memories">
             <h2>Memories <span class="verdict" id="memories-verdict">—</span></h2>
             <div class="console-body tight scrolls" id="memories-body"></div>
