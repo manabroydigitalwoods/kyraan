@@ -136,3 +136,57 @@ def test_empty_allowlist_indexes_nothing(tmp_path, monkeypatch):
     (tmp_path / "x.md").write_text("# secret\ncontract text")
     out = notes.sync(4343, tmp_path)
     assert "never indexed whole" in out["error"]
+
+
+PERSON_NOTE = """---
+type: person
+name: Rakesh Chakraborty
+aliases: [Rakesh, Rocky]
+relation: college friend
+tags: [friend]
+---
+# Rakesh Chakraborty
+Met at NIT in 2009. Lives in Bangalore, works at a fintech.
+"""
+
+
+def test_person_note_detection():
+    p = notes.parse_note(PERSON_NOTE, "Kyraan/people/Rakesh.md")
+    assert notes.is_person_note(p, "Kyraan/people/Rakesh.md")
+    q = notes.parse_note("# Rakesh\nplain", "Kyraan/people/Rakesh.md")
+    assert notes.is_person_note(q, "Kyraan/people/Rakesh.md")     # folder convention
+    assert not notes.is_person_note(q, "Kyraan/trips/Rakesh.md")
+
+
+@pytest.mark.pg
+def test_person_note_registers_person_and_aliases(tmp_path, monkeypatch):
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import persons, pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    persons._cache.clear()
+    monkeypatch.setattr(notes.embed, "embed", lambda chunks: [None] * len(chunks))
+    monkeypatch.setenv("KYRAAN_VAULT_FOLDERS", "Kyraan")
+    vault = tmp_path / "vault"
+    (vault / "Kyraan" / "people").mkdir(parents=True)
+    (vault / "Kyraan" / "people" / "Rakesh Chakraborty.md").write_text(PERSON_NOTE)
+    (vault / "Kyraan" / "trip.md").write_text("# Trip\nRocky is joining us in Goa.")
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4444")
+        conn.execute("DELETE FROM person WHERE id = 'rakesh_chakraborty'")
+        conn.commit()
+    notes.sync(4444, vault)
+    persons._cache.clear()
+    nm = persons.name_map()
+    assert nm.get("rakesh_chakraborty") == "rakesh_chakraborty"
+    assert nm.get("rocky") == "rakesh_chakraborty"          # alias registered
+    with pg.connection() as conn:
+        rows = dict(conn.execute("""SELECT source_path, subject_persons FROM document
+                                    WHERE chat_id = 4444 AND suppressed_by = '{}'""").fetchall())
+    assert "rakesh_chakraborty" in rows["Kyraan/people/Rakesh Chakraborty.md"]
+    # another note naming him by alias now links (second pass sees the alias)
+    notes.sync(4444, vault)
+    pg.reset_pool_for_tests()

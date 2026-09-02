@@ -161,6 +161,54 @@ def link_people(parsed: dict) -> list:
     return sorted(found)
 
 
+def _slug(name: str) -> str:
+    # the same id rule persons.add uses in the loop — one identity model
+    return re.sub(r"[^a-z0-9_]+", "_",
+                  name.lower().replace(" ", "_").replace("-", "_")).strip("_")
+
+
+def is_person_note(parsed: dict, rel: str) -> bool:
+    """A note that DESCRIBES a person: frontmatter `type: person`, or any
+    note living under a people/ folder (the owner's convention)."""
+    if str(parsed["meta"].get("type", "")).strip().lower() == "person":
+        return True
+    parts = [p.lower() for p in Path(rel).parts[:-1]]
+    return "people" in parts or "persons" in parts
+
+
+def register_person_note(parsed: dict, rel: str) -> str | None:
+    """A person-note REGISTERS its person (owner directive 2026-09-02:
+    "link any note to any person precisely"): the title (or frontmatter
+    name) becomes a registry person — a contact-person with no chat, no
+    access, exactly what persons.add grants — and frontmatter aliases
+    become registry aliases, so every other note, photo, and fact that
+    names them links from then on. The owner authored the note under
+    people/ deliberately; that is the consent persons.add would ask for.
+    Returns the person id."""
+    try:
+        from kyraan.store import persons
+    except Exception:
+        return None
+    name = str(parsed["meta"].get("name") or parsed["title"]).strip()
+    pid = _slug(name)
+    if not pid or pid == "owner" or len(name) < 2:
+        return None
+    try:
+        existing = {p[0] for p in persons.list_persons()}
+        if pid not in existing:
+            persons.enroll(pid, None, "none", None)
+            log_event("person_registered_from_note", person=pid, path=rel)
+        aliases = [a.strip().strip("[]\"'") for a in
+                   str(parsed["meta"].get("aliases", "")).strip("[]").split(",")]
+        for alias in [name] + aliases:
+            if alias and _slug(alias) != pid:
+                persons.add_alias(pid, alias)
+        return pid
+    except Exception as exc:
+        log_event("person_register_failed", path=rel, error=str(exc)[:100])
+        return None
+
+
 def _note_uuid(chat_id: int, rel_path: str, sha: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"note:{chat_id}:{rel_path}:{sha}"))
 
@@ -202,6 +250,13 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
     doc_id = _note_uuid(chat_id, rel, sha)
     people = link_people(parsed)
     entities = sorted(set(parsed["links"] + [f"#{t}" for t in parsed["tags"]]))
+    if is_person_note(parsed, rel):
+        pid = register_person_note(parsed, rel)
+        if pid and pid not in people:
+            people = sorted(people + [pid])
+        rel_to = str(parsed["meta"].get("relation", "")).strip()
+        if rel_to:
+            entities = sorted(set(entities + [f"relation:{rel_to.lower()}"]))
     when = event_date_of(parsed, path.stat().st_mtime)
     with pg.connection() as conn:
         if row:
