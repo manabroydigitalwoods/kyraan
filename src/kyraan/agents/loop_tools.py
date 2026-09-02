@@ -2636,9 +2636,21 @@ def _home_entity_roster() -> str:
     prompt-build time — the model was guessing entity names, failing, and
     then asking the OWNER for internal ids (soak week, day 1)."""
     server = (kernel.config.load().get("tool_servers") or {}).get("home_assistant") or {}
-    entities = server.get("read_entities") or []
-    return ("Readable entities (EXACTLY these): " + ", ".join(entities)) if entities \
-        else "No home entities configured."
+    reads = server.get("read_entities") or []
+    writes = server.get("write_entities") or []
+    if not reads and not writes:
+        return "No home entities configured."
+    parts = []
+    if reads:
+        parts.append("Readable entities (EXACTLY these): " + ", ".join(reads))
+    if writes:
+        # Live 2026-09-02: with only the read list in the prompt, the
+        # model guessed switch.air_purifier for a turn_on — the real
+        # entity is fan.air_purifier, and the owner's CONFIRMED action
+        # failed on the wall. Switchables are named exactly too.
+        parts.append("Switchable entities (EXACTLY these, for "
+                     "turn_on/turn_off): " + ", ".join(writes))
+    return " ".join(parts)
 
 
 
@@ -2844,4 +2856,11 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
             return outcome.get("note", "No change.")
         return (f'Archived: "{outcome.get("subject")}" — say "undo" to '
                 "restore it to the inbox.")
+    if tool == "rules.create" and isinstance(outcome, dict):
+        return (f'Watch rule armed: {outcome.get("watching")} — I check '
+                "every 15 minutes and alert once per crossing. Say "
+                '"list watch rules" or "cancel" it anytime.')
+    if tool == "tasks.schedule" and isinstance(outcome, dict):
+        return (f'Scheduled: {outcome.get("description", "the task")} — '
+                'say "list tasks" to see it.')
     return f"Done: {tool}."

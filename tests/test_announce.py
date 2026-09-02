@@ -102,3 +102,20 @@ def test_fan_domain_is_switchable_like_switch(monkeypatch):
     with pytest.raises(ha.ToolError, match="only switch/fan"):
         monkeypatch.setattr(ha, "_allowlists", lambda: ([], ["light.x"]))
         ha._switch("light.x", True)
+
+
+def test_roster_names_switchable_entities(monkeypatch):
+    from kyraan.agents import loop_tools
+    from kyraan.control_plane import kernel as _k
+    monkeypatch.setattr(_k.config, "load", lambda: {"tool_servers": {
+        "home_assistant": {"read_entities": ["sensor.a"],
+                           "write_entities": ["fan.air_purifier"]}}})
+    roster = loop_tools._home_entity_roster()
+    assert "Switchable entities" in roster and "fan.air_purifier" in roster
+
+
+def test_write_wall_refusal_lists_the_allowlist(monkeypatch):
+    monkeypatch.setattr(ha, "_allowlists",
+                        lambda: ([], ["fan.air_purifier", "switch.ac"]))
+    with pytest.raises(ha.ToolError, match="EXACTLY: fan.air_purifier, switch.ac"):
+        ha._switch("switch.air_purifier", True)

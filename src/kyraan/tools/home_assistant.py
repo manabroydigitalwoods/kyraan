@@ -77,7 +77,9 @@ def _get_state(entity: str) -> dict:
 def _switch(entity: str, turn_on: bool) -> dict:
     _, writes = _allowlists()
     if entity not in writes:
-        raise ToolError(f"entity {entity!r} is not write-allowlisted — Kyraan may not switch it")
+        raise ToolError(
+            f"entity {entity!r} is not write-allowlisted — switchable "
+            "entities are EXACTLY: " + (", ".join(writes) or "(none)"))
     domain = entity.split(".")[0]
     if domain not in ("switch", "fan"):
         # fan joined 2026-09-02 (the Philips purifier): HA's fan domain
