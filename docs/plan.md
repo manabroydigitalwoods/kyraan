@@ -437,11 +437,14 @@ Continuing but NOT completed, in priority order:
 1. **Owner hygiene (oldest open thread, owner-side):** credential
    rotations — bot token revoke/reissue, ICS URL, Google client
    secret, HASS token — plus re-enrolling Kiaan's face from 3–4 clear
-   photos.
+   photos, enrolling Ruma's and the owner's own faces (moments
+   auto-link on matches), the Tapo P110 re-pair, the weather-task
+   keep/cancel call, and the Spotify/HACS-era rotations of any
+   credential that passed through chat.
 2. **§3c "adopt now" items — BUILT 2026-08-31** (taint-class taxonomy,
    capability contracts, `memory.search_facts`, normalized error
-   names). Still open from §3c: Google Contacts sync ("adopt next")
-   behind its governance row.
+   names). Google Contacts sync ("adopt next") — governance round
+   held and BUILT 2026-09-01; §3c is fully worked.
 3. **Goal/task continuity — BUILT 2026-08-31** (design conversation
    held in-chat; record: docs/design/goal_continuity.md). Goals with
    steps + findings journal, daily read-only research cycles at the
