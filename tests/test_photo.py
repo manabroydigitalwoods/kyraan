@@ -463,6 +463,7 @@ def test_did_you_save_it_answers_from_the_store(monkeypatch):
            "tags": ["#festival", "#milestone"], "related": ["1st wear sree krishna dress"]}
     monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: cap)
     monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(orchestrator, "_photo_just_sent", lambda chat_id, **k: True)
     for q in ("did you save it?", "Did u save the image?", "links?", "what is it linked to?"):
         out = asyncio.run(orchestrator.handle_message(1, q))
         assert out.startswith('Yes — saved as "today kiaan with lord shree krishna dressed"'), q
@@ -526,5 +527,124 @@ def test_my_links_is_the_links_rail(monkeypatch):
            "subjects": [], "entities": [], "tags": [], "related": []}
     monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: cap)
     monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(orchestrator, "_photo_just_sent", lambda chat_id, **k: True)
     for q in ("my links", "show links", "connections?"):
         assert asyncio.run(orchestrator.handle_message(1, q)).startswith('Yes — saved as "c"'), q
+
+
+def test_after_photo_rails_need_a_photo_just_sent(monkeypatch):
+    """Audit 2026-09-03: "that is ruma" answering "who is picking him up?"
+    and "this is my plan for tomorrow" must not touch the last photo;
+    "did you save my reminder?" is not about a photo at all."""
+    import asyncio, datetime
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.store import documents
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    calls = []
+    monkeypatch.setattr(documents, "claim_latest_moment",
+                        lambda chat_id, phrase, **k: calls.append(("claim", phrase)) or ("x", []))
+    monkeypatch.setattr(documents, "link_person_to_latest_moment",
+                        lambda chat_id, pid, **k: calls.append(("link", pid)) or ("x", []))
+    cap = {"doc_id": "x", "kind": "moment", "caption": "photo", "created": datetime.datetime.now(datetime.timezone.utc),
+           "subjects": [], "entities": [], "tags": [], "related": [], "related_local": []}
+    monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: cap)
+    # no photo just sent: none of the after-photo rails fire
+    monkeypatch.setattr(orchestrator, "_photo_just_sent", lambda chat_id, **k: False)
+    seen = []
+    async def fake_loop(*a, **k):
+        seen.append(1); return "loop"
+    monkeypatch.setattr(orchestrator, "_agent_turn", fake_loop, raising=False)
+    for q in ("this is my plan for tomorrow", "that is ruma", "links?"):
+        try:
+            asyncio.run(orchestrator.handle_message(1, q))
+        except Exception:
+            pass
+    assert calls == []
+    # the photo rails with a photo just sent
+    monkeypatch.setattr(orchestrator, "_photo_just_sent", lambda chat_id, **k: True)
+    assert asyncio.run(orchestrator.handle_message(1, "that's my medicine")).startswith("Noted")
+    assert calls == [("claim", "my medicine")]
+    # abstract nouns never claim, even right after a photo
+    assert not asyncio.run(orchestrator.handle_message(1, "this is my fault")).startswith("Noted")
+    assert calls == [("claim", "my medicine")]
+    # "did you save my reminder?" is not the capture rail
+    monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: (_ for _ in ()).throw(AssertionError("rail fired")))
+    try:
+        out = asyncio.run(orchestrator.handle_message(1, "did you save my reminder?"))
+        assert not str(out).startswith("Yes — saved as")
+    except AssertionError as exc:
+        assert "rail fired" not in str(exc)
+    except Exception:
+        pass
+
+
+def test_review_request_is_the_command_not_any_sentence():
+    from kyraan.agents.guards import _is_review_request as r
+    assert r("review memory") and r("Review pending facts") and r("memory review") and r("review my facts?")
+    assert not r("review pending emails")
+    assert not r("can you review the facts about my policy?")
+    assert not r("did you review my pending reminders")
+
+
+@pytest.mark.pg
+def test_list_and_search_gate_related_captions_by_exposure(monkeypatch):
+    """Audit 2026-09-03: `linked to:` captions of local-only notes reached
+    the cloud tier through list/search; list had no exposure gate at all."""
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "_allowed_exposures", lambda: ("cloud_ok",))
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4246")
+        conn.execute("""INSERT INTO document (id, chat_id, kind, caption, text, subject_persons, entities, exposure, related) VALUES
+            ('00000000-0000-0000-0000-0000000000c1', 4246, 'note', 'private milestone', 'x', ARRAY['kiaan'], ARRAY['#milestone'], 'local_only', ARRAY['00000000-0000-0000-0000-0000000000c2']::uuid[]),
+            ('00000000-0000-0000-0000-0000000000c2', 4246, 'moment', 'kiaan photo', 'x', ARRAY['kiaan'], ARRAY['#festival'], 'cloud_ok', ARRAY['00000000-0000-0000-0000-0000000000c1']::uuid[]),
+            ('00000000-0000-0000-0000-0000000000c3', 4246, 'photo', 'cash memo', 'x', '{}', ARRAY['#receipt'], 'cloud_ok', '{}')""")
+        conn.commit()
+    rows = documents.list_documents(4246)
+    caps = {r["caption"]: r for r in rows}
+    assert "private milestone" not in caps                     # local-only row hidden
+    assert caps["kiaan photo"]["related"] == []                # its caption not leaked via the link
+    assert caps["kiaan photo"]["tags"] == ["#festival"]
+    assert [r["caption"] for r in documents.list_documents(4246, tag="receipt")] == ["cash memo"]
+    assert [r["caption"] for r in documents.list_documents(4246, kind="moment")] == ["kiaan photo"]
+    assert [r["caption"] for r in documents.list_documents(4246, person="kiaan")] == ["kiaan photo"]
+    monkeypatch.setattr(documents, "_allowed_exposures", lambda: ("cloud_ok", "local_only"))
+    caps = {r["caption"]: r for r in documents.list_documents(4246)}
+    assert caps["kiaan photo"]["related"] == ["private milestone"]   # local tier sees it
+    pg.reset_pool_for_tests()
+
+
+def test_local_only_notes_are_tagged_locally(monkeypatch, tmp_path):
+    """Audit 2026-09-03: a note in a local-only folder had its body sent to
+    the cloud tier for tagging BEFORE being stamped local_only."""
+    from kyraan.store import notes, episodes
+    seen = {}
+    def fake_flags(text, exposure="cloud_ok"):
+        seen["exposure"] = exposure; return []
+    monkeypatch.setattr(episodes, "sensitivity_flags", fake_flags)
+    monkeypatch.setattr(notes, "local_only_folders", lambda: ["Personal"])
+    monkeypatch.setattr(notes, "link_people", lambda parsed, rel: [])
+    monkeypatch.setattr(notes, "is_person_note", lambda parsed, rel: False)
+    monkeypatch.setattr(notes.embed, "embed", lambda chunks: [None for _ in chunks])
+    class _Conn:
+        def execute(self, *a, **k): return self
+        def fetchone(self): return None
+        def commit(self): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    monkeypatch.setattr(notes.pg, "connection", lambda: _Conn())
+    monkeypatch.setattr(notes, "_documents_relate", lambda *a, **k: None, raising=False)
+    root = tmp_path; (root / "Personal").mkdir()
+    f = root / "Personal" / "diary.md"; f.write_text("# diary\n\nA long enough private body here.")
+    try:
+        notes.index_file(1, root, f)
+    except Exception:
+        pass
+    assert seen.get("exposure") == "local_only"

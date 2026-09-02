@@ -301,7 +301,15 @@ def index_file(chat_id: int, root: Path, path: Path, force: bool = False) -> str
         # live 2026-09-02) — register them, index the name.
         parsed["body"] = parsed["title"]
     from kyraan.store.episodes import sensitivity_flags
-    flags = sensitivity_flags(parsed["body"])
+    # The exposure decision must come BEFORE the tagging call, not after
+    # it (audit 2026-09-03: a note in a local-only folder had its body
+    # sent to the cloud tier for tagging, then was stamped local_only).
+    # Folder and title hints are known up front; those notes tag locally.
+    hint_text = (parsed["title"] + " " + " ".join(parsed["tags"])).lower()
+    pre_local = (_under(rel, local_only_folders())
+                 or any(h in hint_text for h in _SENSITIVE_HINTS))
+    flags = sensitivity_flags(parsed["body"],
+                              exposure="local_only" if pre_local else "cloud_ok")
     chunks = chunk_note(parsed["body"])
     try:
         vectors = embed.embed(chunks)

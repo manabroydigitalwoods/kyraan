@@ -109,6 +109,8 @@ _CATEGORY_WORDS = (
     ("#card", ("visiting card", "business card", "id card", "aadhaar", "pan card")),
     ("#supplement", ("supplement", "capsule", "omega", "vitamin")),
     ("#contract", ("agreement", "contract", "terms")),
+    ("#milestone", ("milestone", "first time", "1st time", "first step", "first word",
+                    "birthday", "annaprashan", "mukhe bhaat", "rice ceremony")),
 )
 
 

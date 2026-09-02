@@ -449,6 +449,20 @@ async def handle_burst(chat_id: int, texts: list, superseded=None) -> list:
     return [(len(texts) - 1, combined)]
 
 
+def _photo_just_sent(chat_id: int, max_age_s: int = 20 * 60) -> bool:
+    """The after-photo rails ("that is ruma", "this is my medicine",
+    "links?") need a photo to have JUST been sent — in the last two
+    user entries of this chat, and recently (audit 2026-09-03: "that is
+    ruma" answering "who is picking him up?" twenty minutes after any
+    photo would have linked her to it)."""
+    users = [t for role, t in list(_history[chat_id])[-4:] if role == "user"]
+    if not any(str(t).startswith("[sent a photo") for t in users[-2:]):
+        return False
+    from kyraan.store import documents as _d
+    cap = _d.latest_capture(chat_id, max_age_h=1)
+    return cap is not None and (time.time() - cap["created"].timestamp()) <= max_age_s
+
+
 async def handle_message(chat_id: int, raw_text: str) -> str:
     from kyraan.control_plane.logging_setup import (
         log_trace, new_turn, start_anomaly_capture)
@@ -797,29 +811,43 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
         saved_q = _re.match(
-            r"^\s*(?:did|have|had)\s+(?:you|u)\s+(?:save|store|keep|remember|index|link)(?:d|ed)?\s+"
-            r"(?:it|that|this|them|the\s+(?:photo|image|picture|pic|doc|document|file|screenshot)|my\s+\w+)"
-            r"\s*[?!.]*\s*$"
-            r"|^\s*(?:show\s+|my\s+|the\s+|its\s+|any\s+)?(?:links?|connections?|relations?)\s*[?!.]*\s*$"
+            r"^\s*(?:did|have|had)\s+(?:you|u)\s+(?:save|store|keep|index|link)(?:d|ed)?\s+"
+            r"(?:it|that|this|them|(?:the|my|this|that)\s+(?:photo|image|picture|pic|doc|document|file|pdf|screenshot|card))"
+            r"\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        links_q = _re.match(
+            r"^\s*(?:show\s+|my\s+|the\s+|its\s+|any\s+)?(?:links?|connections?|relations?)\s*[?!.]*\s*$"
             r"|^\s*(?:what\s+(?:is|are)\s+(?:it|that|they)\s+(?:linked|connected|related)\s+to)\s*[?!.]*\s*$",
             raw_text, _re.IGNORECASE)
-        if saved_q and kernel.viewer_person() == "owner":
+        if (saved_q or links_q) and kernel.viewer_person() == "owner":
             # "Did you save it?" / "links?" after a capture (live
             # 2026-09-03 00:45: a photo sent 15 minutes earlier got
             # "what do you mean by it?" — the window had been wiped).
             # The referent is the latest capture, by the store, never
-            # by the model's memory of the conversation. Nothing recent:
-            # the loop answers as before.
+            # by the model's memory of the conversation. The save
+            # question names its object, so a day-old capture answers
+            # it; the bare "links?" has no object, so it applies only
+            # right after a photo (audit 2026-09-03: after a website
+            # chat, "links?" would have described yesterday's photo).
             from kyraan.store import documents as _docs_q
-            cap = _docs_q.latest_capture(chat_id)
+            cap = (_docs_q.latest_capture(chat_id) if saved_q
+                   else _docs_q.latest_capture(chat_id, max_age_h=1)
+                   if _photo_just_sent(chat_id) else None)
             if cap is not None:
                 _skip_extraction.set(True)
+                # the owner's screen sees every link, including to local-
+                # only notes; cloud-bound history keeps a placeholder
+                _history_redaction.set("[confirmed the latest capture is saved and listed its links]")
                 return _docs_q.describe_capture(cap)
         photo_mine = _re.match(
-            r"^\s*(?:this|that|it|here|these|those)\s+(?:is|are|'s)\s+"
-            r"(my\s+[a-z][\w .'-]{1,60}?)\s*[.!]?\s*$",
+            r"^\s*(?:this|that|it|here|these|those)(?:\s+(?:is|are)|'s|’s)\s+"
+            r"(my\s+[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,2})\s*[.!]?\s*$",
             raw_text, _re.IGNORECASE)
-        if photo_mine and kernel.viewer_person() == "owner":
+        if (photo_mine and kernel.viewer_person() == "owner"
+                and not _re.search(
+                    r"\b(?:fault|point|plan|idea|opinion|question|answer|turn|time|day|"
+                    r"job|work|mistake|problem|choice|decision|guess|number|first|last|new)\b",
+                    photo_mine.group(1), _re.IGNORECASE)
+                and _photo_just_sent(chat_id)):
             # After-photo OWNER claim (live 2026-09-03: "this is my
             # medicine" got "Got it" twice and nothing stored changed —
             # the moment stayed nobody's, untitled, uncategorised, so
@@ -838,7 +866,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         photo_person = _re.match(
             r"^\s*(?:she|he|that|this)\s+is\s+([a-z][\w .-]{1,40}?)\s*[.!]?\s*$",
             raw_text, _re.IGNORECASE)
-        if photo_person:
+        if photo_person and _photo_just_sent(chat_id):
             # After-photo person correction (live 2026-09-02: "she is
             # kiaan's mom" was acknowledged and NOTHING stored changed;
             # worse, the face matcher had named the adult "kiaan").

@@ -62,8 +62,15 @@ _REMIND_WORDS = (
 
 
 def _is_review_request(text: str) -> bool:
-    t = text.lower()
-    return "review" in t and any(w in t for w in ("memory", "fact", "pending"))
+    """"review memory" / "review pending facts" / "memory review" — the
+    review command itself, not any sentence containing the words (audit
+    2026-09-03: "review pending emails", "can you review the facts about
+    my policy?" were swallowed by the review rail)."""
+    import re
+    t = text.lower().strip()
+    return bool(re.match(
+        r"^(?:please\s+)?(?:review\s+(?:my\s+|the\s+)?(?:memory|memories|facts?|pending(?:\s+(?:facts?|memory|items?|review))?)"
+        r"|(?:memory|facts?)\s+review)\s*[?!.]*$", t))
 
 
 # "are these latest emails", "is that all?" — a question ABOUT the reply

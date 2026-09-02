@@ -1099,21 +1099,36 @@ async def _documents_list(chat_id: int, args: dict, raw_text: str):
 
     from kyraan.store import documents
     person = str(args.get("person", "") or "").strip()
+    tag = str(args.get("tag", "") or "").strip()
+    kind = str(args.get("kind", "") or "").strip().lower()
+    try:
+        since_days = int(args.get("since_days", 0) or 0)
+        limit = int(args.get("limit", 15) or 15)
+    except (TypeError, ValueError):
+        since_days, limit = 0, 15
     try:
         docs = await _aio.to_thread(documents.list_documents, chat_id,
-                                    15, person)
+                                    limit, person, tag, kind, since_days)
     except Exception as exc:
         raise kernel.ToolFailed(
             f"document memory is unavailable right now ({str(exc)[:100]})")
     if not docs:
-        return {"found": 0,
-                "note": (f"no saved documents about {person}" if person
-                         else "no documents saved yet")}
-    return [f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars'
-            + (f', about: {", ".join(d["subjects"])}' if d["subjects"] else "")
+        what = " ".join(x for x in (
+            f"about {person}" if person else "", f"tagged {tag}" if tag else "",
+            f"of kind {kind}" if kind else "",
+            f"from the last {since_days} days" if since_days else "") if x)
+        return {"found": 0, "note": (f"no saved documents {what}" if what
+                                     else "no documents saved yet")}
+    return [_doc_row(d) for d in docs]
+
+
+def _doc_row(d: dict) -> str:
+    """One listing line: what it is, whose, what it links to, its hubs."""
+    return (f'{d["kind"]}: "{d["caption"]}" ({d["date"]}, {d["chars"]} chars'
+            + (f', about: {", ".join(d["subjects"])}' if d.get("subjects") else "")
             + (f', linked to: {"; ".join(d["related"])}' if d.get("related") else "")
-            + ')'
-            for d in docs]
+            + (f', tags: {" ".join(d["tags"])}' if d.get("tags") else "")
+            + ')')
 
 
 async def _documents_search(chat_id: int, args: dict, raw_text: str):
@@ -1126,8 +1141,18 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
     import asyncio as _aio
 
     from kyraan.store import documents
+    person = str(args.get("person", "") or "").strip()
     try:
-        hits = await _aio.to_thread(documents.search, chat_id, query)
+        limit = max(1, min(int(args.get("limit", 3) or 3), 10))
+    except (TypeError, ValueError):
+        limit = 3
+    try:
+        kw = {}
+        if limit != 3:
+            kw["k"] = limit
+        if person:
+            kw["person"] = person
+        hits = await _aio.to_thread(lambda: documents.search(chat_id, query, **kw))
     except Exception as exc:
         raise kernel.ToolFailed(
             f"document memory is unavailable right now ({str(exc)[:100]})")
@@ -1140,6 +1165,7 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
     return [f'[document "{h["caption"]}", {h["date"]}'
             + (f', about: {", ".join(h["subjects"])}' if h.get("subjects") else "")
             + (f', linked to: {"; ".join(h["related"])}' if h.get("related") else "")
+            + (f', tags: {" ".join(h["tags"])}' if h.get("tags") else "")
             + f'] {h["text"][:400]}'
             for h in hits]
 
@@ -2112,11 +2138,16 @@ TOOLS = {
         "run": _memory_relations,
     },
     "documents.list": {
-        "params": '{"person": "<optional: only docs about this household member>"}',
+        "params": ('{"person": "<optional: only docs about this household member>", '
+                   '"tag": "<optional: #hub such as #medical, #receipt, #milestone>", '
+                   '"kind": "<optional: photo|moment|pdf|note>", '
+                   '"since_days": <optional number>, "limit": <optional, up to 50>}'),
         "about": ("The user's saved documents AND photo memories "
-                  "(caption, kind, date) — \"what documents do I have\", "
-                  "\"show Kiaan's photos\", \"our memories from August\". "
-                  "Pass person to filter to one household member. "
+                  "(caption, kind, date, whose, linked to, tags) — \"what documents do I have\", "
+                  "\"show Kiaan's photos\", \"our memories from August\", "
+                  "\"what is filed under #medical\", \"Kiaan's milestones\" "
+                  "(person + tag #milestone), \"what did I save this week\" "
+                  "(since_days 7). Filters combine. "
                   'To delete one, tell the user to say "forget the document '
                   '<name>" — you cannot delete documents.'),
         "run": _documents_list,
@@ -2287,7 +2318,8 @@ TOOLS = {
         "run": _documents_read,
     },
     "documents.search": {
-        "params": '{"query": "<words or a number>"}',
+        "params": ('{"query": "<words or a number>", '
+                   '"person": "<optional household member>", "limit": <optional, up to 10>}'),
         "about": ("Search SAVED DOCUMENTS (text from the user's photos and "
                   "PDFs) — \"what was the number on that card\", \"that PDF "
                   "I sent\"; numbers and exact strings match directly. Cite "

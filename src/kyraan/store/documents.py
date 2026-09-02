@@ -171,22 +171,30 @@ def latest_capture(chat_id: int, max_age_h: int = 24) -> dict | None:
             """SELECT d.id, d.kind, d.caption, d.created_at, d.subject_persons,
                       d.entities,
                       (SELECT array_agg(r.caption) FROM document r
-                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}'
+                              AND r.exposure = ANY(%s)),
+                      (SELECT array_agg(r.caption) FROM document r
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}'
+                              AND r.exposure = 'local_only')
                FROM document d
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
                      AND d.kind IN ('photo', 'moment', 'pdf', 'file', 'docx', 'text')
                      AND d.created_at > now() - make_interval(hours => %s)
                ORDER BY d.created_at DESC LIMIT 1""",
-            (chat_id, max_age_h)).fetchone()
+            (list(_allowed_exposures()), chat_id, max_age_h)).fetchone()
     if row is None:
         return None
-    doc_id, kind, caption, created, subjects, ents, related = row
+    doc_id, kind, caption, created, subjects, ents, related, local_related = row
     ents = list(ents or [])
+    # `related` is what the current tier may see; `related_local` is what
+    # only the owner's own screen may see (the rail shows it, the
+    # history keeps a placeholder — see orchestrator's saved_q rail)
     return {"doc_id": str(doc_id), "kind": kind, "caption": caption or "(untitled)",
             "created": created, "subjects": list(subjects or []),
             "entities": [e for e in ents if not e.startswith("#")],
             "tags": [e for e in ents if e.startswith("#")],
-            "related": [r for r in (related or []) if r]}
+            "related": [r for r in (related or []) if r],
+            "related_local": [r for r in (local_related or []) if r]}
 
 
 def describe_capture(cap: dict) -> str:
@@ -195,8 +203,9 @@ def describe_capture(cap: dict) -> str:
     lines = [f'Yes — saved as "{cap["caption"]}" ({kind}, {when}).']
     if cap["subjects"]:
         lines.append("About: " + ", ".join(cap["subjects"]))
-    if cap["related"]:
-        lines.append("Linked to: " + "; ".join(f'"{r}"' for r in cap["related"]))
+    linked = list(cap["related"]) + list(cap.get("related_local") or [])
+    if linked:
+        lines.append("Linked to: " + "; ".join(f'"{r}"' for r in linked))
     if cap["entities"]:
         lines.append("Named things: " + ", ".join(cap["entities"]))
     if cap["tags"]:
@@ -225,9 +234,11 @@ def similar_captures(doc_id: str, k: int = 5, min_sim: float = SIMILAR_MIN_SIM) 
                JOIN document_chunk c ON c.document_id = d.id AND c.seq = 0
                WHERE d.chat_id = me.chat_id AND d.id <> me.id
                      AND d.kind IN ('moment', 'photo') AND d.suppressed_by = '{}'
+                     AND d.exposure = ANY(%s)
                      AND d.subject_persons && me.subject_persons
                      AND c.embedding IS NOT NULL AND me.embedding IS NOT NULL
-               ORDER BY sim DESC LIMIT %s""", (doc_id, k)).fetchall()
+               ORDER BY sim DESC LIMIT %s""",
+            (doc_id, list(_allowed_exposures()), k)).fetchall()
     return [{"doc_id": str(i), "caption": cap or "(untitled)", "date": day.isoformat(),
              "subjects": list(subs or []), "sim": float(sim)}
             for i, cap, day, subs, sim in rows if sim is not None and sim >= min_sim]
@@ -487,14 +498,16 @@ def relate(doc_id: str) -> list:
             return []
         i_am_note = kind == "note"
         others = conn.execute(
-            """SELECT id, kind, caption, text, entities, related
+            """SELECT id, kind, caption, text, entities, related, exposure
                FROM document
                WHERE chat_id = %s AND suppressed_by = '{}' AND id <> %s
                      AND (kind = 'note') <> %s
                      AND subject_persons && %s::text[]""",
             (chat_id, doc_id, i_am_note, subjects)).fetchall()
         newly = []
-        for oid, okind, ocap, otext, oents, orel in others:
+        my_exposure = conn.execute("SELECT exposure FROM document WHERE id = %s",
+                                   (doc_id,)).fetchone()[0]
+        for oid, okind, ocap, otext, oents, orel, oexp in others:
             note_title = caption if i_am_note else ocap
             capture = f"{ocap} {otext}" if i_am_note else f"{caption} {text}"
             title_words = _content_words(note_title)
@@ -507,7 +520,13 @@ def relate(doc_id: str) -> list:
                          if str(e).startswith("#")]
             cap_id, cap_ents = ((oid, list(oents or [])) if i_am_note
                                 else (doc_id, list(ents or [])))
-            inherited = [t for t in note_tags if t not in cap_ents]
+            # a local-only note's tags stay with the note (audit
+            # 2026-09-03: the hint that MADE it local-only would otherwise
+            # ride onto a cloud-visible capture); the link itself is
+            # read-gated by exposure wherever captions are rendered
+            note_exposure = my_exposure if i_am_note else oexp
+            inherited = ([t for t in note_tags if t not in cap_ents]
+                         if note_exposure == "cloud_ok" else [])
             conn.execute(
                 """UPDATE document
                    SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
@@ -574,17 +593,19 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
                                     @@ to_tsquery('english', %s)) AS fts,
                       d.kind, d.subject_persons,
                       (SELECT array_agg(r.caption) FROM document r
-                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}'
+                              AND r.exposure = ANY(%s)),
+                      d.entities
                FROM document_chunk c JOIN document d ON d.id = c.document_id
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
                      AND d.exposure = ANY(%s)
                      AND (%s = '' OR %s = ANY(d.subject_persons))
                ORDER BY fts DESC, sim DESC NULLS LAST
                LIMIT 30""",
-            (qvec, qvec, tsquery, tsquery or "x", chat_id,
-             list(_allowed_exposures()), person or "", person or "")).fetchall()
+            (qvec, qvec, tsquery, tsquery or "x", list(_allowed_exposures()),
+             chat_id, list(_allowed_exposures()), person or "", person or "")).fetchall()
     results = []
-    for doc_id, caption, filename, day, text, sim, fts, kind, subj, rel in rows:
+    for doc_id, caption, filename, day, text, sim, fts, kind, subj, rel, ents in rows:
         if not fts and (sim is None or sim < SEARCH_MIN_SIM):
             continue  # neither arm actually matched
         results.append({"doc_id": str(doc_id), "kind": kind,
@@ -592,6 +613,7 @@ def search(chat_id: int, query: str, k: int = 3, person: str = "") -> list:
                         "date": day.isoformat(), "text": text,
                         "subjects": list(subj or []),
                         "related": [r for r in (rel or []) if r],
+                        "tags": [e for e in (ents or []) if str(e).startswith("#")],
                         "sim": float(sim) if sim is not None else None,
                         "fts": bool(fts)})
         if len(results) >= k:
@@ -640,22 +662,42 @@ def full_text(chat_id: int, query: str, max_chars: int = 6000) -> dict | None:
     return {"caption": caption, "date": day.isoformat(), "text": clipped}
 
 
-def list_documents(chat_id: int, limit: int = 15, person: str = "") -> list:
-    person = (valid_subjects(person) or [""])[0]
+def list_documents(chat_id: int, limit: int = 15, person: str = "",
+                   tag: str = "", kind: str = "", since_days: int = 0) -> list:
+    """Exposure-gated like search (audit 2026-09-03: it listed local-only
+    note titles to the cloud tier). Filters (2026-09-03, retrieval
+    gaps): a household member, a #tag hub ("what is filed under
+    #medical"), a kind (photo/moment/pdf/note), a recency window."""
+    # An unknown person filters to NOTHING, not to everything (found by
+    # the 2026-09-03 gate test: an unregistered name dropped the filter)
+    person = (valid_subjects(person) or [str(person or "").strip().lower()])[0]
+    tag = str(tag or "").strip().lower()
+    if tag and not tag.startswith("#"):
+        tag = "#" + tag
+    limit = max(1, min(int(limit or 15), 50))
     with pg.connection() as conn:
         rows = conn.execute(
             """SELECT d.id, d.kind, d.caption, d.filename, d.created_at::date,
                       length(d.text), d.subject_persons,
                       (SELECT array_agg(r.caption) FROM document r
-                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}')
+                        WHERE r.id = ANY(d.related) AND r.suppressed_by = '{}'
+                              AND r.exposure = ANY(%s)),
+                      d.entities
                FROM document d WHERE d.chat_id = %s AND d.suppressed_by = '{}'
+                     AND d.exposure = ANY(%s)
                      AND (%s = '' OR %s = ANY(d.subject_persons))
+                     AND (%s = '' OR %s = ANY(d.entities))
+                     AND (%s = '' OR d.kind = %s)
+                     AND (%s = 0 OR d.created_at > now() - make_interval(days => %s))
                ORDER BY d.created_at DESC LIMIT %s""",
-            (chat_id, person, person, limit)).fetchall()
+            (list(_allowed_exposures()), chat_id, list(_allowed_exposures()),
+             person, person, tag, tag, kind or "", kind or "",
+             int(since_days or 0), int(since_days or 0), limit)).fetchall()
     return [{"id": str(i), "kind": k, "caption": c or f or "(untitled)",
              "date": d.isoformat(), "chars": n, "subjects": list(s or []),
-             "related": [x for x in (rel or []) if x]}
-            for i, k, c, f, d, n, s, rel in rows]
+             "related": [x for x in (rel or []) if x],
+             "tags": [e for e in (ents or []) if str(e).startswith("#")]}
+            for i, k, c, f, d, n, s, rel, ents in rows]
 
 
 def sweep_orphaned_files(min_age_s: int = 3600) -> int:
