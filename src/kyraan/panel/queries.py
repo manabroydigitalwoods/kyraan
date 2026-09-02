@@ -1147,6 +1147,17 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             })
             for tag in tags:
                 tag_owners[tag].append(node_id)
+        else:
+            # Photos and documents carry entities too (2026-09-02): the
+            # named things the vision pass read off the image — brand,
+            # product, place — plus one #category. Shown on the node,
+            # and hub-joined exactly like note tags so two photos of the
+            # same brand meet at one neuron.
+            ents = [str(e) for e in (entities or [])]
+            node.update({"tags": [e for e in ents if e.startswith("#")],
+                         "entities": [e for e in ents if not e.startswith("#")]})
+            for ent in ents:
+                tag_owners[ent].append(node_id)
         nodes.append(node)
         for who in (subjects or []):
             target = _person_node(who)

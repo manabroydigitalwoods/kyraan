@@ -58,7 +58,7 @@ the way a person looking at it would.
 
 OUTPUT exactly one JSON object:
   {"reply": "<your reply>", "remember_face_as": null,
-   "document_text": "", "document_title": ""}
+   "document_text": "", "document_title": "", "entities": []}
 Set "document_text" to a FULL transcription when the photo is a
 document — a visiting card, brochure, sign, label, letter, screen, or
 anything with readable text worth keeping: every name, phone number,
@@ -68,6 +68,12 @@ there.
 When document_text is set, also set "document_title" to a 2-6 word
 human name for it ("HP Gas cash memo", "Sharma Medical visiting
 card") — what the owner would call this document; otherwise "".
+Set "entities" to the named THINGS visible in the photo or its text —
+brand, product, place, organisation, event — as short strings exactly
+as printed ("Carbamide Forte", "Omefish-Ultra", "Sharma Garden"), plus
+ONE category as a #tag ("#supplement", "#invoice", "#playground").
+Never people (they are subjects), never guesses; [] when nothing is
+named. Do this for scene photos too, not only documents.
 Also set "document_subjects" to a list of household member names the
 document is ABOUT — the patient on a medical card, the people a
 policy names — using names from the caption/faces line only, [] when
@@ -130,6 +136,7 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
               f"OWNER'S CAPTION: {question}")
     import json
     reply, enroll_name, document_text, document_title = "", None, "", ""
+    photo_entities: list = []
     # An EMPTY answer from an otherwise-successful vision call happens
     # (2026-08-27 19:38 live: 7s call, blank reply, the owner had to
     # resend the photo). One in-process retry beats making a human be
@@ -160,12 +167,15 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             document_text = str(decision.get("document_text") or "").strip()
             document_title = str(decision.get("document_title") or "").strip()
             document_subjects = decision.get("document_subjects") or []
+            photo_entities = [str(e).strip() for e in
+                              (decision.get("entities") or []) if str(e).strip()]
         except (json.JSONDecodeError, AttributeError, TypeError):
             # Robustness: an unparseable response is still a reply —
             # losing the intent field beats losing the answer.
             reply, enroll_name = response.text.strip(), None
             document_text = document_title = ""
             document_subjects = []
+            photo_entities = []
         if reply:
             break
         log_event("photo_empty_retry", chat_id=chat_id, attempt=attempt)
@@ -211,7 +221,8 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             doc_id = documents.ingest(chat_id, "photo", document_text,
                                       caption=title[:120],
                                       subjects=subjects,
-                                      original=original)
+                                      original=original,
+                                      entities=photo_entities)
             if doc_id:
                 reply += ("\n\n📄 Saved to document memory — ask me about "
                           "it anytime.")
@@ -254,7 +265,8 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
             moment_id = _docs2.ingest(
                 chat_id, "moment",
                 f"[photo, {local_now().strftime('%d %b %Y')}] {reply}",
-                caption=title[:120], subjects=subjects, original=original)
+                caption=title[:120], subjects=subjects, original=original,
+                entities=photo_entities)
             if moment_id:
                 reply += "\n\n🖼 Saved to memories — ask me to show it anytime."
         except Exception as exc:

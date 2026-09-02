@@ -209,7 +209,7 @@ def original_file(chat_id: int, doc_id: str):
 
 def ingest(chat_id: int, kind: str, text: str, caption: str = "",
            filename: str = "", subjects=None,
-           original: tuple | None = None) -> str | None:
+           original: tuple | None = None, entities=None) -> str | None:
     """Store one captured document. Returns the doc id, or None when the
     text is too thin to be a document. Idempotent: the same text in the
     same chat is one document (re-sending a card doesn't duplicate).
@@ -256,11 +256,14 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
                                      text, flags, subject_persons,
-                                     file_path, file_sha256)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     file_path, file_sha256, entities)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
                    caption = EXCLUDED.caption, flags = EXCLUDED.flags,
                    subject_persons = EXCLUDED.subject_persons,
+                   entities = CASE WHEN cardinality(EXCLUDED.entities) > 0
+                                   THEN EXCLUDED.entities
+                                   ELSE document.entities END,
                    file_path = CASE WHEN EXCLUDED.file_path <> ''
                                     THEN EXCLUDED.file_path
                                     ELSE document.file_path END,
@@ -268,7 +271,8 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
                                       THEN EXCLUDED.file_sha256
                                       ELSE document.file_sha256 END""",
             (doc_id, chat_id, kind, caption[:300], filename[:200], text,
-             flags, subjects, file_path, file_hash))
+             flags, subjects, file_path, file_hash,
+             [str(e).strip()[:60] for e in (entities or []) if str(e).strip()][:12]))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):

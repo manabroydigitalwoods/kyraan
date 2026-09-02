@@ -261,15 +261,16 @@ async def test_scene_photo_becomes_a_moment_with_face_links(monkeypatch):
     stored = {}
 
     def capture(chat_id, kind, text, caption="", subjects=None,
-                original=None, **kw):
+                original=None, entities=None, **kw):
         stored.update(kind=kind, text=text, caption=caption,
-                      subjects=subjects, original=original)
+                      subjects=subjects, original=original, entities=entities)
         return "doc-1"
 
     monkeypatch.setattr(documents, "ingest", capture)
 
     class _R:
-        text = '{"reply": "Kiaan grinning on the swing, golden evening light."}'
+        text = ('{"reply": "Kiaan grinning on the swing, golden evening light.", '
+                '"entities": ["#playground", "Sharma Garden"]}')
         latency_ms = 5.0
 
     async def fake_acall(**kw):
@@ -283,6 +284,7 @@ async def test_scene_photo_becomes_a_moment_with_face_links(monkeypatch):
     assert stored["subjects"] == ["Kiaan"]          # face match -> person link
     assert stored["original"][0] == b"ABC"          # bytes kept
     assert "Kiaan —" in stored["caption"]           # auto-title names who
+    assert stored["entities"] == ["#playground", "Sharma Garden"]   # label's own things
     assert "Saved to memories" in reply
 
 
