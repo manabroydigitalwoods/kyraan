@@ -117,3 +117,18 @@ def test_show_last_turn_reads_telemetry(tmp_path, monkeypatch):
     assert "Ended: replied" in out
     assert "$0.0021" in out and "web.search" in out and "4.2s" in out
     assert "No completed turn" in orchestrator._describe_last_turn(999)
+
+
+def test_memory_root_is_env_relocatable(tmp_path, monkeypatch):
+    """KYRAAN_MEMORY_ROOT (2026-09-01): the fact tree can live in an
+    Obsidian vault — same module, different Path, files stay authority."""
+    import importlib
+    monkeypatch.setenv("KYRAAN_MEMORY_ROOT", str(tmp_path / "vault" / "kyraan"))
+    from kyraan.memory import store
+    reloaded = importlib.reload(store)
+    try:
+        assert reloaded.MEMORY_ROOT == tmp_path / "vault" / "kyraan"
+        assert reloaded.PENDING_DIR.exists()   # created on import
+    finally:
+        monkeypatch.delenv("KYRAAN_MEMORY_ROOT")
+        importlib.reload(store)

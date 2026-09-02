@@ -45,9 +45,15 @@ def main() -> int:
         pg_sql.unlink(missing_ok=True)
     members = [m for m in ("data", "memory", "config/permissions.yaml", ".env")
                if (REPO / m).exists()]
-    result = subprocess.run(
-        ["tar", "-czf", str(target), "-C", str(REPO), *members],
-        capture_output=True, text=True)
+    tar_args = ["tar", "-czf", str(target), "-C", str(REPO), *members]
+    # KYRAAN_MEMORY_ROOT (2026-09-01): a memory tree relocated into an
+    # Obsidian vault still rides the nightly backup — appended as a
+    # second -C so paths stay portable.
+    external = os.environ.get("KYRAAN_MEMORY_ROOT", "").strip()
+    if external and Path(external).exists():
+        ext = Path(external)
+        tar_args += ["-C", str(ext.parent), ext.name]
+    result = subprocess.run(tar_args, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"backup FAILED: {result.stderr[:300]}", file=sys.stderr)
         return 1

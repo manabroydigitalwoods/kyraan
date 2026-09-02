@@ -15,7 +15,19 @@ from pathlib import Path
 
 import os as _os
 
-MEMORY_ROOT = Path(__file__).resolve().parents[3] / "memory"
+import os as _os
+
+# KYRAAN_MEMORY_ROOT (owner, 2026-09-01): the memory tree is plain
+# Markdown, so it can live inside an Obsidian vault — browse and edit
+# facts as notes; the files stay the authority. Two owner-owned
+# caveats, stated where the choice is made: (1) a vault synced by
+# iCloud/Obsidian Sync sends these files off-machine — including
+# local_only facts — under the OWNER'S sync, a deliberate trade;
+# (2) external edits bypass the PG mirror until
+# scripts/resync_facts.py (or the nightly job) reconciles.
+MEMORY_ROOT = Path(
+    _os.environ.get("KYRAAN_MEMORY_ROOT", "").strip()
+    or Path(__file__).resolve().parents[3] / "memory")
 PENDING_DIR = MEMORY_ROOT / "pending_review"
 PENDING_DIR.mkdir(parents=True, exist_ok=True)  # a purged clean clone has no memory/ at all
 for _d in (MEMORY_ROOT, PENDING_DIR):
