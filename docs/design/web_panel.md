@@ -565,6 +565,28 @@ checklists showing counts (`lobes 6/7` is the only hint something is
 hidden once the boxes are out of sight), which put the camera controls
 back on the first row.
 
+The controls row hides too (`controls ▴`, in the URL as `top=0`), and both
+toggles live in the sector header rather than the row, so hiding the row
+cannot take the way back with it. Neither toggle re-frames: the view is
+centre-relative, so the graph keeps its exact place, size and simulation
+state and the freed space opens around it — the refit that used to run on
+toggle read as "the simulation reset" (measured: node position, scale and
+alpha byte-identical through both toggles). One thing the measurement
+caught: the canvas height was a fixed `calc(100vh − 190px)`, so hiding
+the row freed 43px above the canvas that the canvas never took; the
+layout is flex-filled now, top to bottom.
+
+Then the corners (owner: "adjust to the monitor screen, minus the top-left
+and bottom-right spaces"). Measured at 1600×900: 12px above the console,
+14px left of it, 25px to the right (padding plus the reserved scrollbar
+gutter), 12px below, and a 30px page footer whose only content —
+"read-only" — the rail already shows as RO. `main` padding is 6/8 now,
+the footer is gone and its sentence is the RO mark's tooltip, and the
+layout gap is 8px. The gutter stays: it is what keeps sectors from
+shifting sideways when one scrolls and another does not, and 11px is a
+fair price for that. Canvas at 1600×900: 727px, +43px with the controls
+hidden, +312px wide with the panels hidden.
+
 Two URL bugs the picker flushed out, both pre-existing. `lobes` was
 written only when fewer than four were visible — the count from when
 there were four lobe types; with seven, hiding one left six and nothing
@@ -572,6 +594,13 @@ was ever recorded. And the URL writer was registered before each
 control's state listener, so it read the previous state: hiding wrote
 nothing, restoring wrote "hidden" — one step late, for every control in
 that list. It defers a tick now.
+
+**Search by key** (owner: "use cmd+space to search"): Cmd+Space, Ctrl+Space
+or `/` focus the neuron search and reveal the controls row if it is
+hidden. Bound honestly: on a Mac the OS owns Cmd+Space (Spotlight) and the
+page usually never receives it, which is why the other two exist. Esc in
+the box clears it and hands focus back to the canvas, so the next Space
+is a pan and not a character.
 
 **Keys** (owner's ask): plain drag orbits; Space+drag pans (the hand);
 Cmd/Ctrl+drag zooms about where you pressed (up = in, recomputed from the

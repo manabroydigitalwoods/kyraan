@@ -197,7 +197,9 @@ h1::before { content: "\25b8 "; }     /* ▸ — a prompt, not a logo */
 .sector.on b { opacity: 1; }
 
 main {
-  flex: 1 1 auto; padding: 12px 14px; min-width: 0; min-height: 0;
+  /* 12/14 was the corner space the owner pointed at; the frame is the
+     console's own border, so main needs only a hairline of breathing room. */
+  flex: 1 1 auto; padding: 6px 8px; min-width: 0; min-height: 0;
   overflow-y: auto;      /* only the working area scrolls */
   /* Reserve the scrollbar's width always. Otherwise a sector that scrolls
      is 8px narrower than one that does not, and every switch shifts the
@@ -441,19 +443,31 @@ th {
 .bar > span.warn { background: var(--warn); }
 .bar > span.bad  { background: var(--bad); }
 
-footer {
-  flex: 0 0 auto;
-  padding: 6px 16px; color: var(--dim); font-size: 11px;
-  border-top: 1px solid var(--line); letter-spacing: .04em;
-}
+/* No page footer: it cost 30px on every sector to say "read-only",
+   which the rail already says as RO — its sentence is that mark's tooltip
+   now. */
+footer { display: none; }
 
 /* ---------------------------------------------------------- memory map */
 
-.memory-layout { display: flex; gap: 12px; align-items: stretch; }
+/* The brain view is a flex column filling main — the same pattern the
+   overview and host views use. Without it the sector console had no flex
+   parent, so the flex-fill below had nothing to fill and the canvas fell
+   to its minimum: 298px of graph over a dark void. */
+#view-memory.on {
+  display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+}
+
+/* The layout fills whatever height the sector has left. It was a fixed
+   calc(100vh - 190px), so hiding the controls row freed space above the
+   canvas that the canvas never took — the row went, the dark stayed. */
+.memory-layout {
+  display: flex; gap: 8px; align-items: stretch;
+  flex: 1 1 auto; min-height: 0;
+}
 .starfield {
-  position: relative; flex: 1 1 auto; min-width: 0;
+  position: relative; flex: 1 1 auto; min-width: 0; min-height: 300px;
   border: 1px solid var(--line-hot); background: var(--bg);
-  height: calc(100vh - 190px); min-height: 380px;
 }
 #mem-canvas { display: block; width: 100%; height: 100%; cursor: grab; }
 #mem-canvas.dragging { cursor: grabbing; }
@@ -471,12 +485,12 @@ footer {
 
 .memory-side {
   flex: 0 0 300px; display: flex; flex-direction: column; gap: 12px;
-  max-height: calc(100vh - 190px); overflow-y: auto;
+  min-height: 0; overflow-y: auto;
 }
 @media (max-width: 900px) {
   .memory-layout { flex-direction: column; }
-  .memory-side { flex: 1 1 auto; max-height: none; }
-  .starfield { height: 60vh; }
+  .memory-side { flex: 1 1 auto; }
+  .starfield { flex: 0 0 60vh; }
 }
 .fact-quote {
   color: var(--text); border-left: 2px solid var(--accent);

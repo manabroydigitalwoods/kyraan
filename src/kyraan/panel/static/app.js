@@ -2506,8 +2506,23 @@ function wireMemory() {
     canvas.style.cursor = brain.keys.space ? "grab"
       : brain.keys.zoom ? "zoom-in" : "default";
   };
+  // Jump to search: Cmd+Space, Ctrl+Space, or "/". On a Mac the OS owns
+  // Cmd+Space (Spotlight) and the page usually never sees it, which is
+  // why the other two exist. If the controls row is hidden it is shown
+  // first — focusing an invisible box does nothing.
+  const focusSearch = () => {
+    const search = $("mem-search");
+    if (!search) return;
+    if ($("view-memory").classList.contains("top-hidden")) $("top-toggle").click();
+    search.focus();
+    search.select();
+  };
   window.addEventListener("keydown", (event) => {
-    if (currentView !== "memory" || typing(event)) return;
+    if (currentView !== "memory") return;
+    const wantsSearch = (event.key === " " && (event.metaKey || event.ctrlKey))
+                     || (event.key === "/" && !typing(event));
+    if (wantsSearch) { event.preventDefault(); focusSearch(); return; }
+    if (typing(event)) return;
     if (event.key === " ") {
       if (!brain.keys.space) { brain.keys.space = true; cursorFor(); }
       event.preventDefault();          // Space must not scroll the page
@@ -2551,7 +2566,7 @@ function wireMemory() {
   if (search) {
     search.addEventListener("input", (e) => { runSearch(e.target.value); syncUrl(false); });
     search.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") { search.value = ""; runSearch(""); syncUrl(false); }
+      if (e.key === "Escape") { search.value = ""; runSearch(""); syncUrl(false); search.blur(); }
       if (e.key !== "Enter" || !brain.matches.size) return;
       // Enter commits the search: select the hits and frame them.
       brain.selection = new Set(brain.matches);

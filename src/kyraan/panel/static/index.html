@@ -69,7 +69,7 @@
     <div id="rail-foot">
       <div class="rail-stat" title="state"><span id="rail-state">—</span></div>
       <div class="rail-bar"><span id="rail-budget"></span></div>
-      <div class="rail-meta" id="rail-meta" title="the panel never writes">RO</div>
+      <div class="rail-meta" id="rail-meta" title="read-only — every control surface goes through the kernel, and none exist yet (docs/design/web_panel.md)">RO</div>
     </div>
   </nav>
 
@@ -207,7 +207,8 @@
         </span>
         <span class="verdict" id="mem-note"></span></h2>
       <div class="controls">
-        <input id="mem-search" type="search" placeholder="search neurons"
+        <input id="mem-search" type="search" placeholder="search neurons  ( / )"
+               title="jump here with Cmd+Space, Ctrl+Space or /"
                autocomplete="off">
         <label>colour
           <select id="mem-colour">
@@ -360,7 +361,6 @@
   </main>
 </div>
 
-<footer>read-only — every control surface goes through the kernel, and none exist yet (docs/design/web_panel.md)</footer>
 <script src="/app.js"></script>
 </body>
 </html>
