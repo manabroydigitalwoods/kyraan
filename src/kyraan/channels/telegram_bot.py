@@ -586,7 +586,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             chat_id, data_url, caption,
             recognized=recognized["names"],
             maybe=recognized.get("maybe") or [])
-        if vision_enroll and faces.available() and is_owner_turn:
+        if (vision_enroll and faces.available() and is_owner_turn
+                and faces.enroll_words(caption)):
             # The vision model read enrollment intent in the caption (any
             # wording) — the regex above only catches the fixed phrases.
             # Same confirm gate; the ask replaces the descriptive reply.
@@ -611,6 +612,26 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                       + (f"I have face data for: {', '.join(enrolled)}."
                          if enrolled else "No faces are enrolled yet.")
                       + ")")
+        if is_owner_turn and re.search(
+                r"\b(?:similar|same|other|more|matching)\s+(?:images?|photos?|pictures?|pics?)\b",
+                caption, re.IGNORECASE):
+            # "similar images for kiaan? ... link it with them" (live
+            # 2026-09-03 01:03): the answer is in the store, not in the
+            # vision model — same-person captures with a close
+            # description, and an explicit ask links them.
+            from kyraan.store import documents as _docs_sim
+            cap = await asyncio.to_thread(_docs_sim.latest_capture, chat_id, 1)
+            sims = (await asyncio.to_thread(_docs_sim.similar_captures, cap["doc_id"])
+                    if cap else [])
+            if sims:
+                reply += "\n\nSimilar saved photos:\n" + "\n".join(
+                    f'• "{x["caption"]}" ({x["date"]})' for x in sims)
+                if re.search(r"\blink", caption, re.IGNORECASE):
+                    await asyncio.to_thread(_docs_sim.link_captures, cap["doc_id"],
+                                            [x["doc_id"] for x in sims])
+                    reply += "\n\nLinked this photo to them."
+            elif cap:
+                reply += "\n\nNo similar saved photos yet."
         hint_name = (faces.enroll_hint(caption)
                      if faces.available() and is_owner_turn else None)
         if hint_name:

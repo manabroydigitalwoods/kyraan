@@ -800,7 +800,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             r"^\s*(?:did|have|had)\s+(?:you|u)\s+(?:save|store|keep|remember|index|link)(?:d|ed)?\s+"
             r"(?:it|that|this|them|the\s+(?:photo|image|picture|pic|doc|document|file|screenshot)|my\s+\w+)"
             r"\s*[?!.]*\s*$"
-            r"|^\s*(?:links?|connections?|relations?)\s*[?!.]*\s*$"
+            r"|^\s*(?:show\s+|my\s+|the\s+|its\s+|any\s+)?(?:links?|connections?|relations?)\s*[?!.]*\s*$"
             r"|^\s*(?:what\s+(?:is|are)\s+(?:it|that|they)\s+(?:linked|connected|related)\s+to)\s*[?!.]*\s*$",
             raw_text, _re.IGNORECASE)
         if saved_q and kernel.viewer_person() == "owner":

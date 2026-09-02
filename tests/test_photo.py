@@ -470,3 +470,61 @@ def test_did_you_save_it_answers_from_the_store(monkeypatch):
     # nothing recent -> not our rail (the loop would answer)
     monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: None)
     assert documents.describe_capture(cap).count("\n") == 4
+
+
+def test_vision_enrollment_needs_an_enrollment_word():
+    """Live 2026-09-03 01:03: "can you similar images for kiaan? if yes
+    then link it with them" became a face-template confirm."""
+    from kyraan.agents import faces
+    assert not faces.enroll_words("can you similar images for kiaan? if yes then link it with them")
+    assert not faces.enroll_words("this is kiaan")
+    assert faces.enroll_words("remember this is Suman Ghosh")
+    assert faces.enroll_words("save his face as Kamal")
+    assert faces.enroll_words("recognise me next time")
+
+
+@pytest.mark.pg
+def test_similar_captures_share_a_person_and_a_close_description(monkeypatch):
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg, embed
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    import json
+    from kyraan.store import documents
+    def vec(a, b):
+        v = [0.0] * embed.EMBED_DIM; v[0] = a; v[1] = b; return json.dumps(v)
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4245")
+        for i, (cap, subs, v) in enumerate([
+                ("krishna dress", ["kiaan"], vec(1, 0)),
+                ("krishna dress again", ["kiaan"], vec(0.9, 0.44)),   # sim ~0.9
+                ("ruma in krishna print", ["ruma"], vec(1, 0)),         # no shared person
+                ("kiaan vaccination card", ["kiaan"], vec(0, 1))]):     # sim 0
+            did = f"00000000-0000-0000-0000-0000000000b{i}"
+            conn.execute("INSERT INTO document (id, chat_id, kind, caption, text, subject_persons) VALUES (%s, 4245, 'moment', %s, 'x', %s)", (did, cap, subs))
+            conn.execute("INSERT INTO document_chunk (id, document_id, seq, text, embedding) VALUES (gen_random_uuid(), %s, 0, 'x', %s)", (did, v))
+        conn.commit()
+    sims = documents.similar_captures("00000000-0000-0000-0000-0000000000b0")
+    assert [s["caption"] for s in sims] == ["krishna dress again"]
+    assert documents.link_captures("00000000-0000-0000-0000-0000000000b0", [s["doc_id"] for s in sims]) == 1
+    with pg.connection() as conn:
+        rel = dict(conn.execute("SELECT caption, related::text[] FROM document WHERE chat_id = 4245").fetchall())
+    assert rel["krishna dress"] == ["00000000-0000-0000-0000-0000000000b1"]
+    assert rel["krishna dress again"] == ["00000000-0000-0000-0000-0000000000b0"]
+    pg.reset_pool_for_tests()
+
+
+def test_my_links_is_the_links_rail(monkeypatch):
+    import asyncio, datetime
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.store import documents
+    cap = {"doc_id": "x", "kind": "moment", "caption": "c", "created": datetime.datetime.now(datetime.timezone.utc),
+           "subjects": [], "entities": [], "tags": [], "related": []}
+    monkeypatch.setattr(documents, "latest_capture", lambda chat_id, max_age_h=24: cap)
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    for q in ("my links", "show links", "connections?"):
+        assert asyncio.run(orchestrator.handle_message(1, q)).startswith('Yes — saved as "c"'), q

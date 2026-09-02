@@ -362,3 +362,16 @@ def resync_templates() -> int:
 
 def enrolled_names() -> list:
     return sorted(_load_enrolled())
+
+
+_ENROLL_WORDS = re.compile(r"\b(?:face|faces|recogni[sz]e|remember|enrol|enroll|memori[sz]e)\b", re.IGNORECASE)
+
+
+def enroll_words(caption: str) -> bool:
+    """Deterministic floor under the vision model's enrollment reading
+    (live 2026-09-03 01:03: "can you similar images for kiaan? if yes
+    then link it with them" became a face-template confirm). A biometric
+    write needs an enrollment WORD in the caption — face, recognise,
+    remember, enrol — in the owner's own text; the model may read intent
+    in any wording, but never from a caption without one."""
+    return bool(_ENROLL_WORDS.search(str(caption or "")))

@@ -204,6 +204,53 @@ def describe_capture(cap: dict) -> str:
     return "\n".join(lines)
 
 
+SIMILAR_MIN_SIM = 0.5   # same-subject Kiaan photos scored 0.60-0.63 live;
+                        # an unrelated same-subject card 0.09 (2026-09-03)
+
+
+def similar_captures(doc_id: str, k: int = 5, min_sim: float = SIMILAR_MIN_SIM) -> list:
+    """Captures that look like this one: a SHARED registry person and a
+    close description (owner 2026-09-03: "can you similar images for
+    kiaan?"). Same chat only; best first."""
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """WITH me AS (
+                   SELECT d.id, d.chat_id, d.subject_persons, c.embedding
+                   FROM document d JOIN document_chunk c
+                        ON c.document_id = d.id AND c.seq = 0
+                   WHERE d.id = %s)
+               SELECT d.id, d.caption, d.created_at::date, d.subject_persons,
+                      1 - (c.embedding <=> me.embedding) AS sim
+               FROM me, document d
+               JOIN document_chunk c ON c.document_id = d.id AND c.seq = 0
+               WHERE d.chat_id = me.chat_id AND d.id <> me.id
+                     AND d.kind IN ('moment', 'photo') AND d.suppressed_by = '{}'
+                     AND d.subject_persons && me.subject_persons
+                     AND c.embedding IS NOT NULL AND me.embedding IS NOT NULL
+               ORDER BY sim DESC LIMIT %s""", (doc_id, k)).fetchall()
+    return [{"doc_id": str(i), "caption": cap or "(untitled)", "date": day.isoformat(),
+             "subjects": list(subs or []), "sim": float(sim)}
+            for i, cap, day, subs, sim in rows if sim is not None and sim >= min_sim]
+
+
+def link_captures(doc_id: str, other_ids: list) -> int:
+    """Owner-asked links between captures ("link it with them"):
+    symmetric, in `related`, like a capture and its note."""
+    if not other_ids:
+        return 0
+    with pg.connection() as conn:
+        for oid in other_ids:
+            for a, b in ((doc_id, oid), (oid, doc_id)):
+                conn.execute(
+                    """UPDATE document
+                       SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
+                                      FROM unnest(related || %s::uuid[]) r)
+                       WHERE id = %s""", ([str(b)], a))
+        conn.commit()
+    log_event("captures_linked", capture=str(doc_id), to=[str(o) for o in other_ids])
+    return len(other_ids)
+
+
 def claim_latest_moment(chat_id: int, phrase: str, max_age_min: int = 20):
     """The owner captioning the photo JUST sent as theirs ("this is my
     medicine", live 2026-09-03: acknowledged twice, nothing stored
