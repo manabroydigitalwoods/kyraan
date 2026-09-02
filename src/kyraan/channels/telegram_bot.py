@@ -938,17 +938,31 @@ def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
         "Never mention Kyraan, drafts, or assistants. Never ask the owner "
         "anything. Output the message text only.\n")
 
-    async def draft_fn(instruction: str) -> str:
+    async def draft_fn(instruction: str, question: str = "") -> str:
         # The owner-facing loop asked the OWNER for guidance and that
         # meta-talk got posted to Ruma (live 2026-09-02). Drafting is a
         # writer call: role-framed, memory-aware, no tools, no contract.
+        # Memory and documents are keyed on the SENDER'S QUESTION, not
+        # the whole brief — "next vaccine date" must pull the MMR fact
+        # and the vaccination card, not promise to "check" (live).
         from kyraan.memory import engine as _engine
         from kyraan.model_router import router as _router
+        from kyraan.store import documents as _docs
+        key = question or instruction
         try:
-            memory = _engine.build_context(instruction, budget_chars=1800)
+            memory = _engine.build_context(key, budget_chars=1800)
         except Exception:
             memory = ""
-        system = _WRITER + (f"\nWHAT MANAB KNOWS:\n{memory}" if memory else "")
+        docs = ""
+        try:
+            hits = await asyncio.to_thread(_docs.search, _owner_id(), key)
+            docs = "\n".join(f'- [{h["caption"]}, {h["date"]}] {h["text"][:300]}'
+                              for h in (hits or [])[:3])
+        except Exception:
+            docs = ""
+        system = (_WRITER
+                  + (f"\nWHAT MANAB KNOWS (facts):\n{memory}" if memory else "")
+                  + (f"\nMANAB'S DOCUMENTS:\n{docs}" if docs else ""))
         for tier in ("frontier", "cheap"):
             try:
                 resp = await _router.acall(prompt=instruction, system=system,
@@ -972,6 +986,7 @@ def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
             result = await _kernel.run_tool(_kernel.ToolCall(
                 "slack.post", {"channel_id": channel, "payload": draft,
                                "content_type": "text/plain"}))
+            slack_watch.note_posted(draft)   # never a voice sample
             return f"Posted to {channel}: \"{draft}\""
         ask = await _orch._gated(
             chat_id, SkillCall("agent.action", {"tool": "slack.post"}), _post,

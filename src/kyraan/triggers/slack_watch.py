@@ -40,6 +40,18 @@ def _save(state: dict) -> None:
     atomic_write_text(STATE_PATH, json.dumps(state, indent=1))
 
 
+def note_posted(text: str) -> None:
+    """Remember what Kyraan itself posted under the owner's name — those
+    lines must never feed back as the owner's voice sample (live
+    2026-09-02: each stiff draft made the next one stiffer)."""
+    state = _load()
+    posted = state.setdefault("kyraan_posted", [])
+    if text and text not in posted:
+        posted.append(text)
+        state["kyraan_posted"] = posted[-50:]
+        _save(state)
+
+
 def parse_history(csv_text: str) -> list:
     """Rows from the server's CSV: [{ts, user_id, user, text, channel}]."""
     rows = []
@@ -132,9 +144,12 @@ def build_instruction(channel: str, mention: dict, thread: list,
         "Write the reply YOU (the owner) would send, in first person, in "
         "the same language/register the sender used, as a real person "
         "texts — short, natural, no assistant phrasing, no sign-off. "
-        "If you genuinely lack a fact, say what a person would (\"let me "
-        "check and tell you\") — never ask the reader of this brief "
-        "anything. Output the message text only.")
+        "Answer from WHAT YOU KNOW (facts and documents below) when it "
+        "covers the question — never promise to \"check\" something you "
+        "already know. Don't repeat anything you already said earlier in "
+        "the thread. If you genuinely lack a fact, say what a person "
+        "would (\"let me check and tell you\") — never ask the reader of "
+        "this brief anything. Output the message text only.")
 
 
 async def tick(channels: list, owner_chat: int) -> int:
@@ -167,13 +182,16 @@ async def tick(channels: list, owner_chat: int) -> int:
             if not mentions_owner(r["text"], _owner_user_id, _owner_handle):
                 continue
             thread = [x for x in ordered if x["ts"] < r["ts"]]
+            ours = set(state.get("kyraan_posted", []))
             samples = [x["text"] for x in ordered
-                       if x["user_id"] == _owner_user_id]
+                       if x["user_id"] == _owner_user_id
+                       and x["text"] not in ours]
             instruction = build_instruction(channel, r, thread, samples)
+            question = r["text"].replace(f"<@{_owner_user_id}>", "").strip()
             try:
                 draft = ""
                 for attempt in range(2):
-                    draft = (await _draft_fn(instruction) or "").strip()
+                    draft = (await _draft_fn(instruction, question) or "").strip()
                     if draft and not looks_like_meta_talk(draft):
                         break
                     log_event("slack_watch_draft_rejected", attempt=attempt,

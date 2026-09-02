@@ -26,7 +26,7 @@ def _wire(monkeypatch, csv_text=CSV):
         assert call.tool_name == "slack.history"
         return csv_text
 
-    async def draft(instruction):
+    async def draft(instruction, question=""):
         drafts.append(instruction)
         return "Yes, 8 works — see you then."
 
@@ -131,7 +131,7 @@ async def test_rejected_drafts_retry_then_surface_without_a_proposal(monkeypatch
     slack_watch._save({"watermarks": {"#social": "1788346981.5"}})
     calls = []
 
-    async def meta_draft(instruction):
+    async def meta_draft(instruction, question=""):
         calls.append(instruction)
         return "Maan, what do you want me to say back to Ruma?"
     monkeypatch.setattr(slack_watch, "_draft_fn", meta_draft)
@@ -139,3 +139,13 @@ async def test_rejected_drafts_retry_then_surface_without_a_proposal(monkeypatch
     assert len(calls) == 2                       # one retry with the REJECTED note
     assert "REJECTED" in calls[1]
     assert asks[0][2] == ""                      # surfaced, honestly draftless
+
+
+
+async def test_kyraan_posts_never_become_voice_samples(monkeypatch):
+    drafts, asks = _wire(monkeypatch)
+    slack_watch._save({"watermarks": {"#social": "1788346981.5"},
+                       "kyraan_posted": ["hello all"]})   # our own earlier post
+    await slack_watch.tick(["#social"], 7)
+    assert "(no samples" in drafts[0]          # the only owner line was ours
+    assert "never promise" in drafts[0] and "Don't repeat" in drafts[0]
