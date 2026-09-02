@@ -918,7 +918,27 @@ footer::before {
   .memory-side { flex: 0 0 40vh; }
   #view-memory.side-hidden .starfield { flex: 1 1 auto; }
   .legend { max-width: 55%; }
+  /* The turn card, compact: it covered a third of the brain. Smaller
+     type, tighter rows, the six effort figures on one line, capped at
+     38% of the canvas — the graph under it is what the card is about. */
   .turn-card, .hub .turn-card {
-    width: auto; left: 8px; right: 8px; top: 8px; font-size: 11px; max-height: 58%;
+    width: auto; left: 6px; right: 6px; top: 6px; font-size: 10px;
+    max-height: 38%; padding: 5px 8px 6px; line-height: 1.35;
   }
+  .tc-head { margin-bottom: 3px; gap: 6px; }
+  .tc-title { font-size: 9px; letter-spacing: .14em; }
+  .tc-head .tag { font-size: 9.5px; padding: 0 4px; }
+  .tc-btn { font-size: 8.5px; padding: 0 5px; }
+  .tc-asked, .tc-replied { margin: 3px 0 5px; padding-left: 6px; }
+  .tc-asked::before, .tc-replied::before { font-size: 8.5px; }
+  .tc-steps { gap: 1px; }
+  .tc-step { gap: 6px; padding: 1px 0; }
+  .tc-phase { flex-basis: 32px; font-size: 8.5px; }
+  .tc-detail { padding-left: 38px; font-size: 9px; }
+  .tc-effort {
+    grid-template-columns: repeat(6, 1fr); gap: 2px 6px;
+    margin-top: 5px; padding-top: 5px;
+  }
+  .tc-cell b { font-size: 11px; }
+  .tc-cell span { font-size: 7.5px; letter-spacing: .06em; white-space: nowrap; }
 }
