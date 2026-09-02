@@ -62,7 +62,14 @@ def source_class(tool_name: str) -> str | None:
     try:
         from kyraan.control_plane import config as _config
         cfg = _config.load()
-        server = (cfg.get("tools", {}) or {}).get(tool_name, {}).get("server")
+        tool_entry = (cfg.get("tools", {}) or {}).get(tool_name, {}) or {}
+        if str(tool_entry.get("taint", "")).lower() == "none":
+            # a per-tool override: channel LISTINGS on an untrusted
+            # server are metadata, not message text — without this,
+            # posting to Slack (which must look up the channel first)
+            # armed the write-lockout against itself (live 2026-09-02)
+            return None
+        server = tool_entry.get("server")
         entry = (cfg.get("tool_servers", {}) or {}).get(server) or {}
         if entry.get("untrusted"):
             return WEB_UNTRUSTED

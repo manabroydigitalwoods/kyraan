@@ -83,3 +83,18 @@ def test_search_facts_is_read_only_and_not_in_frozen_stages():
     stages = yaml.safe_load(open("config/permissions.yaml"))["stage_toolsets"]
     for stage, tools in stages.items():
         assert "memory.search_facts" not in tools  # owner-only for now
+
+
+def test_per_tool_taint_none_overrides_an_untrusted_server(monkeypatch):
+    from kyraan.control_plane import config
+    cfg = config.load()
+    cfg = {**cfg,
+           "tool_servers": {**cfg["tool_servers"],
+                            "srv": {"transport": "mcp-stdio", "command": ["x"],
+                                    "untrusted": True}},
+           "tools": {**cfg["tools"],
+                     "srv.list": {"server": "srv", "taint": "none"},
+                     "srv.read": {"server": "srv"}}}
+    monkeypatch.setattr(config, "load", lambda: cfg)
+    assert taint.source_class("srv.list") is None      # metadata: clean
+    assert taint.source_class("srv.read") == taint.WEB_UNTRUSTED

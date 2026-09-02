@@ -584,7 +584,10 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         if is_time_fragment(raw_text) and chat_id not in _pending_confirmations:
             recent = [t for role, t in _history[chat_id]
                       if role == "assistant"][-3:]
-            if not any(t.rstrip().endswith("?") for t in recent):
+            # "...? 🙂" ended with an emoji and the guard swallowed
+            # "today" (live 2026-09-02): a question mark followed only by
+            # non-word characters still ends a question.
+            if not any(_re.search(r"\?[\W_]*$", t) for t in recent):
                 _skip_extraction.set(True)
                 return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)

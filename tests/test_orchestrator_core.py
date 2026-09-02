@@ -305,3 +305,22 @@ def test_correction_openers_are_flagged():
     for no in ("nothing much", "note this down", "noon works",
                "it is hot today", "say that again"):
         assert not orchestrator._CORRECTION_RE.match(no), no
+
+
+async def test_answer_to_a_question_ending_in_emoji_is_not_swallowed(monkeypatch):
+    """Live 2026-09-02: Kyraan asked "...today, last 7 days...? 🙂" and
+    the fragment guard swallowed "today" with "Go on — I'm listening…"
+    because the emoji sat after the question mark."""
+    from kyraan.agents import orchestrator
+    orchestrator._history[4242] = [
+        ("user", "read social channel messages"),
+        ("assistant", "how far back should I read—today, last 7 days? 🙂")]
+    seen = []
+
+    async def fake_loop(chat_id, text, **kw):
+        seen.append(text); return "read it"
+    from kyraan.agents import agent_loop as _al
+    monkeypatch.setattr(_al, "run", fake_loop)
+    reply = await orchestrator._dispatch(4242, "today")
+    assert "listening" not in reply and seen == ["today"]
+    orchestrator._history.pop(4242, None)
