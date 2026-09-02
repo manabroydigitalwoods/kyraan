@@ -68,29 +68,40 @@ def test_sync_indexes_changes_and_deletions(tmp_path, monkeypatch):
     monkeypatch.setattr(notes.embed, "embed", lambda chunks: [None] * len(chunks))
     from kyraan.store import persons
     monkeypatch.setattr(persons, "name_map", lambda: {"ruma": "ruma"})
+    monkeypatch.setenv("KYRAAN_VAULT_FOLDERS", "Kyraan,Personal")
+    monkeypatch.setenv("KYRAAN_VAULT_LOCAL_ONLY", "Personal")
     vault = tmp_path / "vault"
     (vault / ".obsidian").mkdir(parents=True)
     (vault / ".obsidian" / "junk.md").write_text("# hidden")
-    (vault / "a.md").write_text(NOTE)
-    (vault / "b.md").write_text("# B\nA plain note about [[Ruma]] and tea.")
+    (vault / "Kyraan").mkdir(); (vault / "Work").mkdir(); (vault / "Personal").mkdir()
+    (vault / "Work" / "contract.md").write_text("# Client contract\nNever indexed.")
+    (vault / "Personal" / "diary.md").write_text("# Diary\nA private note about the day.")
+    (vault / "Kyraan" / "a.md").write_text(NOTE)
+    (vault / "Kyraan" / "b.md").write_text("# B\nA plain note about [[Ruma]] and tea.")
     with pg.connection() as conn:
         conn.execute("DELETE FROM document WHERE chat_id = 4343"); conn.commit()
     c1 = notes.sync(4343, vault)
-    assert (c1["indexed"], c1["unchanged"], c1["removed"]) == (2, 0, 0)
+    assert (c1["indexed"], c1["unchanged"], c1["removed"]) == (3, 0, 0)  # Work/ excluded
+    with pg.connection() as conn:
+        exp = dict(conn.execute("""SELECT source_path, exposure FROM document
+                                   WHERE chat_id = 4343 AND suppressed_by = '{}'""").fetchall())
+    assert "Work/contract.md" not in exp                  # §2: never indexed
+    assert exp["Personal/diary.md"] == "local_only"       # personal: local tier only
+    assert exp["Kyraan/a.md"] == "cloud_ok"
     c2 = notes.sync(4343, vault)
-    assert (c2["indexed"], c2["unchanged"]) == (0, 2)     # hashes unchanged
-    (vault / "b.md").write_text("# B\nRewritten note, no people.")
-    (vault / "a.md").unlink()
+    assert (c2["indexed"], c2["unchanged"]) == (0, 3)     # hashes unchanged
+    (vault / "Kyraan" / "b.md").write_text("# B\nRewritten note, no people.")
+    (vault / "Kyraan" / "a.md").unlink()
     c3 = notes.sync(4343, vault)
     assert (c3["indexed"], c3["removed"]) == (1, 1)
     with pg.connection() as conn:
         live = conn.execute(
             """SELECT source_path, subject_persons, entities, event_date FROM document
-               WHERE chat_id = 4343 AND suppressed_by = '{}'""").fetchall()
+               WHERE chat_id = 4343 AND suppressed_by = '{}' AND source_path LIKE 'Kyraan/%'""").fetchall()
         ghosts = conn.execute(
             """SELECT suppressed_by FROM document
                WHERE chat_id = 4343 AND suppressed_by <> '{}'""").fetchall()
-    assert live == [("b.md", [], [], None)]                # new version, unlinked
+    assert live == [("Kyraan/b.md", [], [], None)]         # new version, unlinked
     assert sorted(str(g[0][0]) for g in ghosts) == sorted([notes.DELETED, notes.SUPERSEDED])
     pg.reset_pool_for_tests()
 
@@ -117,3 +128,11 @@ async def test_unified_search_fans_out_and_labels(monkeypatch):
     monkeypatch.setattr(loop_tools, "_memory_search_facts", no_facts)
     out = await loop_tools._memory_search(7, {"query": "zzz"}, "")
     assert "nothing anywhere matches" in out["note"]
+
+
+
+def test_empty_allowlist_indexes_nothing(tmp_path, monkeypatch):
+    monkeypatch.delenv("KYRAAN_VAULT_FOLDERS", raising=False)
+    (tmp_path / "x.md").write_text("# secret\ncontract text")
+    out = notes.sync(4343, tmp_path)
+    assert "never indexed whole" in out["error"]

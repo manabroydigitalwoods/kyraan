@@ -48,6 +48,29 @@ def vault_root() -> Path | None:
     return root if root.is_dir() else None
 
 
+def _folder_list(var: str) -> list:
+    return [f.strip().strip("/") for f in
+            os.environ.get(var, "").split(",") if f.strip()]
+
+
+def indexed_folders() -> list:
+    """KYRAAN_VAULT_FOLDERS — the ONLY subfolders that get indexed
+    (owner 2026-09-02: the vault holds work contracts and maybe
+    personal docs; governance §2 keeps company data out entirely).
+    Empty means: index nothing until the owner names folders."""
+    return _folder_list("KYRAAN_VAULT_FOLDERS")
+
+
+def local_only_folders() -> list:
+    """KYRAAN_VAULT_LOCAL_ONLY — indexed, but their chunks never enter
+    a cloud prompt (the email-bodies boundary, for personal notes)."""
+    return _folder_list("KYRAAN_VAULT_LOCAL_ONLY")
+
+
+def _under(rel: str, folders: list) -> bool:
+    return any(rel == f or rel.startswith(f + "/") for f in folders)
+
+
 def parse_note(text: str, rel_path: str) -> dict:
     """Frontmatter (title/tags/date/aliases), body, wikilinks, tags."""
     meta: dict = {}
@@ -142,9 +165,10 @@ def _note_uuid(chat_id: int, rel_path: str, sha: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"note:{chat_id}:{rel_path}:{sha}"))
 
 
-def _exposure(parsed: dict, flags: list) -> str:
+def _exposure(parsed: dict, flags: list, rel: str = "") -> str:
     text = (parsed["title"] + " " + " ".join(parsed["tags"])).lower()
-    if flags or any(h in text for h in _SENSITIVE_HINTS):
+    if (flags or any(h in text for h in _SENSITIVE_HINTS)
+            or _under(rel, local_only_folders())):
         return "local_only"
     return "cloud_ok"
 
@@ -199,7 +223,7 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
                    entities = EXCLUDED.entities,
                    event_date = EXCLUDED.event_date, updated_at = now()""",
             (doc_id, chat_id, parsed["title"], rel, parsed["body"], flags,
-             _exposure(parsed, flags), people, sha, rel, entities, when))
+             _exposure(parsed, flags, rel), people, sha, rel, entities, when))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s", (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(chunks, vectors)):
             conn.execute(
@@ -209,7 +233,7 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
                  json.dumps(vector) if vector else None))
         conn.commit()
     log_event("note_indexed", path=rel, people=people, chunks=len(chunks),
-              exposure=_exposure(parsed, flags))
+              exposure=_exposure(parsed, flags, rel))
     return "indexed"
 
 
@@ -219,11 +243,18 @@ def sync(chat_id: int, root: Path | None = None) -> dict:
     if root is None:
         return {"error": "KYRAAN_VAULT_ROOT is not set or not a directory"}
     counts = {"indexed": 0, "unchanged": 0, "skipped": 0, "removed": 0}
+    folders = indexed_folders()
+    if not folders:
+        return {**counts, "error": "KYRAAN_VAULT_FOLDERS is empty — name the "
+                                  "folders to index; the vault is never "
+                                  "indexed whole"}
     seen = set()
     for path in sorted(root.rglob("*.md")):
         if any(part.startswith(".") for part in path.relative_to(root).parts):
             continue  # .obsidian/, .trash/
         rel = str(path.relative_to(root))
+        if not _under(rel, folders):
+            continue  # outside the allowlist: does not exist for Kyraan
         seen.add(rel)
         try:
             counts[index_file(chat_id, root, path)] += 1
