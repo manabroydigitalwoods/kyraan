@@ -933,6 +933,19 @@ def _wire_scheduler(job_queue: JobQueue, bot) -> None:
                 return False
         await bot.send_message(chat_id=chat_id, text=text)
         orchestrator.record_proactive(chat_id, text)
+        if chat_id == _owner_id():
+            # Spoken reminders (owner decision 2026-09-02): the OWNER's
+            # reminders also arrive as voice on the Echo. Best-effort and
+            # contained — a TTS failure never fails the reminder; fire()
+            # already holds DND, so a spoken reminder can't break quiet
+            # hours. Enrolled persons stay Telegram-only.
+            try:
+                from kyraan.tools import home_assistant as _ha
+                if _ha._announce_targets():
+                    import asyncio as _aio5
+                    await _aio5.to_thread(_ha._announce, text[:240])
+            except Exception as exc:
+                logger.debug("spoken reminder skipped: %s", exc)
         return True
 
     scheduler.init(schedule_fn=schedule_fn, cancel_fn=cancel_fn, send_fn=send_fn)

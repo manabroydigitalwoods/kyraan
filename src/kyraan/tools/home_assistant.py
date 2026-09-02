@@ -99,7 +99,35 @@ def _switch(entity: str, turn_on: bool) -> dict:
     return state
 
 
+def _announce_targets() -> list:
+    server = (config.load().get("tool_servers") or {}).get("home_assistant") or {}
+    return server.get("announce_targets") or []
+
+
+def _announce(message: str, target: str = "") -> dict:
+    """Speak through an Echo via Alexa Media Player's notify service
+    (governance 2026-09-02: auto, DND-gated in the executor). Targets
+    are ALLOWLISTED like entities — an un-listed speaker doesn't exist."""
+    targets = _announce_targets()
+    if not targets:
+        raise ToolError("no announce_targets configured — add Echo names "
+                        "under tool_servers.home_assistant in permissions.yaml")
+    chosen = targets[0]
+    if target:
+        hint = target.strip().lower().replace(" ", "_")
+        chosen = next((t for t in targets if hint in t.lower()), None)
+        if chosen is None:
+            raise ToolError(f"unknown speaker {target!r} — configured: "
+                            + ", ".join(targets))
+    _api(f"/api/services/notify/alexa_media_{chosen}",
+         {"message": message, "data": {"type": "announce"}})
+    return {"announced": True, "on": chosen, "message": message}
+
+
 async def call(tool_name: str, args: dict) -> object:
+    if tool_name == "home.announce":
+        return await asyncio.to_thread(_announce, args["message"],
+                                       str(args.get("target", "") or ""))
     if tool_name == "home.get_state":
         return await asyncio.to_thread(_get_state, args["entity"])
     if tool_name == "home.turn_on":

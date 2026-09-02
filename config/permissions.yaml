@@ -251,6 +251,11 @@ tool_servers:
       - sensor.bed_room_temp_humidity
     write_entities:
       - switch.ac
+    # Alexa announcements (governance 2026-09-02): allowlisted speakers
+    # for home.announce — the notify.alexa_media_<target> services.
+    announce_targets:
+      - manab_s_echo_dot
+      - everywhere
 
   # --- Mounting an MCP server (client built 2026-08-31, §3d #3) ---------
   # Any MCP stdio server mounts behind the SAME permission registry as
@@ -292,6 +297,19 @@ tools:
     failure:
       retries: 2
       timeout_s: 15
+      on_failure: surface
+  home.announce:
+    description: Speak a short message through the house Echo (Alexa announcement). Auto by the owner's 2026-09-02 decision; the executor refuses during quiet hours — voice never breaks DND.
+    server: home_assistant
+    permission: auto
+    side_effects: notify
+    params:
+      message: {type: string, required: true}
+      target: {type: string}
+    returns: "{announced, on, message}"
+    failure:
+      retries: 0
+      timeout_s: 12
       on_failure: surface
   music.devices:
     description: The owner's online Spotify Connect devices (Echos, phone, laptop) with which is active.

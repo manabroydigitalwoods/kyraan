@@ -1575,6 +1575,22 @@ async def _documents_rename(chat_id: int, args: dict, raw_text: str):
             "now": new_name}
 
 
+async def _home_announce(chat_id: int, args: dict, raw_text: str):
+    """Voice through the house (governance 2026-09-02): auto — but the
+    quiet-hours refusal is absolute; a spoken word at 2 AM is exactly
+    what DND exists to prevent, so no confirm can override it here."""
+    message = str(args.get("message", "")).strip()
+    if not 1 <= len(message) <= 240:
+        raise kernel.ToolFailed("give a short message to announce (≤240 chars)")
+    if not kernel.can_send_proactively(chat_id=chat_id):
+        raise kernel.ToolFailed(
+            "it's quiet hours — I won't speak through the house now; "
+            "offer to send it as a text instead")
+    return await kernel.run_tool(kernel.ToolCall(
+        "home.announce", {"message": message,
+                          "target": str(args.get("target", "") or "")}))
+
+
 async def _music_devices(chat_id: int, args: dict, raw_text: str):
     return await kernel.run_tool(kernel.ToolCall("music.devices", {}))
 
@@ -2131,6 +2147,14 @@ TOOLS = {
                   "matches, never invent one."),
         "run": _documents_search,
     },
+    "home.announce": {
+        "params": '{"message": "<short spoken message>", "target": "<optional speaker, e.g. echo>"}',
+        "about": ("SPEAK through the house Echo — \"announce dinner is "
+                  "ready\", \"tell the house I'm leaving\". Immediate, no "
+                  "confirm; refused during quiet hours. Keep it short "
+                  "and natural — it is heard, not read."),
+        "run": _home_announce,
+    },
     "music.play": {
         "params": '{"query": "<song / artist / playlist words>", "device": "<optional device name words, e.g. bedroom>"}',
         "about": ("Play music on the user's Spotify devices (Echos "
@@ -2336,6 +2360,7 @@ VERIFICATION_CLASS = {
     "music.play": "read_after_write",
     "music.pause": "read_after_write",
     "music.volume": "same_store",  # prior-capture; the set itself is audible
+    "home.announce": "same_store",  # audible by nature; nothing to re-read
     "calendar.create_event": "read_after_write",
     "calendar.reschedule": "read_after_write",
     "calendar.delete_event": "read_after_write",
@@ -2377,6 +2402,7 @@ UNDO_MAP = {
     # inverse (resuming an unknown context is a guess); volume restores
     # the observed prior when the state read captured it.
     "music.play": lambda a, r, p: ("music.pause", {}),
+    "home.announce": lambda a, r, p: None,  # a spoken word has no unsay
     "music.pause": lambda a, r, p: None,
     "music.volume": lambda a, r, p: (
         ("music.volume", {"percent": r["prior"]})

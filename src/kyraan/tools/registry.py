@@ -55,8 +55,11 @@ class ToolSpec:
 # playback is transient, reversible, and AUDIBLE — the owner hears
 # exactly what it did, which is verification no confirm dialog matches.
 # Volume keeps an executor-level confirm above 70% (40% in quiet
-# hours). Nothing else joins this set without the same ceremony.
-MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause", "music.volume"})
+# hours). home.announce joined 2026-09-02 (same owner ceremony):
+# spoken and DND-refused in the executor — voice never breaks
+# quiet hours. Nothing else joins without the same ceremony.
+MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause",
+                               "music.volume", "home.announce"})
 
 
 def _validate(name: str, spec: ToolSpec, all_names: set, servers: dict) -> None:
