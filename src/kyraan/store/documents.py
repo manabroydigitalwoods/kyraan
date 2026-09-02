@@ -78,6 +78,15 @@ def valid_subjects(candidates) -> list:
     out = []
     for candidate in candidates or []:
         wanted = str(candidate or "").strip().lower()
+        if wanted == "owner":
+            # An EXPLICIT self-reference (caption "my supplement", "me
+            # and Kiaan") links the owner — owner 2026-09-02: "I said
+            # my supplement but no connection was built". Only the
+            # literal id qualifies; a name resolving to the owner still
+            # does not (his docs are his by default, unlinked).
+            if "owner" not in out:
+                out.append("owner")
+            continue
         pid = mapping.get(wanted) or mapping.get(wanted.replace(" ", "_"))
         if pid and pid != "owner" and pid not in out:
             out.append(pid)
@@ -114,6 +123,8 @@ def caption_people(caption: str) -> list:
     import re
     low = str(caption or "").lower()
     out = []
+    if re.search(r"\b(?:me|my|mine|myself)\b", low):
+        out.append("owner")   # explicit self-reference -> the owner node
     for name, pid in _name_map().items():
         if pid == "owner" or pid in out:
             continue

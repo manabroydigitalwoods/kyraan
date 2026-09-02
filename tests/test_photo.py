@@ -310,8 +310,9 @@ def test_moment_captions_link_bare_names_and_self_words(monkeypatch):
     monkeypatch.setattr(documents, "_name_map",
                         lambda: {"kiaan": "kiaan", "ruma": "ruma",
                                  "maan": "owner", "owner": "owner"})
-    assert documents.caption_people("me and kiaan") == ["kiaan"]
-    assert documents.caption_people("with maan and kiaan") == ["kiaan"]  # owner excluded by rule
+    assert documents.caption_people("me and kiaan") == ["kiaan", "owner"]   # explicit "me"
+    assert documents.caption_people("my supplement") == ["owner"]
+    assert documents.caption_people("with maan and kiaan") == ["kiaan"]  # a NAME never links the owner
     assert documents.caption_people("Ruma at the market") == ["ruma"]
     assert documents.caption_people("sunset") == []
     # document TITLES keep the strict rule — a shop is not a person

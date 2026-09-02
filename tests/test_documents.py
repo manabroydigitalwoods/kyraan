@@ -186,7 +186,8 @@ def test_subjects_from_name_is_possessive_only(_household):
 
 def test_valid_subjects_registry_decides(_household):
     assert documents.valid_subjects(["Kiaan", "stranger", "owner", "kiaan"]) \
-        == ["kiaan"]  # registry-only, never owner, deduped
+        == ["kiaan", "owner"]  # registry-only, deduped; the literal id
+                                # "owner" (an explicit self-reference) links
 
 
 @pytest.mark.pg
