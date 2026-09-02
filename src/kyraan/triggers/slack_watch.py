@@ -103,6 +103,48 @@ def looks_like_meta_talk(draft: str, owner_name: str = "Maan") -> bool:
     return bool(_META_RE.search(draft or ""))
 
 
+def _shingles(text: str, n: int = 5) -> set:
+    import re
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return {" ".join(words[i:i + n]) for i in range(max(0, len(words) - n + 1))}
+
+
+def repeats_earlier(draft: str, posted: list) -> bool:
+    """Deterministic repetition gate (live 2026-09-02: "Today im very
+    upset" drew the vaccination-card paragraph a third time). A draft
+    sharing any 5-word run with something Kyraan already posted is a
+    repeat — retry, then surface draftless."""
+    mine = _shingles(draft)
+    return any(mine & _shingles(p) for p in posted or [])
+
+
+def out_of_proportion(draft: str, question: str) -> bool:
+    """A four-word message does not earn a paragraph: short messages
+    get short replies unless they actually ask for information."""
+    q = str(question or "")
+    asks = "?" in q or any(w in q.lower().split() for w in
+                           ("what", "when", "which", "where", "how", "plan",
+                            "date", "time", "any"))
+    if asks:
+        return len(draft) > 600
+    return len(draft) > max(160, 3 * len(q) + 80)
+
+
+def is_informational(question: str) -> bool:
+    """Only an actual question earns fact/document retrieval — feeding
+    a vaccination card into "I'm upset" is how the card came back."""
+    q = str(question or "").lower()
+    return "?" in q or any(w in q.split() for w in
+                           ("what", "when", "which", "where", "how", "date",
+                            "time", "plan", "remember", "did", "do", "is"))
+
+
+def strip_markdown(text: str) -> str:
+    import re
+    return re.sub(r"\*\*(.+?)\*\*|__(.+?)__|`(.+?)`", lambda m: next(
+        g for g in m.groups() if g is not None), str(text or ""))
+
+
 def relationship_line(sender_name: str) -> str:
     """Who the sender is to the owner, from the registry graph — best
     effort, one line ("Ruma Roy is your wife")."""
@@ -132,7 +174,8 @@ def build_instruction(channel: str, mention: dict, thread: list,
     the owner's own recent messages as a voice sample."""
     rel = relationship_line(mention["user"])
     thread_txt = "\n".join(
-        f"- {r['user']}: {r['text'][:200]}" for r in thread[-8:]) or "(no earlier messages)"
+        f"- {r['user']}{' (you, already said)' if r.get('ours') else ''}: "
+        f"{r['text'][:200]}" for r in thread[-6:]) or "(no earlier messages)"
     voice = "\n".join(f"- {t[:160]}" for t in owner_samples[-5:]) \
         or "(no samples — plain, warm, brief)"
     return (
@@ -147,9 +190,14 @@ def build_instruction(channel: str, mention: dict, thread: list,
         "Answer from WHAT YOU KNOW (facts and documents below) when it "
         "covers the question — never promise to \"check\" something you "
         "already know. Don't repeat anything you already said earlier in "
-        "the thread. If you genuinely lack a fact, say what a person "
-        "would (\"let me check and tell you\") — never ask the reader of "
-        "this brief anything. Output the message text only.")
+        "the thread — lines marked (you, already said) are DONE; never "
+        "bring them up again unless asked. Respond to what they SAID: an "
+        "emotional message gets warmth and a question back, not a task "
+        "update. Match length to theirs — a short message gets one or "
+        "two short lines. Plain text, no markdown. If you genuinely lack "
+        "a fact, say what a person would (\"let me check and tell you\") "
+        "— never ask the reader of this brief anything. Output the "
+        "message text only.")
 
 
 async def tick(channels: list, owner_chat: int) -> int:
@@ -181,8 +229,9 @@ async def tick(channels: list, owner_chat: int) -> int:
         for r in sorted(fresh, key=lambda x: x["ts"]):
             if not mentions_owner(r["text"], _owner_user_id, _owner_handle):
                 continue
-            thread = [x for x in ordered if x["ts"] < r["ts"]]
             ours = set(state.get("kyraan_posted", []))
+            thread = [{**x, "ours": x["text"] in ours}
+                      for x in ordered if x["ts"] < r["ts"]]
             samples = [x["text"] for x in ordered
                        if x["user_id"] == _owner_user_id
                        and x["text"] not in ours]
@@ -190,15 +239,24 @@ async def tick(channels: list, owner_chat: int) -> int:
             question = r["text"].replace(f"<@{_owner_user_id}>", "").strip()
             try:
                 draft = ""
-                for attempt in range(2):
-                    draft = (await _draft_fn(instruction, question) or "").strip()
-                    if draft and not looks_like_meta_talk(draft):
+                posted = state.get("kyraan_posted", [])
+                for attempt in range(3):
+                    draft = strip_markdown(
+                        (await _draft_fn(instruction, question) or "").strip())
+                    why = ("addressed the owner, not the sender"
+                           if looks_like_meta_talk(draft) else
+                           "repeated lines you already posted earlier"
+                           if repeats_earlier(draft, posted) else
+                           "far too long for what they wrote"
+                           if out_of_proportion(draft, question) else
+                           "" if draft else "empty")
+                    if not why:
                         break
                     log_event("slack_watch_draft_rejected", attempt=attempt,
-                              draft=draft[:120])
-                    instruction += ("\n\nREJECTED: that addressed the owner, "
-                                    "not the sender. Write ONLY what the "
-                                    "owner would text back.")
+                              why=why, draft=draft[:120])
+                    instruction += (f"\n\nREJECTED: that {why}. Write ONLY "
+                                    "what the owner would text back — new "
+                                    "words, short, to what they said.")
                 else:
                     draft = ""  # two misses: surface without a draft
                 await _ask_fn(owner_chat, channel, draft,

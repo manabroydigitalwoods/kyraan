@@ -136,7 +136,7 @@ async def test_rejected_drafts_retry_then_surface_without_a_proposal(monkeypatch
         return "Maan, what do you want me to say back to Ruma?"
     monkeypatch.setattr(slack_watch, "_draft_fn", meta_draft)
     assert await slack_watch.tick(["#social"], 7) == 1
-    assert len(calls) == 2                       # one retry with the REJECTED note
+    assert len(calls) == 3                       # two retries, each with the REJECTED note
     assert "REJECTED" in calls[1]
     assert asks[0][2] == ""                      # surfaced, honestly draftless
 
@@ -149,3 +149,32 @@ async def test_kyraan_posts_never_become_voice_samples(monkeypatch):
     await slack_watch.tick(["#social"], 7)
     assert "(no samples" in drafts[0]          # the only owner line was ours
     assert "never promise" in drafts[0] and "Don't repeat" in drafts[0]
+
+
+
+def test_repetition_and_proportion_gates():
+    posted = ["on his immunization card, the last MMR is marked 30 Aug 2026, "
+              "but the next appointment date isn't clearly filled"]
+    assert slack_watch.repeats_earlier(
+        "I'm sorry — on his immunization card, the last MMR is marked 30 Aug 2026", posted)
+    assert not slack_watch.repeats_earlier("Oh no, what happened? Call me.", posted)
+    assert slack_watch.out_of_proportion("x" * 300, "Today im very upset")
+    assert not slack_watch.out_of_proportion("Oh no, what happened?", "Today im very upset")
+    assert not slack_watch.out_of_proportion("y" * 400, "what's the plan for the trip?")
+    assert slack_watch.is_informational("what's Kiaan's next vaccine date?")
+    assert not slack_watch.is_informational("Today im very upset")
+    assert slack_watch.strip_markdown("last **MMR** on `30 Aug`") == "last MMR on 30 Aug"
+
+
+async def test_a_repeat_is_rejected_then_surfaced_draftless(monkeypatch):
+    drafts, asks = _wire(monkeypatch)
+    slack_watch._save({"watermarks": {"#social": "1788346981.5"},
+                       "kyraan_posted": ["yes 8 works see you then tonight"]})
+    calls = []
+
+    async def repeat_draft(instruction, question=""):
+        calls.append(1)
+        return "Yes 8 works see you then tonight!"     # 5-word run repeats
+    monkeypatch.setattr(slack_watch, "_draft_fn", repeat_draft)
+    await slack_watch.tick(["#social"], 7)
+    assert len(calls) == 3 and asks[0][2] == ""

@@ -949,13 +949,16 @@ def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
         from kyraan.model_router import router as _router
         from kyraan.store import documents as _docs
         key = question or instruction
+        memory, docs = "", ""
+        informational = slack_watch.is_informational(question) if question else True
         try:
-            memory = _engine.build_context(key, budget_chars=1800)
+            if informational:
+                memory = _engine.build_context(key, budget_chars=1800)
         except Exception:
             memory = ""
-        docs = ""
         try:
-            hits = await asyncio.to_thread(_docs.search, _owner_id(), key)
+            hits = (await asyncio.to_thread(_docs.search, _owner_id(), key)
+                    if informational else [])
             docs = "\n".join(f'- [{h["caption"]}, {h["date"]}] {h["text"][:300]}'
                               for h in (hits or [])[:3])
         except Exception:
