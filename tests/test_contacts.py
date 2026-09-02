@@ -80,3 +80,24 @@ def test_upsert_and_find_round_trip(monkeypatch):
     assert hits == [{"name": "Suman Ghosh", "phones": ["+91 2"],
                      "emails": ["s@x.com"]}]
     pg.reset_pool_for_tests()
+
+
+async def test_find_tries_every_registry_name_and_says_what_is_missing(monkeypatch):
+    from kyraan.agents import loop_tools
+    from kyraan.store import contacts as cstore, persons
+    monkeypatch.setattr(google_contacts, "enabled", lambda: True)
+    monkeypatch.setattr(persons, "name_map", lambda: {
+        "ganak roy": "ganak_roy", "ganak_roy": "ganak_roy", "dada": "ganak_roy",
+        "owner": "owner"})
+    asked = []
+
+    def find(name, limit=5):
+        asked.append(name)
+        return [{"name": "Dada", "phones": [], "emails": []}] if name == "dada" else []
+    monkeypatch.setattr(cstore, "find", find)
+    out = await loop_tools._contacts_find(7, {"name": "Ganak Roy"}, "")
+    assert "dada" in asked                       # the alias was tried
+    assert "no phone or email saved" in out["__direct_reply__"]   # honest gap
+    asked.clear()
+    out = await loop_tools._contacts_find(7, {"name": "Nobody Known"}, "")
+    assert '"Nobody Known"' in out["__direct_reply__"] and asked == ["Nobody Known"]

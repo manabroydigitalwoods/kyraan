@@ -1766,20 +1766,43 @@ async def _contacts_find(chat_id: int, args: dict, raw_text: str):
     name = str(args.get("name", "")).strip()
     if len(name) < 2:
         raise kernel.ToolFailed("whose contact? give a name")
+    # Live 2026-09-02: "email for Dada?" — the model resolved the family
+    # nickname to the registry name (Ganak Roy) and Google, which only
+    # knows "Dada", found nothing. Search EVERY name the registry holds
+    # for that person, the literal words first.
+    candidates = [name]
     try:
-        hits = await _aio.to_thread(_contacts.find, name)
+        from kyraan.store import persons as _persons
+        nm = _persons.name_map()
+        pid = nm.get(name.lower()) or nm.get(name.lower().replace(" ", "_"))
+        if pid:
+            candidates += [k for k, v in nm.items()
+                           if v == pid and k not in ("owner", pid)
+                           and k.lower() != name.lower()]
+    except Exception:
+        pass
+    hits = []
+    try:
+        for cand in candidates:
+            hits = await _aio.to_thread(_contacts.find, cand.replace("_", " "))
+            if hits:
+                break
     except Exception as exc:
         raise kernel.ToolFailed(
             f"the contact store is unreachable ({str(exc)[:80]})")
     if not hits:
+        tried = ", ".join(f'"{c}"' for c in candidates[:4])
         return {"__direct_reply__": (
-            f'No contact matching "{name}" in your synced Google '
-            "contacts.")}
+            f"No contact matching {tried} in your synced Google contacts.")}
     lines = []
     for h in hits:
         parts = [h["name"]]
         parts += [f"📞 {p}" for p in h["phones"]]
         parts += [f"✉️ {e}" for e in h["emails"]]
+        if not h["phones"] and not h["emails"]:
+            # a bare name is not an answer (live: "Raunak Roy" and
+            # nothing else) — say what the contact card lacks
+            parts.append("no phone or email saved on this Google contact")
         lines.append(" — ".join(parts))
     return {"__direct_reply__": "\n".join(lines),
             "__history__": f"[showed contact details for {name}]"}

@@ -214,12 +214,25 @@ class MCPStdioAdapter:
         if self._proc is not None and self._proc.returncode is None:
             return
         import os as _os
+        import shutil as _shutil
+        # The launchd service's PATH lacks Homebrew (live 2026-09-02:
+        # "No such file or directory: 'npx'" the moment Slack was asked
+        # from the bot, though every shell test passed). Resolve the
+        # executable under an augmented PATH and hand the child the same.
+        extra = "/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin"
+        path = extra + ":" + _os.environ.get("PATH", "")
+        command = list(self._command)
+        resolved = _shutil.which(command[0], path=path)
+        if resolved is None:
+            raise ToolError(f"MCP server executable {command[0]!r} not found "
+                            f"on PATH ({path[:80]}...)")
+        command[0] = resolved
         self._proc = await asyncio.create_subprocess_exec(
-            *self._command,
+            *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            env={**_os.environ, **self._env},
+            env={**_os.environ, "PATH": path, **self._env},
         )
         await self._request("initialize", {
             "protocolVersion": "2024-11-05",

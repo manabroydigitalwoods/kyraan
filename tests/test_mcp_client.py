@@ -131,3 +131,16 @@ def test_slack_mount_declares_the_house_shape():
     assert "slack.history" in loop_tools._READ_ONLY_TOOLS
     from kyraan.control_plane import kernel
     assert not kernel.stage_allows("slack.history", stage="full")
+
+
+async def test_adapter_resolves_executable_on_augmented_path(monkeypatch):
+    monkeypatch.setenv("PATH", "/nonexistent")     # a launchd-like PATH
+    adapter = MCPStdioAdapter(["python3", "tests/fake_mcp_server.py"])
+    # python3 must resolve via the augmented search even with PATH gutted
+    import shutil
+    if shutil.which("python3", path="/opt/homebrew/bin:/usr/local/bin:/usr/bin") is None:
+        pytest.skip("no python3 on the augmented path here")
+    assert await adapter.call("shout", {"text": "path"}) == "PATH"
+    bad = MCPStdioAdapter(["definitely-not-a-binary-xyz"])
+    with pytest.raises(ToolError, match="not found on PATH"):
+        await bad.call("shout", {})
