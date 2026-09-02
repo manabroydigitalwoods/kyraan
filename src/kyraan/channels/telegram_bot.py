@@ -930,21 +930,49 @@ def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
             logger.warning("slack auth.test failed: %s", exc)
             return "", ""
 
+    _WRITER = (
+        "You ghost-write ONE Slack message for Manab (the owner) to send "
+        "under his own name to a family member or friend. You are not an "
+        "assistant in this message — you ARE Manab typing. Use what you "
+        "know about his life (below) only where it makes the reply truer. "
+        "Never mention Kyraan, drafts, or assistants. Never ask the owner "
+        "anything. Output the message text only.\n")
+
     async def draft_fn(instruction: str) -> str:
+        # The owner-facing loop asked the OWNER for guidance and that
+        # meta-talk got posted to Ruma (live 2026-09-02). Drafting is a
+        # writer call: role-framed, memory-aware, no tools, no contract.
+        from kyraan.memory import engine as _engine
+        from kyraan.model_router import router as _router
+        try:
+            memory = _engine.build_context(instruction, budget_chars=1800)
+        except Exception:
+            memory = ""
+        system = _WRITER + (f"\nWHAT MANAB KNOWS:\n{memory}" if memory else "")
         for tier in ("frontier", "cheap"):
             try:
-                return await agent_loop.run(_owner_id(), instruction,
-                                            tier=tier, read_only=True)
-            except agent_loop.AgentUnavailable:
+                resp = await _router.acall(prompt=instruction, system=system,
+                                           tier=tier, max_tokens=300)
+                return (resp.text or "").strip().strip('"')
+            except Exception:
                 continue
         return ""
 
     async def ask_fn(chat_id: int, channel: str, draft: str, context: str) -> None:
+        if not draft:
+            # two rejected drafts: the mention still reaches the owner,
+            # honestly without a proposal
+            text = (f"📣 Slack {channel} — {context}\n\n(I couldn't write a "
+                    "natural reply for this one — answer in Slack yourself.)")
+            await bot.send_message(chat_id=chat_id, text=_plain(text))
+            _orch.record_proactive(chat_id, text)
+            return
+
         async def _post(_a: dict) -> str:
             result = await _kernel.run_tool(_kernel.ToolCall(
                 "slack.post", {"channel_id": channel, "payload": draft,
                                "content_type": "text/plain"}))
-            return f"Posted to {channel}: \"{draft[:80]}\""
+            return f"Posted to {channel}: \"{draft}\""
         ask = await _orch._gated(
             chat_id, SkillCall("agent.action", {"tool": "slack.post"}), _post,
             describe=(f"📣 Slack {channel} — {context}\n\n"
