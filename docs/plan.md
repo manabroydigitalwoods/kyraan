@@ -208,6 +208,15 @@ any account device targetable. Alexa Media Player (HA, unofficial)
 remains open for announcements — owner-installed HACS step first.
 
 **Gated — each needs its own governance round (a `Decide:` line) before design**
+- **Two-way voice via Alexa Skill** ("Alexa, ask Kyraan…") — owner
+  deferred 2026-09-02 after the trade was laid out: it requires a
+  public HTTPS endpoint into this Mac (today nothing reaches Kyraan
+  from the internet) and routes every spoken question AND Kyraan's
+  answers — memory contents included — through Amazon's servers as
+  text, the largest data-destination event yet (§0). Telegram voice
+  notes (local Whisper) already cover voice-to-Kyraan privately; the
+  scoped fallback when reopened: a whitelisted skill (music/weather/
+  reminders only), everything else answering "in Telegram".
 - WhatsApp (unofficial automation risks banning the owner's personal
   number — product decision, not an estimate line), Slack + GitHub (work
   data; governance §2's three conditions remain unmet), multi-account /
