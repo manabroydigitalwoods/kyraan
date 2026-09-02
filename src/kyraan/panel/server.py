@@ -148,14 +148,23 @@ class _Handler(BaseHTTPRequestHandler):
         # into an HttpOnly cookie, then redirects so it leaves the address
         # bar (and never reaches history or a screenshot).
         supplied = (params.get("token") or [""])[0]
-        if path == "/" and supplied:
+        if supplied and not path.startswith("/api"):
+            # Any page path, not only "/": a deep link such as
+            # /brain?token=… used to serve the page (the query token
+            # authenticates one request) and then 401 its own app.css and
+            # app.js, which arrive with no token and no cookie — an
+            # unstyled page with a stuck "connecting…". Set the cookie and
+            # bounce to the same path with only the token removed.
             if not hmac.compare_digest(supplied, self.server.token):
                 self._error(403, "bad token")
                 return
             cookie = (f"{COOKIE_NAME}={urllib.parse.quote(supplied)}; "
                       "HttpOnly; SameSite=Strict; Path=/; Max-Age=604800")
+            rest = {k: v for k, v in params.items() if k != "token"}
+            location = path + ("?" + urllib.parse.urlencode(rest, doseq=True)
+                               if rest else "")
             self._send(303, b"", "text/plain",
-                       extra=(("Location", "/"), ("Set-Cookie", cookie)))
+                       extra=(("Location", location), ("Set-Cookie", cookie)))
             return
 
         if not self._authed(params):

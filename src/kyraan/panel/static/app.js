@@ -856,14 +856,17 @@ async function loadCost() {
 /* Seven lobes. People sit near the CENTRE on purpose: memories are about
    them, conversations happen with them, documents concern them and faces
    recognise them — they are the hub the rest hangs off. */
+/* Anchors are [x, y, z]. Depth is spread deliberately so the lobes form
+   a VOLUME: with every anchor on one plane the orbit only ever showed a
+   sheet turning edge-on, which is a flat brain with extra steps. */
 const LOBES = {
-  memory:   { anchor: [-1.05, -0.30], label: "facts" },
-  person:   { anchor: [0.0, 0.0], label: "people" },
-  episode:  { anchor: [-0.60, 0.95], label: "recall" },
-  face:     { anchor: [0.30, 0.55], label: "faces" },
-  document: { anchor: [0.85, 0.85], label: "documents" },
-  task:     { anchor: [0.45, -0.90], label: "work" },
-  skill:    { anchor: [1.10, 0.05], label: "skills" },
+  memory:   { anchor: [-1.05, -0.30, -0.55], label: "facts" },
+  person:   { anchor: [0.0, 0.0, 0.0], label: "people" },
+  episode:  { anchor: [-0.60, 0.95, 0.65], label: "recall" },
+  face:     { anchor: [0.30, 0.55, -0.45], label: "faces" },
+  document: { anchor: [0.85, 0.85, 0.35], label: "documents" },
+  task:     { anchor: [0.45, -0.90, -0.60], label: "work" },
+  skill:    { anchor: [1.10, 0.05, 0.30], label: "skills" },
 };
 
 const EDGE_STYLE = {
@@ -888,7 +891,7 @@ const brain = {
               document: true, task: true, skill: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
-  pan: null, nodeDrag: null, band: null,
+  pan: null, orbit: null, nodeDrag: null, band: null,
   hover: null, selection: new Set(),
   alpha: 1, raf: null, palette: new Map(), review: null, census: null,
   fired: new Map(),        // node id -> performance.now() of its last firing
@@ -1109,7 +1112,9 @@ function seedPositions() {
     const radius = spread * Math.sqrt((i % 40) / 40);
     node.x = anchor[0] + Math.cos(angle) * radius;
     node.y = anchor[1] + Math.sin(angle) * radius;
-    node.vx = 0; node.vy = 0; node.pinned = false;
+    // Deterministic depth jitter too, or every lobe starts as a disc.
+    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * spread * 0.6;
+    node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
   });
 }
 
@@ -1128,13 +1133,13 @@ function simulate() {
     const a = nodes[i];
     for (let j = i + 1; j < nodes.length; j++) {
       const b = nodes[j];
-      let dx = a.x - b.x, dy = a.y - b.y;
-      let d2 = dx * dx + dy * dy;
-      if (d2 < 1e-6) { dx = (i - j) * 1e-3; dy = 1e-3; d2 = 1e-6; }
+      let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+      let d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < 1e-6) { dx = (i - j) * 1e-3; dy = 1e-3; dz = 1e-3; d2 = 1e-6; }
       const force = Math.min(REPEL / d2, 0.06);
       const d = Math.sqrt(d2);
-      a.vx += (dx / d) * force; a.vy += (dy / d) * force;
-      b.vx -= (dx / d) * force; b.vy -= (dy / d) * force;
+      a.vx += (dx / d) * force; a.vy += (dy / d) * force; a.vz += (dz / d) * force;
+      b.vx -= (dx / d) * force; b.vy -= (dy / d) * force; b.vz -= (dz / d) * force;
     }
   }
 
@@ -1144,11 +1149,11 @@ function simulate() {
     if (!a || !b || !brain.showType[a.type] || !brain.showType[b.type]) continue;
     const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.synapse;
     const rest = style.rest / 900;
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const d = Math.hypot(dx, dy) || 1e-6;
+    const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+    const d = Math.hypot(dx, dy, dz) || 1e-6;
     const pull = (d - rest) * SPRING * Math.min(1.4, 0.35 + (edge.weight || 0.5));
-    a.vx += (dx / d) * pull; a.vy += (dy / d) * pull;
-    b.vx -= (dx / d) * pull; b.vy -= (dy / d) * pull;
+    a.vx += (dx / d) * pull; a.vy += (dy / d) * pull; a.vz += (dz / d) * pull;
+    b.vx -= (dx / d) * pull; b.vy -= (dy / d) * pull; b.vz -= (dz / d) * pull;
   }
 
   // A big lobe generates far more internal repulsion than a small one, so
@@ -1163,10 +1168,12 @@ function simulate() {
     const pull = ANCHOR * (1 + 0.55 * Math.log10(lobeSize[node.type] || 1));
     node.vx += (anchor[0] - node.x) * pull;
     node.vy += (anchor[1] - node.y) * pull;
-    if (node.pinned) { node.vx = 0; node.vy = 0; continue; }
-    node.vx *= DAMP; node.vy *= DAMP;
+    node.vz += ((anchor[2] || 0) - node.z) * pull;
+    if (node.pinned) { node.vx = 0; node.vy = 0; node.vz = 0; continue; }
+    node.vx *= DAMP; node.vy *= DAMP; node.vz *= DAMP;
     node.x += node.vx * brain.alpha;
     node.y += node.vy * brain.alpha;
+    node.z += node.vz * brain.alpha;
   }
   brain.alpha = Math.max(0.02, brain.alpha * 0.99);
 }
@@ -1175,21 +1182,64 @@ function reheat(to = 1) { brain.alpha = to; }
 
 /* -- projection to screen ---------------------------------------------- */
 
+/* The camera. Yaw around Y then pitch around X, then a perspective
+   divide: near things grow, far things shrink and dim, and the draw order
+   is far-to-near so a neuron in front actually occludes one behind.
+   Shared by the brain and the hub — same graph, same eye.
+
+   No library. A 3D graph is a rotation matrix and a divide; three.js
+   would be 600KB of vendored script to do two multiplies. */
+const brainCam = { yaw: -0.55, pitch: 0.32, spin: true };
+const FOCAL = 4.2;
+const HOME_CAM = { yaw: -0.55, pitch: 0.32 };
+
+function rotateToCamera(node) {
+  const cy = Math.cos(brainCam.yaw), sy = Math.sin(brainCam.yaw);
+  const cp = Math.cos(brainCam.pitch), sp = Math.sin(brainCam.pitch);
+  const z = node.z || 0;
+  const x1 = node.x * cy + z * sy;
+  const z1 = -node.x * sy + z * cy;
+  return { x: x1, y: node.y * cp - z1 * sp, z: node.y * sp + z1 * cp };
+}
+
+function toCamera(node) {
+  const r = rotateToCamera(node);
+  const p = FOCAL / (FOCAL + r.z);       // perspective factor
+  return { x: r.x * p, y: r.y * p, z: r.z, p };
+}
+
 function toScreen(canvas, node, view) {
   view = view || brain.view;
   const size = Math.min(canvas.width, canvas.height) * 0.42;
+  const c = toCamera(node);
   return {
-    x: canvas.width / 2 + (node.x * size + view.x) * view.scale,
-    y: canvas.height / 2 + (node.y * size + view.y) * view.scale,
+    x: canvas.width / 2 + (c.x * size + view.x) * view.scale,
+    y: canvas.height / 2 + (c.y * size + view.y) * view.scale,
+    p: c.p, z: c.z,
   };
 }
 
-function fromScreen(canvas, sx, sy) {
-  const size = Math.min(canvas.width, canvas.height) * 0.42;
-  return {
-    x: ((sx - canvas.width / 2) / brain.view.scale - brain.view.x) / size,
-    y: ((sy - canvas.height / 2) / brain.view.scale - brain.view.y) / size,
-  };
+/* 0 at the front of the volume, 1 at the back — for size and fade. */
+function depthOf(z) {
+  return Math.max(0, Math.min(1, (z + 1.8) / 3.6));
+}
+
+/* A drag in the camera plane, expressed in world axes: the inverse of
+   the rotation above, so a dragged neuron follows the pointer whichever
+   way the brain is turned. */
+function screenDeltaToWorld(dx, dy) {
+  const cy = Math.cos(brainCam.yaw), sy = Math.sin(brainCam.yaw);
+  const cp = Math.cos(brainCam.pitch), sp = Math.sin(brainCam.pitch);
+  const y1 = dy * cp, z1 = -dy * sp;           // Rx(-pitch) on (dx, dy, 0)
+  return { x: dx * cy - z1 * sy, y: y1, z: dx * sy + z1 * cy };   // Ry(-yaw)
+}
+
+function advanceCamera() {
+  // The idle turn. Paused while the pointer is on a neuron or doing
+  // anything, so a tooltip never drifts out from under the cursor.
+  if (!brainCam.spin || REDUCED_MOTION) return;
+  if (brain.hover || brain.nodeDrag || brain.orbit || brain.pan || brain.band) return;
+  brainCam.yaw += 0.0022;
 }
 
 function canvasPoint(canvas, event) {
@@ -1217,6 +1267,11 @@ function drawGraph(canvas, view, opts) {
   const panel = styles.getPropertyValue("--panel").trim() || "#111";
   const nodes = visibleNodes();
   const shown = new Set(nodes.map((n) => n.id));
+  // Project once per frame. Everything below reads from this map, and the
+  // somas are drawn back-to-front so the front of the brain occludes the
+  // back instead of the last node in the array winning.
+  const proj = new Map(nodes.map((n) => [n.id, toScreen(canvas, n, view)]));
+  const ordered = [...nodes].sort((a, b) => proj.get(b.id).z - proj.get(a.id).z);
 
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -1226,7 +1281,7 @@ function drawGraph(canvas, view, opts) {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
       if (members.length < 2) continue;
-      const points = members.map((n) => toScreen(canvas, n, view));
+      const points = members.map((n) => proj.get(n.id));
       const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
       const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
       const spread = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)))
@@ -1271,10 +1326,12 @@ function drawGraph(canvas, view, opts) {
                  || (brain.hover && (brain.hover.id === edge.a || brain.hover.id === edge.b));
     // A wire is only as visible as the dimmer of its two ends.
     const lit = Math.min(matchAlpha(a), matchAlpha(b));
-    const pa = toScreen(canvas, a, view), pb = toScreen(canvas, b, view);
+    const pa = proj.get(edge.a), pb = proj.get(edge.b);
+    const farness = 1 - 0.55 * (depthOf(pa.z) + depthOf(pb.z)) / 2;
     ctx.strokeStyle = edge.contested ? bad
       : (styles.getPropertyValue(style.key).trim() || dim);
-    ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha) * lit;
+    ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha)
+                    * lit * farness;
     ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio;
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
@@ -1290,7 +1347,7 @@ function drawGraph(canvas, view, opts) {
   for (const signal of brain.signals) {
     const a = brain.byId.get(signal.from), b = brain.byId.get(signal.to);
     if (!a || !b || !shown.has(signal.from) || !shown.has(signal.to)) continue;
-    const pa = toScreen(canvas, a, view), pb = toScreen(canvas, b, view);
+    const pa = proj.get(signal.from), pb = proj.get(signal.to);
     const control = edgeControl(pa, pb);
     const head = bezierAt(pa, control, pb, Math.min(1, signal.t));
     // A short trail behind the head reads as direction; a bare dot does not.
@@ -1313,14 +1370,18 @@ function drawGraph(canvas, view, opts) {
     ctx.fill();
   }
 
-  // Somas.
-  for (const node of nodes) {
-    const p = toScreen(canvas, node, view);
+  // Somas, back to front.
+  for (const node of ordered) {
+    const p = proj.get(node.id);
     const selected = brain.selection.has(node.id);
     const seed = node.id.charCodeAt(2) % 13;
     const breath = REDUCED_MOTION ? 1 : 1 + Math.sin(performance.now() / 1400 + seed) * 0.08;
+    // Perspective on the radius and a fade on the whole node: the two
+    // cues that make a rotating cloud read as depth rather than as a
+    // scatter that happens to be moving.
     const radius = nodeRadius(node) * (opts.nodeScale || 1) * ratio * breath
-                 * Math.max(0.6, Math.min(view.scale, 2.4));
+                 * Math.max(0.6, Math.min(view.scale, 2.4)) * Math.pow(p.p, 0.85);
+    ctx.globalAlpha = 1 - 0.5 * depthOf(p.z);
 
     const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 3.6);
     halo.addColorStop(0, nodeColour(node, selected ? 0.75 : 0.42));
@@ -1404,6 +1465,7 @@ function drawGraph(canvas, view, opts) {
       ctx.fillStyle = dim;
       ctx.fillText(node.label.slice(0, 26), p.x + radius + 4 * ratio, p.y + 3 * ratio);
     }
+    ctx.globalAlpha = 1;
   }
 
   // Rubber band.
@@ -1455,6 +1517,7 @@ function drawBrain() {
   sizeCanvas(canvas);
   simulate();
   tickSignals();
+  advanceCamera();
   drawGraph(canvas, brain.view, {});
   brain.raf = requestAnimationFrame(drawBrain);
 }
@@ -1466,6 +1529,7 @@ function drawHub() {
   sizeCanvas(canvas);
   simulate();
   tickSignals();
+  advanceCamera();
   // Keep it framed while the simulation is still moving, then stop: a
   // hub that re-fits forever never sits still, and one that fits once
   // frames the seed positions instead of the result.
@@ -1534,7 +1598,10 @@ function focusOn(canvas, nodes, view) {
   if (!nodes.length) return;
   const size = Math.min(canvas.width, canvas.height) * 0.42;
   const ratio = window.devicePixelRatio || 1;
-  const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
+  // Camera space, not world space: what has to fit is what is on screen
+  // at THIS angle, perspective included.
+  const cams = nodes.map((n) => toCamera(n));
+  const xs = cams.map((c) => c.x), ys = cams.map((c) => c.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   view.x = -((minX + maxX) / 2) * size;
@@ -1905,8 +1972,13 @@ function wireMemory() {
     } else if (event.shiftKey) {
       const point = canvasPoint(canvas, event);
       brain.band = { x0: point.x, y0: point.y, x1: point.x, y1: point.y };
-    } else {
+    } else if (event.altKey) {
       brain.pan = canvasPoint(canvas, event);
+      canvas.classList.add("dragging");
+    } else {
+      // Plain drag turns the brain. Panning moved to alt-drag: once there
+      // is a third axis, turning it is what an empty-space drag means.
+      brain.orbit = canvasPoint(canvas, event);
       canvas.classList.add("dragging");
     }
   });
@@ -1915,14 +1987,27 @@ function wireMemory() {
     const point = canvasPoint(canvas, event);
     if (brain.nodeDrag) {
       const size = Math.min(canvas.width, canvas.height) * 0.42;
-      const dx = (point.x - brain.nodeDrag.last.x) / brain.view.scale / size;
-      const dy = (point.y - brain.nodeDrag.last.y) / brain.view.scale / size;
-      for (const node of brain.nodeDrag.group) { node.x += dx; node.y += dy; }
+      for (const node of brain.nodeDrag.group) {
+        // Undo the perspective at the node's own depth, then the rotation,
+        // so the neuron stays under the pointer from any angle.
+        const p = toCamera(node).p;
+        const dx = (point.x - brain.nodeDrag.last.x) / brain.view.scale / size / p;
+        const dy = (point.y - brain.nodeDrag.last.y) / brain.view.scale / size / p;
+        const w = screenDeltaToWorld(dx, dy);
+        node.x += w.x; node.y += w.y; node.z += w.z;
+      }
       brain.nodeDrag.last = point;
       reheat(0.6);          // let the neighbours settle around the new place
       return;
     }
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
+    if (brain.orbit) {
+      brainCam.yaw += (point.x - brain.orbit.x) * 0.0045;
+      brainCam.pitch = Math.max(-1.3, Math.min(1.3,
+        brainCam.pitch + (point.y - brain.orbit.y) * 0.0045));
+      brain.orbit = point;
+      return;
+    }
     if (brain.pan) {
       brain.view.x += (point.x - brain.pan.x) / brain.view.scale;
       brain.view.y += (point.y - brain.pan.y) / brain.view.scale;
@@ -1946,6 +2031,7 @@ function wireMemory() {
       brain.nodeDrag = null;
     }
     brain.pan = null;
+    brain.orbit = null;
     canvas.classList.remove("dragging");
   });
 
@@ -2044,8 +2130,14 @@ function wireMemory() {
     });
   }
   $("mem-fit").addEventListener("click", fitAll);
+  const spin = $("mem-spin");
+  if (spin) {
+    spin.checked = brainCam.spin;
+    spin.addEventListener("change", (e) => { brainCam.spin = e.target.checked; syncUrl(false); });
+  }
   $("mem-reset").addEventListener("click", () => {
     brain.view = { x: 0, y: 0, scale: 1 };
+    brainCam.yaw = HOME_CAM.yaw; brainCam.pitch = HOME_CAM.pitch;
     for (const node of brain.nodes) node.pinned = false;
     seedPositions();
     reheat(1);
@@ -2499,6 +2591,7 @@ function collectState(view) {
   } else if (view === "memory") {
     params.set("colour", brain.colour);
     if (brain.query) params.set("q", brain.query);
+    if (!brainCam.spin) params.set("spin", "0");
     if (brain.floor !== 0.45) params.set("floor", brain.floor.toFixed(2));
     const lobes = Object.entries(brain.showType)
       .filter(([, on]) => on).map(([type]) => type);
@@ -2554,6 +2647,11 @@ function applyState(view, params) {
     if (query) {
       const box = $("mem-search");
       if (box) box.value = query;
+    }
+    if (params.get("spin") === "0") {
+      brainCam.spin = false;
+      const box = $("mem-spin");
+      if (box) box.checked = false;
     }
     if (params.get("colour")) brain.colour = params.get("colour");
     const colourSelect = $("mem-colour");

@@ -135,3 +135,38 @@ def test_media_player_domain_converges_by_state_family(monkeypatch):
                         lambda e: {"entity": e, "state": "standby"})
     out = ha._switch("media_player.manab_s_firetvstick", False)
     assert out["converged"] is True      # standby IS off
+
+
+async def test_machinery_reads_do_not_trip_the_loop_guard(monkeypatch):
+    """Live 2026-09-02 'turn on the fire tv': no-op pre-check + undo
+    prior capture + verification legitimately read the same entity 3-4
+    times in one confirmed turn, and the kernel's identical-signature
+    guard killed the owner's confirmed action. meta=True exempts
+    machinery READS; a write can never claim it."""
+    from kyraan.control_plane import kernel
+    from kyraan.tools import registry as reg
+    token = kernel._tool_steps.set([])   # arm the per-action guard
+    reads = []
+
+    async def fake_dispatch(spec, args):
+        reads.append(spec.name)
+        return {"entity": args.get("entity"), "state": "idle"}
+    monkeypatch.setattr(reg, "dispatch", fake_dispatch)
+    call = kernel.ToolCall("home.get_state",
+                           {"entity": "media_player.manab_s_firetvstick"})
+    for _ in range(4):                       # pre-check, prior, verify, extra
+        await kernel.run_tool(call, meta=True)
+    assert len(reads) == 4                   # none blocked
+    # a write claiming meta is stripped of it (and the guard applies)
+    wcall = kernel.ToolCall("home.turn_on", {"entity": "switch.ac"})
+    monkeypatch.setattr(kernel, "confirmed_context", lambda: True, raising=False)
+    try:
+        await kernel.run_tool(kernel.ToolCall("home.turn_on",
+                              {"entity": "switch.ac"}, confirmed=True), meta=True)
+        await kernel.run_tool(kernel.ToolCall("home.turn_on",
+                              {"entity": "switch.ac"}, confirmed=True), meta=True)
+        assert False, "second identical WRITE should trip the guard"
+    except kernel.ToolFailed as exc:
+        assert "loop" in str(exc)
+    finally:
+        kernel._tool_steps.reset(token)

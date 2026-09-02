@@ -171,10 +171,15 @@ async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, m
 
     result = await orchestrator.handle_message(chat_id=90, raw_text="yes")
     # the confirmed replay first OBSERVES the event (prior capture — the
-    # delete is undoable since the P3.1d completion), then deletes
+    # delete is undoable since the P3.1d completion), then deletes, then
+    # RE-READS to verify the deletion stuck. The verify read had been
+    # silently eaten by the loop guard (same signature as prior capture)
+    # and _verified_gone took the block as "gone" — fake-verifying every
+    # delete until meta=True (2026-09-02). Three calls is honest.
     assert dispatched == [
         ("calendar.get_event", {"event_id": "ev9"}),
-        ("calendar.delete_event", {"event_id": "ev9", "title": "Test Event"})]
+        ("calendar.delete_event", {"event_id": "ev9", "title": "Test Event"}),
+        ("calendar.get_event", {"event_id": "ev9"})]
     assert "Deleted from your calendar" in result and "Test Event" in result
 
 

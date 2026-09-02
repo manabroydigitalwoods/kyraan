@@ -985,3 +985,24 @@ def test_the_action_log_mirror_is_off_under_test():
     # And the write path honours the switch rather than only being patched
     # at the call sites.
     assert actions_store.record(90, "reminders.create", {}, None, None)
+
+
+def test_handshake_works_on_a_deep_link_and_keeps_the_rest_of_the_query(panel):
+    """Found live 2026-08-31 in a fresh browser: /brain?token=… served the
+    page (the query token authenticates that one request) and then 401'd
+    its own app.css and app.js, which arrive with no token and no cookie —
+    an unstyled page stuck on "connecting…". The handshake must fire on
+    any page path and bounce to it with only the token removed."""
+    response, _ = request(panel, "/brain?token=secret-token&colour=group",
+                          headers={"Host": "127.0.0.1"})
+    assert response.status == 303
+    assert response.getheader("Location") == "/brain?colour=group"
+    assert "HttpOnly" in response.getheader("Set-Cookie")
+
+    response, _ = request(panel, "/turns?token=secret-token",
+                          headers={"Host": "127.0.0.1"})
+    assert response.getheader("Location") == "/turns"
+    # API calls never redirect — a JSON client wants JSON or a clean 4xx.
+    response, _ = request(panel, "/api/status?token=secret-token",
+                          headers={"Host": "127.0.0.1"})
+    assert response.status == 200

@@ -84,7 +84,7 @@ async def _verified_gone(result: dict, read_call: "kernel.ToolCall") -> dict:
     """Deletion verification: the re-read must FAIL to find it — a 404
     is the success proof. Fail-soft like _verified."""
     try:
-        observed = await kernel.run_tool(read_call)
+        observed = await kernel.run_tool(read_call, meta=True)
     except kernel.ToolFailed:
         log_event("write_verified", tool=read_call.tool_name, gone=True)
         return {**result, "verified": True}
@@ -139,7 +139,7 @@ async def _verified(result: dict, read_call: "kernel.ToolCall",
     error — the receipt says verified true/false/unchecked and the
     model relays reality either way."""
     try:
-        observed = await kernel.run_tool(read_call)
+        observed = await kernel.run_tool(read_call, meta=True)
     except Exception as exc:
         log_event("write_verify_unchecked", tool=read_call.tool_name,
                   error=str(exc)[:100])
@@ -2521,13 +2521,13 @@ async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
     if tool == "calendar.reschedule":
         try:
             return await kernel.run_tool(kernel.ToolCall(
-                "calendar.get_event", {"event_id": str(args.get("event_id"))}))
+                "calendar.get_event", {"event_id": str(args.get("event_id"))}), meta=True)
         except Exception:
             return None  # unobserved prior ⇒ the move logs as not undoable
     if tool in ("home.turn_on", "home.turn_off"):
         try:
             state = await kernel.run_tool(kernel.ToolCall(
-                "home.get_state", {"entity": str(args.get("entity", ""))}))
+                "home.get_state", {"entity": str(args.get("entity", ""))}), meta=True)
             return {**state, "_tool": tool} if isinstance(state, dict) else None
         except Exception:
             return None  # unobserved prior ⇒ the write logs as not undoable
@@ -2536,7 +2536,7 @@ async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
     if tool == "calendar.delete_event":
         try:
             return await kernel.run_tool(kernel.ToolCall(
-                "calendar.get_event", {"event_id": str(args.get("event_id"))}))
+                "calendar.get_event", {"event_id": str(args.get("event_id"))}), meta=True)
         except Exception:
             return None
     if tool == "reminders.cancel":
@@ -2595,7 +2595,7 @@ def _register_home_switches() -> None:
         # permission, so it happens BEFORE the kernel's confirm gate.
         try:
             current = await kernel.run_tool(kernel.ToolCall(
-                "home.get_state", {"entity": args["entity"]}))
+                "home.get_state", {"entity": args["entity"]}), meta=True)
             if isinstance(current, dict) and current.get("state") == expect:
                 return {"changed": False, "state": expect,
                         "note": f"already {expect} — say so, don't ask "

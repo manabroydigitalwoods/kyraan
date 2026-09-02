@@ -204,14 +204,24 @@ def _parses_as_datetime(value: str) -> bool:
         return False
 
 
-async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
+async def run_tool(call: ToolCall, _allow_fallback: bool = True,
+                   meta: bool = False) -> object:
     """Gate + execute a registered tool: kill switch, permission, param
     validation against the registry schema, audit logging, and the entry's
     timeout/retry/failure policy. Model-generated args never reach an
-    adapter unvalidated."""
+    adapter unvalidated.
+
+    meta=True (2026-09-02): a MACHINERY read — no-op pre-checks, undo
+    prior capture, read-after-write verification — exempt from the
+    identical-signature loop guard, because one confirmed switch now
+    legitimately reads the same entity 3-4 times and the guard killed
+    the owner's own confirmed action (found live: "turn on the fire
+    tv"). Read-only tools only; a write can never claim the exemption."""
     from kyraan.tools import registry  # deferred: tools layer sits above the kernel
 
     spec = registry.get(call.tool_name)
+    if meta and spec.side_effects != "read":
+        meta = False  # the exemption is for reads, full stop
 
     if kill_switch.is_engaged():
         log_event("blocked_kill_switch", tool=spec.name, args=call.args)
@@ -224,7 +234,7 @@ async def run_tool(call: ToolCall, _allow_fallback: bool = True) -> object:
         raise ConfirmationRequired(spec.name, call.args)
 
     steps = _tool_steps.get()
-    if steps is not None:
+    if steps is not None and not meta:
         import json as _json
 
         signature = (spec.name, _json.dumps(call.args, sort_keys=True, default=str))
