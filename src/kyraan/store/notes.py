@@ -255,6 +255,11 @@ def index_file(chat_id: int, root: Path, path: Path) -> str:
     doc_id = _note_uuid(chat_id, rel, sha)
     people = link_people(parsed)
     entities = sorted(set(parsed["links"] + [f"#{t}" for t in parsed["tags"]]))
+    note_type = str(parsed["meta"].get("type", "")).strip().lower()
+    if note_type:
+        # typed notes (person/place/event/project/asset/milestone) carry
+        # their type as an entity — a filterable kind for later structure
+        entities = sorted(set(entities + [f"type:{note_type}"]))
     if is_person_note(parsed, rel):
         pid = register_person_note(parsed, rel)
         if pid and pid not in people:

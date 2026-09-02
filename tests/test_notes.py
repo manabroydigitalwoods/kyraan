@@ -192,3 +192,9 @@ def test_person_note_registers_person_and_aliases(tmp_path, monkeypatch):
     # another note naming him by alias now links (second pass sees the alias)
     notes.sync(4444, vault)
     pg.reset_pool_for_tests()
+
+
+
+def test_typed_notes_carry_their_type_as_an_entity():
+    p = notes.parse_note("---\ntype: event\ndate: 2026-10-20\n---\n# Trip\nGoing.", "Kyraan/e.md")
+    assert p["meta"]["type"] == "event"
