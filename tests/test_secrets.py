@@ -91,7 +91,7 @@ def test_secret_turn_is_local_only_and_leaves_placeholders(monkeypatch):
     asyncio.run(orchestrator.handle_message(56, "bas itna hi"))
     assert seen[-1] == ("cheap", True) and not secrets.active(56)    # closed, still local
     asyncio.run(orchestrator.handle_message(56, "what's the weather"))
-    assert seen[-1][0] == "frontier"                                 # back to normal
+    assert ("frontier", False) in seen[-3:]                          # the loop ran on the frontier again
     session._history[56] = []
 
 
@@ -123,7 +123,7 @@ def test_private_mode_switch_is_local_no_model_and_sticks(monkeypatch):
     out = asyncio.run(orchestrator.handle_message(57, "private mode off"))
     assert out.startswith("Private mode OFF")
     asyncio.run(orchestrator.handle_message(57, "how is my day looking"))
-    assert seen[-1][0] == "frontier"
+    assert ("frontier", False) in seen[-3:]   # the loop on the frontier; extraction may follow on the worker
     assert orchestrator.processing_marker(57).startswith("☁️")
     session._history[57] = []
 

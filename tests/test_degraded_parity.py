@@ -96,6 +96,8 @@ def test_extraction_timeout_widens_only_on_degraded_turns():
 
 
 async def test_cheap_fallback_marks_the_turn_degraded(monkeypatch):
+    from kyraan.agents import orchestrator as _orch
+    monkeypatch.setattr(_orch, "tier_chain", lambda: ("frontier", "cheap"))   # no standby in this scenario
     seen = {}
 
     async def fake_run(chat_id, raw_text, tier):

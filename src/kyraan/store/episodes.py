@@ -166,7 +166,7 @@ def sensitivity_flags(text: str, exposure: str = "cloud_ok") -> list:
         try:
             from kyraan.model_router import router
             response = router.call(prompt=text[:4000], system=_TAG_SYSTEM,
-                                   tier="frontier", force_json=True,
+                                   tier=router.worker_tier(), force_json=True,
                                    max_tokens=128)
             return normalize_flags(json.loads(response.text).get("flags") or [])
         except Exception as exc:

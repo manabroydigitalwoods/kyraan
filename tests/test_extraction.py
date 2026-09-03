@@ -140,6 +140,8 @@ async def test_fabricated_facts_sharing_no_words_are_dropped(monkeypatch, isolat
 
 
 async def test_extraction_is_frontier_first_with_local_fallback(monkeypatch, isolated_memory):
+    from kyraan.model_router import router as _router
+    monkeypatch.setattr(_router, "worker_tier", lambda: "frontier")   # the worker IS the cloud tier here
     tiers = []
 
     def fake_call(prompt, system="", tier="cheap", **kwargs):

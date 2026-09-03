@@ -43,7 +43,7 @@ def scan() -> list:
         f'{e["id"]} [{e.get("author", "owner")}]: {e["content"]}'
         for e in entries.values())
     response = router.call(prompt=listing, system=_SCAN_SYSTEM,
-                           tier="frontier", force_json=True, max_tokens=1024)
+                           tier=router.worker_tier(), force_json=True, max_tokens=1024)
     raw = json.loads(router.strip_code_fence(response.text)).get("conflicts") or []
     pairs, claimed = [], set()
     for item in raw:

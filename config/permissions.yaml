@@ -99,6 +99,13 @@ model_tiers:
   # 14/14) — good enough to bring qa.answer/reminders.create back to cheap;
   # intent classification stays on frontier specifically, still the more
   # reliable of the two there (see orchestrator.py).
+  standby:                  # 2026-09-04: the cloud fallback BETWEEN frontier
+    provider: openai        # and the local model — the previous frontier
+    model: gpt-5.4-nano     # (nano) answers when mini is down or capped,
+    pricing:                # before the loop degrades to qwen3
+      input_per_million: 0.20
+      output_per_million: 1.25
+      cached_input_per_million: 0.02
   cheap:
     provider: ollama
     model: qwen3:8b       # benchmarked 2026-08-26 vs llama3.1:8b on the
@@ -108,8 +115,12 @@ model_tiers:
                           # (planned ['hi!'] for the 5-msg burst), equal
                           # extraction, same 1.8s/case with think off.
   frontier:
-    provider: openai          # gpt-5.4-nano since 2026-08-26: benchmarked
-    model: gpt-5.4-nano       # head-to-head vs gpt-5.4-mini on the
+    provider: openai          # gpt-5.4-MINI from 2026-09-04, one-week trial
+    model: gpt-5.4-mini       # (owner: "doesn't feel like Jarvis"); review
+                              # 2026-09-11 by the census. Was gpt-5.4-nano
+                              # since 2026-08-26, now the first fallback tier:
+    #                         # nano notes kept: benchmarked
+    #                         # head-to-head vs gpt-5.4-mini on the
                               # production prompts — both 18/18 on
                               # classification, ~1s/case; nano's only slip
                               # was folding a greeting out of a burst plan.
@@ -117,10 +128,10 @@ model_tiers:
                               # quality ever feels thin, mini is one edit:
                               #   model: gpt-5.4-mini
                               #   pricing: {input_per_million: 0.75, output_per_million: 4.50}
-    pricing:                  # per developers.openai.com/api/docs/pricing
-      input_per_million: 0.20
-      output_per_million: 1.25
-      cached_input_per_million: 0.02  # the whole reason the agent prompt
+    pricing:                  # per developers.openai.com/api/docs/pricing (mini)
+      input_per_million: 0.75
+      output_per_million: 4.50
+      cached_input_per_million: 0.075  # mini; the whole reason the agent prompt
                                       # keeps its static prefix stable
 
 # Skills known to Phase 1. Add new skills here as they're built —

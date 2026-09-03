@@ -41,7 +41,7 @@ def scan() -> list:
         return []
     listing = "\n".join(f'{e["id"]}: {e["content"]}' for e in entries.values())
     response = router.call(prompt=listing, system=_SCAN_SYSTEM,
-                           tier="frontier", force_json=True, max_tokens=1024)
+                           tier=router.worker_tier(), force_json=True, max_tokens=1024)
     raw = json.loads(router.strip_code_fence(response.text)).get("groups") or []
     proposals, claimed = [], set()
     for group in raw:

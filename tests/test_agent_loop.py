@@ -323,6 +323,8 @@ async def test_memory_forget_confirms_the_exact_facts_then_deactivates(scripted_
 async def test_cheap_tier_loop_takes_over_when_frontier_is_down(monkeypatch):
     """G-02's core: degraded mode is the SAME brain on the local tier, not
     a different system."""
+    from kyraan.agents import orchestrator as _orch
+    monkeypatch.setattr(_orch, "tier_chain", lambda: ("frontier", "cheap"))   # no standby in this scenario
     tiers_tried = []
 
     async def tiered(chat_id, raw_text, tier="frontier"):
@@ -762,7 +764,7 @@ async def test_agent_creates_a_recurring_reminder(scripted_model, monkeypatch, t
     ])
 
     reply = await agent_loop.run(90, "remind me every day at 9am to take medicine")
-    assert "Daily" in reply
+    assert "Reminder set" in reply and "daily" in reply   # the tool's own receipt (2026-09-04)
     records = rstore.list_pending(90)
     assert len(records) == 1 and records[0].repeat == "daily"
 
@@ -995,7 +997,7 @@ async def test_normal_interval_still_creates_without_a_confirm(
     ])
 
     reply = await agent_loop.run(90, "remind me every hour to drink water")
-    assert "Done" in reply
+    assert "Reminder set" in reply and "every 60 min" in reply   # the tool's own receipt (2026-09-04)
     assert len(rstore.list_pending(90)) == 1
 
 

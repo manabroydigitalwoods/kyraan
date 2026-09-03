@@ -557,6 +557,13 @@ async def _reminders_create_gated(chat_id: int, args: dict, raw_text: str):
                                 if window_start and window_end else ""))
     elif repeat:
         result["repeats"] = repeat
+    # Deterministic receipt (2026-09-04, the mini trial): left to the
+    # model, the receipt was paraphrased ("Set for tomorrow at 9:00 PM:
+    # call mom") and lost the words the owner and the eval look for.
+    # The receipt is the tool's, like cancel/snooze/reschedule.
+    rep = f" ({result['repeats']})" if result.get("repeats") else ""
+    receipt = f'Reminder set: "{args["text"]}" — first one at {result["when"]}{rep}.'
+    result.update({"__direct_reply__": receipt, "__history__": receipt})
     return result
 
 
@@ -2603,8 +2610,9 @@ def _undo_calendar_create(args, result, prior):
 
 
 def _undo_reminders_create(args, result, prior):
-    if isinstance(result, dict) and "__direct_reply__" in result:
-        return SKIP  # duplicate — nothing was created
+    if isinstance(result, dict) and not result.get("created"):
+        return SKIP  # duplicate — nothing was created (a success carries its
+                     # own direct-reply receipt too, since 2026-09-04)
     if isinstance(result, dict) and result.get("id"):
         return ("reminders.cancel", {"reminder_id": result["id"]})
     return None

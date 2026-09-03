@@ -952,7 +952,7 @@ def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
                            name=job_name, job_kwargs=_ALWAYS_FIRE)
 
     async def run_fn(chat_id: int, instruction: str) -> str:
-        for tier in ("frontier", "cheap"):
+        for tier in orchestrator.tier_chain():
             try:
                 return await agent_loop.run(chat_id, instruction, tier=tier, read_only=True)
             except agent_loop.AgentUnavailable:
@@ -995,7 +995,7 @@ def _wire_goals(job_queue: JobQueue, bot) -> None:
         # enrolled adult's goal the owner's whole capability surface.
         token = _kernel.set_viewer(goal.person, goal.stage)
         try:
-            for tier in ("frontier", "cheap"):
+            for tier in orchestrator.tier_chain():
                 try:
                     return await agent_loop.run(
                         goal.chat_id, goals.cycle_instruction(goal),
@@ -1132,7 +1132,7 @@ def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
         system = (_WRITER
                   + (f"\nWHAT MANAB KNOWS (facts):\n{memory}" if memory else "")
                   + (f"\nMANAB'S DOCUMENTS:\n{docs}" if docs else ""))
-        for tier in ("frontier", "cheap"):
+        for tier in orchestrator.tier_chain():
             try:
                 resp = await _router.acall(prompt=instruction, system=system,
                                            tier=tier, max_tokens=300)

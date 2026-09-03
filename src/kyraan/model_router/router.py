@@ -746,3 +746,15 @@ def call(
         _cooldown_until[provider] = time.monotonic() + _COOLDOWN_S
         log_event("provider_cooldown", provider=provider, seconds=_COOLDOWN_S)
     raise ModelProviderError(f"{provider}/{model} failed after {attempts} attempts: {last_exc}") from last_exc
+
+
+def worker_tier() -> str:
+    """The tier for the small jobs — classify, extract, tag, rank,
+    summarise (2026-09-04, the mini trial): the standby cloud tier (nano)
+    when one is configured, else the frontier. The frontier is the brain
+    inside the loop; the worker keeps its bill for thinking."""
+    try:
+        tiers = config.load().get("model_tiers") or {}
+    except Exception:
+        return "frontier"
+    return "standby" if "standby" in tiers else "frontier"

@@ -500,6 +500,17 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         reset_trace_redaction(trace_token)
 
 
+def tier_chain() -> tuple:
+    """The model tiers to try, in order, from config: frontier, then a
+    standby cloud tier when one is configured, then the local model."""
+    try:
+        from kyraan.control_plane import config as _config
+        tiers = _config.load().get("model_tiers") or {}
+    except Exception:
+        tiers = {"frontier": {}, "cheap": {}}
+    return tuple(t for t in ("frontier", "standby", "cheap") if t in tiers)
+
+
 _last_processing: dict = {}
 _pending_suggestion: dict = {}   # chat_id -> (phrase, monotonic) — "did you mean"
 _background_tasks: set = set()
@@ -1444,6 +1455,9 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         'or "help" for all the exact commands.')
         from kyraan.agents import agent_loop
         secret = _secret_turn.get()
+        # frontier -> standby (the previous frontier model, cloud) -> cheap
+        # (local): a capped or failing mini falls to nano before the loop
+        # degrades to qwen3 (2026-09-04, mini trial)
         if secret:
             # a private turn never runs the tool loop (see secrets.local_reply)
             from kyraan.agents import secrets as _secrets_lr
@@ -1455,7 +1469,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     "and I won't send a private message to the cloud. Nothing "
                     "was stored — try again in a moment, or say \"private mode "
                     "off\" if this doesn't need to stay private.")
-        for tier in ("frontier", "cheap"):
+        for tier in tier_chain():
             if tier == "cheap":
                 # P3.7a: the local model now holds BOTH the loop and
                 # extraction — the extraction cutoff widens for this
@@ -1463,7 +1477,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 # review" (9x in one degraded eval run).
                 _degraded_turn.set(True)
             try:
-                _answered_by.set("cloud" if tier == "frontier" else "local")
+                _answered_by.set("local" if tier == "cheap" else "cloud")
                 return await agent_loop.run(chat_id, raw_text, tier=tier)
             except KillSwitchEngaged:
                 raise
