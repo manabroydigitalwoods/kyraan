@@ -1057,6 +1057,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 describe=(f"About to note that Kiaan {'is SKIPPING' if skipped else 'got'} "
                           f"\"{words}\"" + (f" on {when.strftime('%d %b')}" if when else "")
                           + " (his vaccination record)"))
+        open_q = _re.match(
+            r"^\s*(?:what'?s\s+(?:still\s+)?open|what\s+needs\s+a\s+reply|anything\s+open|"
+            r"open\s+items?|day\s+status|what\s+did\s+i\s+miss)\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
+        if open_q and kernel.viewer_person() == "owner":
+            from kyraan.triggers import chief_of_staff as _cos_r
+            _skip_extraction.set(True)
+            _history_redaction.set("[listed what is still open today]")
+            return await _cos_r.status_text(chat_id)
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"

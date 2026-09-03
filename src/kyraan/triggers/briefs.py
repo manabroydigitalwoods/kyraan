@@ -66,6 +66,17 @@ async def compose(chat_id: int) -> str:
         lines.append("")
         lines.append("No reminders today.")
 
+    # Chief of staff (duty #3, 2026-09-03): what needs a reply today
+    try:
+        from kyraan.triggers import chief_of_staff
+        needs = await chief_of_staff.needs_reply_lines(chat_id)
+        if needs:
+            lines.append("")
+            lines.append("Needs a reply:")
+            lines.extend(needs)
+    except Exception as exc:
+        log_event("chief_of_staff_morning_failed", error=str(exc)[:120])
+
     # Home lines — best-effort: worth a "the AC ran all night" heads-up,
     # never worth blocking the brief when HA is unreachable/unconfigured.
     home = []
@@ -172,6 +183,16 @@ async def compose_evening(chat_id: int) -> str:
                 when = "all day" if e["all_day"] else humanize(e["start"])
                 where = f" ({e['location']})" if e.get("location") else ""
                 lines.append(f"- {when} — {e['title']}{where}")
+            # meeting prep (duty #3): who tomorrow's events are with
+            try:
+                from kyraan.triggers import chief_of_staff
+                prep = chief_of_staff.prep_lines(events)
+                if prep:
+                    lines.append("")
+                    lines.append("Before tomorrow:")
+                    lines.extend(prep)
+            except Exception as exc:
+                log_event("chief_of_staff_prep_failed", error=str(exc)[:120])
         else:
             lines.append("Nothing on tomorrow's calendar.")
     except kernel.ToolFailed as exc:

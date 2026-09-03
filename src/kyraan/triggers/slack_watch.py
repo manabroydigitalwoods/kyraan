@@ -15,6 +15,7 @@ construction — the draft is words, the post is the owner's).
 import csv
 import io
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from kyraan.control_plane import kernel
@@ -274,6 +275,13 @@ async def tick(channels: list, owner_chat: int) -> int:
                 break  # keep order; retry this mention next tick
             surfaced += 1
             last_ok_ts = r.get("ts") or last_ok_ts
+            # the chief of staff's "still open" needs to know what was
+            # surfaced today (2026-09-03)
+            opened = state.setdefault("open_mentions", [])
+            opened.append({"channel": channel, "ts": r["ts"], "user": r.get("user", ""),
+                           "question": question[:200],
+                           "surfaced_at": datetime.now(timezone.utc).isoformat()})
+            state["open_mentions"] = opened[-50:]
             log_event("slack_watch_mention", channel=channel, by=r["user"])
         if newest and not failed:
             # delivery truth: the watermark advances only past messages

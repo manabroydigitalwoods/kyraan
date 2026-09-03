@@ -354,7 +354,7 @@ switch + DND) and delivery truth as reminders.
 |---|---|---|---|---|
 | 1 | **Kiaan's keeper** | vaccination schedule (IAP by age, anchored on the birth-date fact; done = card dates, vaccination-day photos, owner statements), milestones by age | a dose due within 3 weeks (once, then 3 days before); overdue once a fortnight; one milestone question per window; "kiaan status" on demand; "kiaan got / skipped X" confirm-gated | **built 2026-09-03** (`triggers/kiaan_keeper.py`, daily 08:05) |
 | 2 | **House steward** | air/temperature (already), purifier filter life with a reorder nudge, AC energy per month vs last month, nightly "house is settled" check | thresholds crossed; filter < 20%; month-end energy line; 23:00 settle check | proposed |
-| 3 | **Chief of staff** | Slack mentions (drafts exist), 08:00 "your day and what needs a reply", 18:00 "you never answered X", meeting prep the evening before from the people notes | daily at 08:00 / 18:00; the evening before a meeting | proposed |
+| 3 | **Chief of staff** | "Needs a reply" inside the 07:30 brief (unanswered Slack mentions, important-mail COUNT, slipped reminders), 18:00 "still open" on weekdays (silent when nothing is), meeting prep inside the evening brief from the people notes; "what's open" on demand | 07:30 / 18:00 / evening brief | **built 2026-09-03** (`triggers/chief_of_staff.py`) |
 | 4 | **Voice in the room** | Alexa as an inbound channel ("Kyraan, when is Kiaan's next vaccine") | on demand | proposed (deferred 2026-09-02) |
 
 Build order: 1 (data already held, emotional value, proves "speaks

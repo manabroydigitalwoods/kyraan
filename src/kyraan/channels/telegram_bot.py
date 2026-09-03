@@ -1196,6 +1196,17 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                             name="kiaan_keeper", job_kwargs=_DAILY_GRACE)
         logger.info("Kiaan's keeper scheduled daily at %s", keeper_at)
 
+    # Duty #3 — chief of staff (2026-09-03): the 18:00 "still open".
+    from kyraan.triggers import chief_of_staff as _cos
+    cos_at = _cos.still_open_time()
+    if cos_at is not None:
+        async def _still_open_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await _cos.fire_still_open(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_still_open_job, time=cos_at.replace(tzinfo=local_now().tzinfo),
+                            name="still_open", job_kwargs=_DAILY_GRACE)
+        logger.info("Chief of staff 'still open' scheduled daily at %s", cos_at)
+
     review_at = __import__("kyraan.triggers.self_review", fromlist=["x"]).review_time()
     if review_at is not None:
         from kyraan.triggers import self_review
