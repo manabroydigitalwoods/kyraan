@@ -131,6 +131,7 @@ async def main() -> None:
         with console.status("[dim]thinking...[/dim]", spinner="dots"):
             reply = await orchestrator.handle_message(CHAT_ID, text)
         console.print(Markdown(reply))
+        console.print(f"[dim]{orchestrator.processing_marker(CHAT_ID)}[/dim]")
 
 
 if __name__ == "__main__":

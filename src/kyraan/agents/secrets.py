@@ -52,6 +52,43 @@ _CLOSES = re.compile(
     r"secret\s+over|end\s+of\s+secret|thik\s+hai\s+bas)\s*[.!]*\s*$", re.IGNORECASE)
 
 _mem: dict = {}
+_private_mem: dict = {}
+_PRIVATE_CMD = re.compile(
+    r"^\s*(?:private|secret)\s+mode\s+(on|off)\s*[.!]*\s*$", re.IGNORECASE)
+
+
+def private_command(text: str) -> str | None:
+    """"private mode on" / "private mode off" -> "on" | "off" | None."""
+    m = _PRIVATE_CMD.match(str(text or ""))
+    return m.group(1).lower() if m else None
+
+
+def _pkey(chat_id: int) -> str:
+    return redis_kv.key("private", chat_id)
+
+
+def private_active(chat_id: int) -> bool:
+    """The explicit switch (owner 2026-09-03: "fast and easy"): every turn
+    stays on this Mac until "private mode off". No timeout."""
+    v = redis_kv.get_json(_pkey(chat_id))
+    if v is None:
+        v = _private_mem.get(chat_id)
+    return bool(v)
+
+
+def set_private(chat_id: int, on: bool) -> None:
+    if on:
+        _private_mem[chat_id] = True
+        try:
+            redis_kv.set_json(_pkey(chat_id), True)
+        except Exception:
+            pass
+    else:
+        _private_mem.pop(chat_id, None)
+        try:
+            redis_kv.delete(_pkey(chat_id))
+        except Exception:
+            pass
 
 
 def opens(text: str) -> bool:
@@ -73,7 +110,10 @@ def _key(chat_id: int) -> str:
 
 
 def active(chat_id: int) -> bool:
-    until = redis_kv.get_json(_key(chat_id)) if hasattr(redis_kv, "get_json") else None
+    """A secret window is open, or private mode is on."""
+    if private_active(chat_id):
+        return True
+    until = redis_kv.get_json(_key(chat_id))
     if until is None:
         until = _mem.get(chat_id)
     return bool(until) and float(until) > time.time()

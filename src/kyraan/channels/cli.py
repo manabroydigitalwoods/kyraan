@@ -49,7 +49,7 @@ async def repl() -> None:
             reply = await orchestrator.handle_message(chat_id, text)
         except Exception as exc:  # the channel survives any turn's crash
             reply = f"(turn failed: {exc})"
-        print(f"kyraan> {reply}\n")
+        print(f"kyraan> {reply}\n{orchestrator.processing_marker(chat_id)}\n")
 
 
 def main() -> None:

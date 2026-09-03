@@ -474,6 +474,36 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     new_turn()  # correlates every event/trace of this flow under one id
     start_anomaly_capture()  # health layer: this turn's anomaly verdict
     turn_started = time.monotonic()
+    from kyraan.agents import secrets as _secrets
+    from kyraan.control_plane.logging_setup import set_trace_redaction, reset_trace_redaction
+    is_private = kernel.viewer_person() == "owner" and (
+        _secrets.opens(raw_text) or _secrets.active(chat_id)
+        or _secrets.private_command(raw_text) is not None)
+    # the trace log must never hold a private turn's text — decided
+    # before the first trace line of the turn is written
+    trace_token = set_trace_redaction(_secrets.PLACEHOLDER if is_private else None)
+    try:
+        return await _handle_message_traced(chat_id, raw_text, turn_started, is_private)
+    finally:
+        reset_trace_redaction(trace_token)
+
+
+_last_processing: dict = {}
+
+
+def processing_marker(chat_id: int) -> str:
+    """Where the last reply was made (owner 2026-09-03: "show where
+    every reply was processed"): 🔒 this Mac, ☁️ the cloud."""
+    return "🔒 on this Mac" if _last_processing.get(chat_id, "local") == "local" else "☁️ via cloud"
+
+
+_answered_by: _contextvars.ContextVar = _contextvars.ContextVar("answered_by", default="local")
+
+
+async def _handle_message_traced(chat_id: int, raw_text: str, turn_started: float,
+                                 is_private: bool) -> str:
+    from kyraan.control_plane.logging_setup import log_trace
+    from kyraan.agents import secrets as _secrets
     log_trace("turn_start", chat_id=chat_id, user_text=raw_text)
     if _CORRECTION_RE.match(raw_text):
         # Eval-candidate capture (audit item 5, 2026-08-28): a turn the
@@ -489,9 +519,23 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
     degraded_token = _degraded_turn.set(False)
     secret_token = _secret_turn.set(False)
     user_red_token = _user_redaction.set(None)
-    from kyraan.agents import secrets as _secrets
-    if kernel.viewer_person() == "owner" and (
-            _secrets.opens(raw_text) or _secrets.active(chat_id)):
+    answered_token = _answered_by.set("local")
+    cmd = _secrets.private_command(raw_text) if kernel.viewer_person() == "owner" else None
+    if cmd is not None:
+        _secrets.set_private(chat_id, cmd == "on")
+        if cmd == "off":
+            _secrets.close(chat_id)
+        _skip_extraction.set(True)
+        log_event("private_mode", chat_id=chat_id, on=cmd == "on")
+        reply = ("🔒 Private mode ON — everything stays on this Mac until you "
+                 "say \"private mode off\". Nothing from here is remembered."
+                 if cmd == "on" else
+                 "Private mode OFF — back to normal (cloud model, memory on).")
+        _history_redaction.set(reply)
+        return _finish_turn(chat_id, raw_text, reply, turn_started,
+                            redaction_token, skip_token, degraded_token,
+                            secret_token, user_red_token, answered_token)
+    if is_private:
         # SECRET WINDOW (owner 2026-09-03: "isko secret rakho" — see
         # agents/secrets.py). This turn never reaches the cloud tier,
         # never enters memory, and leaves only a placeholder behind in
@@ -509,109 +553,144 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
         log_event("secret_turn", chat_id=chat_id,
                   retro=_secrets.retro(raw_text), closed=_secrets.closes(raw_text))
     reply = await _dispatch(chat_id, raw_text)
-    if kernel.viewer_person() != "owner":
-        # P3.5c first-month rule: extraction from a non-owner's messages
-        # only with their per-person opt-in flag; proposals then route to
-        # THEIR review queue via the reviewer stamp in propose_fact.
-        from kyraan.store import persons as _persons
-        if not _persons.extraction_enabled(kernel.viewer_person()):
-            _skip_extraction.set(True)
-    if not _skip_extraction.get():
-        import asyncio as _aio
+    return await _finish_turn_async(chat_id, raw_text, reply, turn_started,
+                                    redaction_token, skip_token, degraded_token,
+                                    secret_token, user_red_token, answered_token)
 
-        from kyraan.control_plane.logging_setup import stage as _stage
-        # Extraction is bookkeeping — it must never hold the reply
-        # hostage. Live 2026-08-27: a local-model reload made "ok
-        # that great" take 23s because extraction sat on the reply
-        # path. A slow turn skips extraction for ONE message.
-        # EXCEPT an explicit "remember/save this": there extraction IS
-        # the request — a 6s cutoff silently swallowed it during cold
-        # model reloads (Bugbot P1), so it waits out a full Ollama
-        # reload, and if even that expires it says so instead of
-        # pretending the fact was noted.
-        explicit_save = is_explicit_save(raw_text)
-        try:
-            with _stage("extraction"):
-                reply += await _aio.wait_for(
-                    _extraction_note(chat_id, raw_text),
-                    timeout=_extraction_timeout(explicit_save))
-        except _aio.TimeoutError:
-            log_event("extraction_skipped_slow", chat_id=chat_id,
-                      explicit_save=explicit_save)
-            if explicit_save:
-                reply += ("\n\n(I couldn't queue that for memory just now — "
-                          "the local model is too slow to respond. Nothing "
-                          "was saved; tell me again in a minute.)")
+
+def _finish_turn(chat_id, raw_text, reply, turn_started, redaction_token, skip_token,
+                 degraded_token, secret_token, user_red_token, answered_token):
+    """Record + trace a turn that needed no model (a switch flip)."""
     _skip_extraction.reset(skip_token)
     _degraded_turn.reset(degraded_token)
-    # Health layer (2026-08-27): the turn's verdict — one event with the
-    # anomaly kinds this turn saw and its latency; a crossed threshold
-    # appends ONE in-band warning line (throttled per kind per day).
-    from kyraan.control_plane.logging_setup import collected_anomalies
-    anomalies = collected_anomalies()
-    log_event("turn_health", chat_id=chat_id,
-              anomalies=sorted(set(anomalies)) or None,
-              anomaly_count=len(anomalies),
-              latency_ms=round((time.monotonic() - turn_started) * 1000),
-              degraded=_degraded_turn.get() or None)
-    if kernel.viewer_person() == "owner":
-        # Warning lights are OWNER-ONLY: a non-owner turn's anomalies
-        # still land in events and the nightly census, but the in-band
-        # line must never surface system internals in someone else's
-        # chat — nor burn the daily alert where the owner can't see it.
-        try:
-            from kyraan.triggers import health_alerts
-            alert = health_alerts.check(anomalies)
-            if alert:
-                reply += alert
-        except Exception as exc:  # the light must never break the reply
-            log_event("health_alert_failed", error=str(exc)[:120])
-
-    quota_warning = router.quota_alert_due()
-    if quota_warning:
-        reply += f"\n\n⚠️ {quota_warning}."
-    if router.budget_alert_due():
-        reply += (
-            f"\n\n⚠️ Model spend today is ${router.today_cost_usd():.2f} — past "
-            f"{router.budget_alert_threshold_pct():.0f}% of the ${router.daily_budget_usd():.2f} "
-            "daily budget. Calls stop at the cap."
-        )
-    dropped = _dropped_ask_note.pop(chat_id, None)
-    if dropped:
-        reply = (f'(The earlier "{dropped}" ask was never confirmed, so I '
-                 "dropped it — nothing was done. Ask again if you still want it.)"
-                 f"\n\n{reply}")
     redacted = _history_redaction.get()
     user_red = _user_redaction.get()
     for entry in (("user", user_red or raw_text), ("assistant", redacted or reply)):
-        if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
-            # the oldest entry is about to fall off the window — keep it
-            # for the rolling summary instead of losing it (harness C)
-            _summary_backlog[chat_id].append(_history[chat_id][0])
         _history[chat_id].append(entry)
-    # Summary rolling is equally off-path: fire-and-forget — its own
-    # error handling re-queues the backlog chunk on failure.
-    import asyncio as _aio2
-    _aio2.create_task(_roll_summary(chat_id))
     _history_redaction.reset(redaction_token)
     _secret_turn.reset(secret_token)
     _user_redaction.reset(user_red_token)
+    _last_processing[chat_id] = _answered_by.get()
+    _answered_by.reset(answered_token)
     _last_sent_reply[chat_id] = reply
     _last_reply_at[chat_id] = time.monotonic()
-    log_chat(chat_id, "user", raw_text,
-             **({"cloud_text": user_red} if user_red else {}))
-    # The full reply stays in the LOCAL log (inside the §3a boundary);
-    # cloud_text is what history seeding may hand back to cloud prompts —
-    # without it, the redaction died at the first restart (review P1).
-    log_chat(chat_id, "assistant", reply,
-             **({"cloud_text": redacted} if redacted else {}))
-    from kyraan.control_plane.logging_setup import turn_summary
-    from kyraan.agents import agent_loop as _al
-    log_trace("turn_end", chat_id=chat_id, reply=reply,
-              termination=_al.termination(),
-              total_ms=round((time.monotonic() - turn_started) * 1000),
-              **turn_summary())
+    log_chat(chat_id, "user", raw_text, **({"cloud_text": user_red} if user_red else {}))
+    log_chat(chat_id, "assistant", reply, **({"cloud_text": redacted} if redacted else {}))
+    from kyraan.control_plane.logging_setup import log_trace, turn_summary
+    log_trace("turn_end", chat_id=chat_id, reply=reply, termination="deterministic",
+              total_ms=round((time.monotonic() - turn_started) * 1000), **turn_summary())
     return reply
+
+
+async def _finish_turn_async(chat_id, raw_text, reply, turn_started, redaction_token,
+                             skip_token, degraded_token, secret_token, user_red_token,
+                             answered_token):
+        from kyraan.control_plane.logging_setup import log_trace
+        if kernel.viewer_person() != "owner":
+            # P3.5c first-month rule: extraction from a non-owner's messages
+            # only with their per-person opt-in flag; proposals then route to
+            # THEIR review queue via the reviewer stamp in propose_fact.
+            from kyraan.store import persons as _persons
+            if not _persons.extraction_enabled(kernel.viewer_person()):
+                _skip_extraction.set(True)
+        if not _skip_extraction.get():
+            import asyncio as _aio
+
+            from kyraan.control_plane.logging_setup import stage as _stage
+            # Extraction is bookkeeping — it must never hold the reply
+            # hostage. Live 2026-08-27: a local-model reload made "ok
+            # that great" take 23s because extraction sat on the reply
+            # path. A slow turn skips extraction for ONE message.
+            # EXCEPT an explicit "remember/save this": there extraction IS
+            # the request — a 6s cutoff silently swallowed it during cold
+            # model reloads (Bugbot P1), so it waits out a full Ollama
+            # reload, and if even that expires it says so instead of
+            # pretending the fact was noted.
+            explicit_save = is_explicit_save(raw_text)
+            try:
+                with _stage("extraction"):
+                    reply += await _aio.wait_for(
+                        _extraction_note(chat_id, raw_text),
+                        timeout=_extraction_timeout(explicit_save))
+            except _aio.TimeoutError:
+                log_event("extraction_skipped_slow", chat_id=chat_id,
+                          explicit_save=explicit_save)
+                if explicit_save:
+                    reply += ("\n\n(I couldn't queue that for memory just now — "
+                              "the local model is too slow to respond. Nothing "
+                              "was saved; tell me again in a minute.)")
+        _skip_extraction.reset(skip_token)
+        _degraded_turn.reset(degraded_token)
+        # Health layer (2026-08-27): the turn's verdict — one event with the
+        # anomaly kinds this turn saw and its latency; a crossed threshold
+        # appends ONE in-band warning line (throttled per kind per day).
+        from kyraan.control_plane.logging_setup import collected_anomalies
+        anomalies = collected_anomalies()
+        log_event("turn_health", chat_id=chat_id,
+                  anomalies=sorted(set(anomalies)) or None,
+                  anomaly_count=len(anomalies),
+                  latency_ms=round((time.monotonic() - turn_started) * 1000),
+                  degraded=_degraded_turn.get() or None)
+        if kernel.viewer_person() == "owner":
+            # Warning lights are OWNER-ONLY: a non-owner turn's anomalies
+            # still land in events and the nightly census, but the in-band
+            # line must never surface system internals in someone else's
+            # chat — nor burn the daily alert where the owner can't see it.
+            try:
+                from kyraan.triggers import health_alerts
+                alert = health_alerts.check(anomalies)
+                if alert:
+                    reply += alert
+            except Exception as exc:  # the light must never break the reply
+                log_event("health_alert_failed", error=str(exc)[:120])
+
+        quota_warning = router.quota_alert_due()
+        if quota_warning:
+            reply += f"\n\n⚠️ {quota_warning}."
+        if router.budget_alert_due():
+            reply += (
+                f"\n\n⚠️ Model spend today is ${router.today_cost_usd():.2f} — past "
+                f"{router.budget_alert_threshold_pct():.0f}% of the ${router.daily_budget_usd():.2f} "
+                "daily budget. Calls stop at the cap."
+            )
+        dropped = _dropped_ask_note.pop(chat_id, None)
+        if dropped:
+            reply = (f'(The earlier "{dropped}" ask was never confirmed, so I '
+                     "dropped it — nothing was done. Ask again if you still want it.)"
+                     f"\n\n{reply}")
+        redacted = _history_redaction.get()
+        user_red = _user_redaction.get()
+        for entry in (("user", user_red or raw_text), ("assistant", redacted or reply)):
+            if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
+                # the oldest entry is about to fall off the window — keep it
+                # for the rolling summary instead of losing it (harness C)
+                _summary_backlog[chat_id].append(_history[chat_id][0])
+            _history[chat_id].append(entry)
+        # Summary rolling is equally off-path: fire-and-forget — its own
+        # error handling re-queues the backlog chunk on failure.
+        import asyncio as _aio2
+        _aio2.create_task(_roll_summary(chat_id))
+        _history_redaction.reset(redaction_token)
+        _secret_turn.reset(secret_token)
+        _user_redaction.reset(user_red_token)
+        _last_processing[chat_id] = _answered_by.get()
+        _answered_by.reset(answered_token)
+        _last_sent_reply[chat_id] = reply
+        _last_reply_at[chat_id] = time.monotonic()
+        log_chat(chat_id, "user", raw_text,
+                 **({"cloud_text": user_red} if user_red else {}))
+        # The full reply stays in the LOCAL log (inside the §3a boundary);
+        # cloud_text is what history seeding may hand back to cloud prompts —
+        # without it, the redaction died at the first restart (review P1).
+        log_chat(chat_id, "assistant", reply,
+                 **({"cloud_text": redacted} if redacted else {}))
+        from kyraan.control_plane.logging_setup import turn_summary
+        from kyraan.agents import agent_loop as _al
+        log_trace("turn_end", chat_id=chat_id, reply=reply,
+                  termination=_al.termination(),
+                  total_ms=round((time.monotonic() - turn_started) * 1000),
+                  **turn_summary())
+        return reply
 
 
 async def _dispatch(chat_id: int, raw_text: str) -> str:
@@ -1038,6 +1117,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 # review" (9x in one degraded eval run).
                 _degraded_turn.set(True)
             try:
+                _answered_by.set("cloud" if tier == "frontier" else "local")
                 return await agent_loop.run(
                     chat_id, raw_text, tier=tier,
                     **({"secret": True} if secret else {}))

@@ -86,3 +86,48 @@ def test_secret_turn_is_local_only_and_leaves_placeholders(monkeypatch):
     asyncio.run(orchestrator.handle_message(56, "what's the weather"))
     assert seen[-1][0] == "frontier"                                 # back to normal
     session._history[56] = []
+
+
+def test_private_mode_switch_is_local_no_model_and_sticks(monkeypatch):
+    from kyraan.agents import orchestrator, session, agent_loop
+    from kyraan.control_plane import kernel
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    seen = []
+    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False, secret=False):
+        seen.append((tier, secret)); return "reply"
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    monkeypatch.setattr(orchestrator, "log_chat", lambda *a, **k: None)
+    session._history[57] = []
+    secrets.set_private(57, False)
+    out = asyncio.run(orchestrator.handle_message(57, "private mode on"))
+    assert out.startswith("🔒 Private mode ON") and seen == []          # no model at all
+    assert orchestrator.processing_marker(57).startswith("🔒")
+    asyncio.run(orchestrator.handle_message(57, "how is my day looking"))
+    assert seen[-1] == ("cheap", True)                                   # local, secret handling
+    assert orchestrator.processing_marker(57).startswith("🔒")
+    assert list(session._history[57])[-2:] == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    out = asyncio.run(orchestrator.handle_message(57, "private mode off"))
+    assert out.startswith("Private mode OFF")
+    asyncio.run(orchestrator.handle_message(57, "how is my day looking"))
+    assert seen[-1][0] == "frontier"
+    assert orchestrator.processing_marker(57).startswith("☁️")
+    session._history[57] = []
+
+
+def test_private_turns_leave_no_text_in_traces(monkeypatch, tmp_path):
+    from kyraan.control_plane import logging_setup as ls
+    monkeypatch.setattr(ls, "TRACE_LOG", tmp_path / "t.jsonl")
+    monkeypatch.setattr(ls, "EVENT_LOG", tmp_path / "e.jsonl")
+    tok = ls.set_trace_redaction(secrets.PLACEHOLDER)
+    try:
+        ls.log_trace("model_io", prompt="i have a girlfriend", system="sys", latency_ms=12)
+        ls.log_event("tool_call", args={"text": "i have a girlfriend"}, skill="x")
+    finally:
+        ls.reset_trace_redaction(tok)
+    ls.log_trace("model_io", prompt="weather?", latency_ms=1)
+    t = [json.loads(l) for l in (tmp_path / "t.jsonl").read_text().splitlines()]
+    e = [json.loads(l) for l in (tmp_path / "e.jsonl").read_text().splitlines()]
+    assert t[0]["prompt"] == secrets.PLACEHOLDER and t[0]["system"] == secrets.PLACEHOLDER and t[0]["latency_ms"] == 12
+    assert e[0]["args"] == secrets.PLACEHOLDER and e[0]["skill"] == "x"
+    assert t[1]["prompt"] == "weather?"                                  # normal turns untouched

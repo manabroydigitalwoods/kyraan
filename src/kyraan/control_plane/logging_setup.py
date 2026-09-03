@@ -12,6 +12,7 @@ local-disk-only boundary as everything else); events.jsonl stays the
 compact audit trail.
 """
 import contextvars
+import contextvars as _ctx
 import json
 import logging
 import uuid
@@ -256,7 +257,31 @@ def log_event(kind: str, **fields) -> None:
         if bucket is not None:
             bucket.append(kind)
     _append(EVENT_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind,
-                        **({"turn_id": tid} if tid else {}), **fields})
+                        **({"turn_id": tid} if tid else {}), **_redacted(fields)})
+
+
+_TEXT_FIELDS = ("user_text", "prompt", "system", "reply", "response", "result",
+                "args", "draft", "consider", "text", "correction", "corrected_reply")
+_trace_redaction: _ctx.ContextVar = _ctx.ContextVar("trace_redaction", default=None)
+
+
+def set_trace_redaction(placeholder: str | None):
+    """Private turns (owner 2026-09-03): every text field of this turn's
+    traces and events is written as the placeholder — the trace log kept
+    verbatim prompts, the one plaintext copy nothing ever prunes."""
+    return _trace_redaction.set(placeholder)
+
+
+def reset_trace_redaction(token) -> None:
+    _trace_redaction.reset(token)
+
+
+def _redacted(fields: dict) -> dict:
+    ph = _trace_redaction.get()
+    if not ph:
+        return fields
+    return {k: (ph if k in _TEXT_FIELDS and v not in (None, "", [], {}) else v)
+            for k, v in fields.items()}
 
 
 def log_trace(kind: str, **fields) -> None:
@@ -264,7 +289,7 @@ def log_trace(kind: str, **fields) -> None:
     boundaries) — traces.jsonl, correlated to events by turn_id."""
     tid = _turn_id.get()
     _append(TRACE_LOG, {"ts": datetime.now(timezone.utc).isoformat(), "kind": kind,
-                        **({"turn_id": tid} if tid else {}), **fields})
+                        **({"turn_id": tid} if tid else {}), **_redacted(fields)})
 
 
 def log_chat(chat_id: int, role: str, text: str, **fields) -> None:

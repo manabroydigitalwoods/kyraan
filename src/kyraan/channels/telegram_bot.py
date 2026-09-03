@@ -124,6 +124,8 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             reply = await orchestrator.handle_message(chat_id, word)
         finally:
             _kernel.reset_viewer_stage(stage_token)
+    # where it was processed, on every reply (owner 2026-09-03)
+    reply = f"{reply}\n\n{orchestrator.processing_marker(chat_id)}"
     await _deliver(
         chat_id,
         lambda: context.bot.send_message(chat_id=chat_id, text=_plain(reply)),
@@ -652,7 +654,9 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from kyraan.control_plane.logging_setup import turn_summary
     log_trace("turn_end", chat_id=update.effective_chat.id, reply=reply,
               **turn_summary())
-    await update.message.reply_text(_plain(reply), do_quote=True)
+    # a photo is read by the cloud vision model — say so, every time
+    await update.message.reply_text(_plain(f"{reply}\n\n☁️ via cloud (vision)"),
+                                    do_quote=True)
 
 
 _PDF_MAX_BYTES = 15 * 1024 * 1024
