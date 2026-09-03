@@ -68,9 +68,16 @@ def test_secret_turn_is_local_only_and_leaves_placeholders(monkeypatch):
     monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
     monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
     seen = []
-    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False, secret=False):
-        seen.append((tier, secret)); return "ok, secret rakha"
+    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False):
+        seen.append((tier, False)); return "loop reply"
     monkeypatch.setattr(agent_loop, "run", fake_run)
+    from kyraan.model_router import router
+    def fake_call(**kw):
+        seen.append((kw["tier"], True))
+        assert "THINGS YOU CAN" not in kw["system"] and len(kw["prompt"]) < 2000   # lean, not the loop
+        class R: text = "ok, secret rakha"
+        return R()
+    monkeypatch.setattr(router, "call", fake_call)
     logged = []
     monkeypatch.setattr(orchestrator, "log_chat", lambda chat_id, role, text, **f: logged.append((role, text, f.get("cloud_text"))))
     session._history[56] = []
@@ -94,9 +101,15 @@ def test_private_mode_switch_is_local_no_model_and_sticks(monkeypatch):
     monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
     monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
     seen = []
-    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False, secret=False):
-        seen.append((tier, secret)); return "reply"
+    async def fake_run(chat_id, raw_text, tier="frontier", read_only=False):
+        seen.append((tier, False)); return "reply"
     monkeypatch.setattr(agent_loop, "run", fake_run)
+    from kyraan.model_router import router
+    def fake_call(**kw):
+        seen.append((kw["tier"], True))
+        class R: text = "private reply"
+        return R()
+    monkeypatch.setattr(router, "call", fake_call)
     monkeypatch.setattr(orchestrator, "log_chat", lambda *a, **k: None)
     session._history[57] = []
     secrets.set_private(57, False)
@@ -131,3 +144,24 @@ def test_private_turns_leave_no_text_in_traces(monkeypatch, tmp_path):
     assert t[0]["prompt"] == secrets.PLACEHOLDER and t[0]["system"] == secrets.PLACEHOLDER and t[0]["latency_ms"] == 12
     assert e[0]["args"] == secrets.PLACEHOLDER and e[0]["skill"] == "x"
     assert t[1]["prompt"] == "weather?"                                  # normal turns untouched
+
+
+def test_private_turn_without_a_local_answer_refuses_honestly(monkeypatch):
+    from kyraan.agents import orchestrator, session, agent_loop
+    from kyraan.control_plane import kernel
+    from kyraan.model_router import router
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    called = []
+    async def fake_run(*a, **k):
+        called.append(1); return "loop"
+    monkeypatch.setattr(agent_loop, "run", fake_run)
+    class R: text = ""
+    monkeypatch.setattr(router, "call", lambda **kw: R())
+    monkeypatch.setattr(orchestrator, "log_chat", lambda *a, **k: None)
+    session._history[58] = []
+    secrets.set_private(58, True)
+    out = asyncio.run(orchestrator.handle_message(58, "something private"))
+    assert out.startswith("I couldn't get an answer from the local model") and called == []
+    secrets.set_private(58, False)
+    session._history[58] = []

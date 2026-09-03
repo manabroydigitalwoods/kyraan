@@ -193,3 +193,41 @@ SYSTEM_ADDENDUM = (
     "Reply in ONE or two short sentences: acknowledge, keep confidence, "
     "answer only what was asked. Ask NO follow-up questions, give no "
     "advice or opinions unless asked, and never refer to this later.")
+
+
+_LOCAL_SYSTEM = (
+    "You are Kyraan, the owner's personal assistant, in PRIVATE MODE: this "
+    "conversation is handled entirely on the owner's own machine and is not "
+    "remembered. Reply in the owner's language (English or Hinglish as they "
+    "write), in one to three short sentences. Keep confidence. Answer what "
+    "was asked; if it is a statement, acknowledge it warmly and briefly. "
+    "Ask no follow-up questions, give no unsolicited advice, and never "
+    "moralise. You have no tools here; if something needs a tool, say so "
+    "in one line.")
+
+
+async def local_reply(chat_id: int, raw_text: str) -> str | None:
+    """The private turn's model call (live 2026-09-03 05:23: the full
+    agent-loop prompt — 11.5k tokens of tools, facts and history — took
+    the local model 73 s and yielded nothing). A secret turn needs none
+    of that: a short system line, the last few window entries (already
+    placeholders where they were private), the message. Plain text, two
+    attempts, None when the local model gives nothing."""
+    from kyraan.agents import session
+    from kyraan.model_router import router
+    recent = list(session._history[chat_id])[-6:]
+    convo = "\n".join(f"{r}: {str(t)[:300]}" for r, t in recent)
+    prompt = ((f"Recent conversation:\n{convo}\n\n" if convo else "")
+              + f"OWNER: {raw_text}")
+    for attempt in range(2):
+        try:
+            resp = await router.acall(prompt=prompt, system=_LOCAL_SYSTEM,
+                                      tier="cheap", max_tokens=300)
+        except Exception as exc:
+            log_event("secret_local_failed", attempt=attempt, error=str(exc)[:120])
+            continue
+        text = (resp.text or "").strip()
+        if text:
+            return text
+        log_event("secret_local_empty", attempt=attempt)
+    return None

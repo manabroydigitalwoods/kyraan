@@ -1109,8 +1109,19 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # after two consecutive all-green degraded eval runs (P3.7a).
         from kyraan.agents import agent_loop
         secret = _secret_turn.get()
-        for tier in (("cheap",) if secret else ("frontier", "cheap")):
-            if tier == "cheap" and not secret:
+        if secret:
+            # a private turn never runs the tool loop (see secrets.local_reply)
+            from kyraan.agents import secrets as _secrets_lr
+            text = await _secrets_lr.local_reply(chat_id, raw_text)
+            if text:
+                return text
+            log_event("secret_turn_unanswered", chat_id=chat_id)
+            return ("I couldn't get an answer from the local model just now, "
+                    "and I won't send a private message to the cloud. Nothing "
+                    "was stored — try again in a moment, or say \"private mode "
+                    "off\" if this doesn't need to stay private.")
+        for tier in ("frontier", "cheap"):
+            if tier == "cheap":
                 # P3.7a: the local model now holds BOTH the loop and
                 # extraction — the extraction cutoff widens for this
                 # turn or contention silently eats every "Noted for
@@ -1118,9 +1129,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 _degraded_turn.set(True)
             try:
                 _answered_by.set("cloud" if tier == "frontier" else "local")
-                return await agent_loop.run(
-                    chat_id, raw_text, tier=tier,
-                    **({"secret": True} if secret else {}))
+                return await agent_loop.run(chat_id, raw_text, tier=tier)
             except KillSwitchEngaged:
                 raise
             except agent_loop.AgentUnavailable as exc:
@@ -1128,11 +1137,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             except Exception as exc:
                 log_event("agent_loop_error", tier=tier, error=str(exc),
                           error_type=type(exc).__name__)
-        log_event("agent_all_tiers_failed", secret=secret)
-        if secret:
-            return ("I can't handle this privately right now — the local "
-                    "model is unreachable, and I won't send a secret to the "
-                    "cloud. Nothing was stored; tell me again in a few minutes.")
+        log_event("agent_all_tiers_failed")
         return ("Both my reasoning models are unreachable right now, so I "
                 "couldn't act on that — nothing was done. Reminders and "
                 "scheduled tasks still fire on their own; try me again in "
