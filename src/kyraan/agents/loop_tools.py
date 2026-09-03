@@ -1203,7 +1203,24 @@ async def _persons_add(chat_id: int, args: dict, raw_text: str):
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("persons.add", dict(args))
     await _aio.to_thread(persons.enroll, person_id, None, "none", None)
-    return {"added": True, "person_id": person_id, "name": name}
+    # An enrolled FACE with this name becomes this person's (owner
+    # 2026-09-03: "create a person from face for akansha" — the face
+    # "Akansha (employee)" existed, the registry row did not, so her
+    # photos could never link to her). The face's display name joins the
+    # aliases, which is what recognition resolves through.
+    linked = []
+    try:
+        from kyraan.agents import faces as _faces
+        low = name.lower()
+        for face in _faces.enrolled_names():
+            f = face.lower()
+            if f == low or f.startswith(low + " (") or f.startswith(low + " "):
+                await _aio.to_thread(persons.add_alias, person_id, face)
+                linked.append(face)
+    except Exception as exc:
+        log_event("person_face_link_failed", person=person_id, error=str(exc)[:100])
+    return {"added": True, "person_id": person_id, "name": name,
+            **({"face_linked": linked} if linked else {})}
 
 
 async def _files_send(chat_id: int, args: dict, raw_text: str):
@@ -2296,9 +2313,11 @@ TOOLS = {
     },
     "persons.add": {
         "params": '{"name": "<the person\'s name>"}',
-        "about": ("Add a NEW friend/contact to the person registry so "
-                  "documents and graph facts can link to them. Grants NO "
-                  "access of any kind. For track/add-a-person asks. To "
+        "about": ("Add a NEW friend/contact/colleague to the person registry so "
+                  "documents, photos and graph facts can link to them — "
+                  "\"add akansha\", \"create a person for X\", \"create a person "
+                  "from face for X\" (an enrolled face with that name is linked "
+                  "automatically). Grants NO access of any kind. To "
                   "RENAME or nickname an EXISTING person use persons.alias "
                   "— never add them again."),
         "run": _persons_add,

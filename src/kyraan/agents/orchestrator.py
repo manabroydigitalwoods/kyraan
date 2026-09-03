@@ -1016,6 +1016,44 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 tag = next((e for e in ents if e.startswith("#")), "")
                 return (f'Noted — that photo is yours now: "{caption}"'
                         + (f", filed under {tag}" if tag else "") + ".")
+        add_person = _re.match(
+            r"^\s*(?:please\s+)?(?:create|add|register|make)\s+(?:a\s+|an\s+)?(?:new\s+)?"
+            r"(?:person|contact|people\s+entry)\s*(?:from\s+(?:the\s+|his\s+|her\s+)?face\s*)?"
+            r"(?:for|named|called|of|:)?\s+([A-Za-z][A-Za-z .'-]{1,40}?)\s*[.!]?\s*$",
+            raw_text, _re.IGNORECASE)
+        if add_person and kernel.viewer_person() == "owner":
+            # "create a person from face for akansha" (live 2026-09-03:
+            # answered "I can't" while persons.add existed). Deterministic
+            # and confirm-gated like every registry write; an enrolled
+            # face with that name is linked by the executor.
+            from kyraan.agents import loop_tools as _lt
+            from kyraan.store import persons as _persons_a
+            wanted = add_person.group(1).strip()
+            if _persons_a.resolve(wanted):
+                _skip_extraction.set(True)
+                return f"{wanted} is already in the person registry."
+            try:
+                from kyraan.agents import faces as _faces_a
+                face = next((f for f in _faces_a.enrolled_names()
+                             if f.lower() == wanted.lower() or f.lower().startswith(wanted.lower() + " (")), "")
+            except Exception:
+                face = ""
+
+            async def _add_person(_a: dict) -> str:
+                out = await _lt._persons_add(chat_id, {"name": wanted}, raw_text)
+                if not out.get("added"):
+                    return out.get("note", "Nothing changed.")
+                linked = out.get("face_linked") or []
+                return (f"Added {wanted} to the person registry"
+                        + (f' and linked the enrolled face "{linked[0]}" to them' if linked else "")
+                        + ". Photos and documents can link to them now; no access was granted.")
+
+            _skip_extraction.set(True)
+            return await _gated(
+                chat_id, SkillCall("persons.add", {"name": wanted}), _add_person,
+                describe=(f"About to add {wanted} to the person registry"
+                          + (f' and link the enrolled face "{face}" to them' if face else "")
+                          + " (no access of any kind is granted)"))
         photo_person = _re.match(
             r"^\s*(?:she|he|that|this)\s+is\s+([a-z][\w .-]{1,40}?)\s*[.!]?\s*$",
             raw_text, _re.IGNORECASE)

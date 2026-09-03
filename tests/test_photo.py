@@ -693,3 +693,39 @@ def test_my_medications_rail_is_deterministic(monkeypatch):
     out = asyncio.run(orchestrator.handle_message(1, "kiaan’s medicines"))
     assert out.startswith("Saved as kiaan's medicines")
     assert seen == ["owner", "kiaan"]
+
+
+def test_persons_add_links_an_enrolled_face(monkeypatch):
+    """Owner 2026-09-03: "create a person from face for akansha" — the face
+    "Akansha (employee)" existed, the registry row did not."""
+    import asyncio
+    from kyraan.agents import loop_tools, faces
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    enrolled, aliases = [], []
+    monkeypatch.setattr(persons, "list_persons", lambda: [])
+    monkeypatch.setattr(persons, "enroll", lambda pid, c, st, co: enrolled.append((pid, st)))
+    monkeypatch.setattr(persons, "add_alias", lambda pid, a: aliases.append((pid, a)))
+    monkeypatch.setattr(faces, "enrolled_names", lambda: ["Akansha (employee)", "Habu", "kiaan"])
+    monkeypatch.setattr(kernel, "confirmed_context", lambda: True)
+    out = asyncio.run(loop_tools._persons_add(1, {"name": "Akansha"}, ""))
+    assert out["added"] and out["person_id"] == "akansha" and out["face_linked"] == ["Akansha (employee)"]
+    assert enrolled == [("akansha", "none")] and aliases == [("akansha", "Akansha (employee)")]
+
+
+def test_create_person_from_face_is_a_gated_rail(monkeypatch):
+    import asyncio
+    from kyraan.agents import orchestrator, faces
+    from kyraan.control_plane import kernel
+    from kyraan.store import persons
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(persons, "resolve", lambda n: None)
+    monkeypatch.setattr(faces, "enrolled_names", lambda: ["Akansha (employee)"])
+    asked = []
+    async def fake_gated(chat_id, call, handler, describe="", **k):
+        asked.append((call.skill_name, call.args, describe)); return "ASK"
+    monkeypatch.setattr(orchestrator, "_gated", fake_gated)
+    for q in ("create a person from face for akansha", "add a person named Akansha", "register person Akansha"):
+        assert asyncio.run(orchestrator.handle_message(1, q)) == "ASK", q
+    assert asked[0][0] == "persons.add" and asked[0][1] == {"name": "akansha"}
+    assert 'link the enrolled face "Akansha (employee)"' in asked[0][2]
