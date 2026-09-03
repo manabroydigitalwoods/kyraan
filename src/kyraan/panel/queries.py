@@ -1519,6 +1519,9 @@ _FIRED_KINDS = {
 # What a duty's event is called on the timeline. A uuid-less kind needs a
 # name, not "duty —".
 _DUTY_LABELS = {
+    "brief_sent": "the morning brief",
+    "brief_send_failed": "the morning brief failed",
+    "evening_brief_send_failed": "the evening brief failed",
     "kiaan_keeper_sent": "Kiaan's keeper spoke",
     "house_steward_sent": "the house steward spoke",
     "chief_of_staff_sent": "the chief of staff spoke",
