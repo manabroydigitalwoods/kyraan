@@ -100,8 +100,9 @@ def test_fan_domain_is_switchable_like_switch(monkeypatch):
     assert calls == ["/api/services/fan/turn_on"]
     assert out["converged"] is True
     with pytest.raises(ha.ToolError, match="only switch/fan"):
-        monkeypatch.setattr(ha, "_allowlists", lambda: ([], ["light.x"]))
-        ha._switch("light.x", True)
+        # light joined the switchable domains 2026-09-03 (purifier backlight)
+        monkeypatch.setattr(ha, "_allowlists", lambda: ([], ["sensor.x"]))
+        ha._switch("sensor.x", True)
 
 
 def test_roster_names_switchable_entities(monkeypatch):
