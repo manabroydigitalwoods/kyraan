@@ -286,3 +286,15 @@ def test_wikilinks_become_related_pairs_both_ways(monkeypatch):
     assert sorted(rel["Kiaan Roy"]) == ['00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d3']
     assert rel["Ruma Roy"] == ['00000000-0000-0000-0000-0000000000d1']     # both ways; "Nobody Here" ignored
     pg.reset_pool_for_tests()
+
+
+def test_template_skeletons_are_not_content():
+    from kyraan.store import notes
+    skeleton = ("# Kiaan Roy\n\n## About\n\n\n## Family\n\n\n## Important dates\n- Birthday — \n"
+                "- Anniversary — \n\n## Notes (dated)\n- 2026-09-02 — \n\n## Open threads\n-")
+    assert notes.chunk_note(skeleton) == []
+    filled = skeleton.replace("## About\n\n", "## About\nMy son, born October 2025, loves peekaboo and the red car.\n")
+    chunks = notes.chunk_note(filled)
+    assert len(chunks) == 1 and "peekaboo" in chunks[0]
+    assert notes.substantive("[Practical] - Timings — \n- Cost — ") is False
+    assert notes.substantive("[Practical] - Timings — 9 to 5 on weekdays, closed Sunday") is True

@@ -162,7 +162,27 @@ def chunk_note(body: str) -> list:
             flush()
         buf += line + "\n"
     flush()
-    return chunks or [body[:CHUNK_CHARS]]
+    # Template skeletons are not content (owner 2026-09-03: "why is Kiaan
+    # connected to Suman, Rakesh, a place note?" — every note was an
+    # empty Person/Place template, and identical boilerplate chunks made
+    # them near-twins in the mesh). A chunk whose lines are all empty
+    # field labels ("- Birthday — ", "- ") or bare headings carries
+    # nothing to embed; an all-skeleton note yields NO chunks, and the
+    # indexer stores its title without an embedding.
+    return [c for c in chunks if substantive(c)]
+
+
+_LABEL_ONLY = re.compile(r"^\s*(?:[-*]\s*)?(?:[^—:\n]{0,60}[—:])?\s*$")
+
+
+def substantive(chunk: str) -> bool:
+    body = re.sub(r"^\[[^\]]*\]\s*", "", chunk)   # heading path prefix
+    words = []
+    for line in body.splitlines():
+        if _LABEL_ONLY.match(line):
+            continue
+        words += re.findall(r"[A-Za-z\u0900-\u097F]{2,}", line)
+    return len(words) >= 3
 
 
 def link_people(parsed: dict, rel: str = "") -> list:
@@ -321,10 +341,15 @@ def index_file(chat_id: int, root: Path, path: Path, force: bool = False) -> str
     flags = sensitivity_flags(parsed["body"],
                               exposure="local_only" if pre_local else "cloud_ok")
     chunks = chunk_note(parsed["body"])
-    try:
-        vectors = embed.embed(chunks)
-    except Exception:
-        vectors = [None] * len(chunks)
+    if not chunks:
+        # all skeleton: findable by title (FTS), invisible to the mesh
+        chunks, vectors = [parsed["title"]], [None]
+        log_event("note_skeleton_unembedded", path=rel)
+    else:
+        try:
+            vectors = embed.embed(chunks)
+        except Exception:
+            vectors = [None] * len(chunks)
     doc_id = _note_uuid(chat_id, rel, sha)
     people = link_people(parsed, rel)
     entities = sorted(set(parsed["links"] + [f"#{t}" for t in parsed["tags"]]))
