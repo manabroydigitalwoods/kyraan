@@ -77,11 +77,8 @@ def capability_brief() -> str:
         person = _kernel.effective_reviewer() or "unknown"
         return viewer_brief(person, stage)
     lines = ["THINGS YOU CAN DO (live right now):"]
-    lines.append("- Reminders: create/list/cancel/snooze — one-shot or recurring incl. intervals with a daily window (details in the tool menu).")
     lines.append("- Remember stated personal facts (they go live after the owner reviews them) and recall reviewed ones.")
     lines.append("- General Q&A, writing, code — from your own knowledge.")
-    lines.append('- Report your own AI usage and spend ("how much did we spend this week?", "are we near the budget?").')
-    lines.append("- Scheduled tasks: run a read-only instruction at set times and message the result (owner confirms creation).")
     try:
         from kyraan.channels import voice as _voice
         if _voice.available():
@@ -91,12 +88,10 @@ def capability_brief() -> str:
 
     not_connected = []
 
-    lines.append("- Live weather and a 3-day forecast for any named place or shared location pin (exact data, not web snippets).")
     if _has_env("GOOGLE_MAPS_API_KEY") or _has_env("TOMTOM_API_KEY"):
-        lines.append("- Distance/travel time with LIVE traffic between any two places or from a shared pin — car, two-wheeler, foot.")
+        pass   # routes.eta is in the tool menu
     else:
         not_connected.append("Travel times / traffic (needs GOOGLE_MAPS_API_KEY with the Routes API enabled, or TOMTOM_API_KEY)")
-    lines.append("- Find nearby places by category around a pin or named place, with distances and map links.")
     tiers_now = config.load().get("model_tiers", {})
     vision_ok = tiers_now.get("frontier", {}).get("provider") == "openai"
     if vision_ok:
@@ -112,21 +107,19 @@ def capability_brief() -> str:
     lines.append("- The OWNER can grant or revoke another person's chat access right here: persons.set_access (\"enroll ruma\", \"cut X off\"). Granting requires their recorded consent + chat id and a clean subject review; revoking is instant. persons.add only makes someone trackable — it gives them nothing.")
 
     if _has_env("GOOGLE_CALENDAR_ICS_URL"):
-        lines.append('- Read the Google Calendar ("what\'s on my calendar tomorrow?").')
+        pass   # calendar.list_events is in the tool menu
     else:
         not_connected.append("Calendar reading (needs the calendar's secret ICS URL)")
     if _has_env("GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET", "GOOGLE_OAUTH_REFRESH_TOKEN"):
-        lines.append('- Create calendar events — each one needs the owner\'s explicit yes ("add lunch friday 1pm to my calendar").')
-        lines.append('- Cancel/delete calendar events — the exact events are named and need the owner\'s explicit yes ("cancel the 3pm meeting").')
         if os.environ.get("KYRAAN_EMAIL_BODIES", "").strip() == "local":
-            lines.append('- Check unread email (senders/subjects), and READ email bodies on request — bodies are summarized by the local model on this computer and never leave the machine.')
+            lines.append('- Email bodies are read by the local model on this computer and never leave the machine (email.read).')
         else:
             lines.append('- Check unread email: senders and subjects ONLY, never message bodies (a deliberate privacy boundary — say so if asked to open/summarize an email, and point to Gmail).')
     else:
         not_connected.append("Calendar event creation and email checking (needs the Google OAuth setup)")
 
     if _has_env("SEARXNG_URL"):
-        lines.append('- Search the web for current information — news, prices, weather, facts ("what\'s the latest on X?"); answers cite their source links.')
+        pass   # web.search is in the tool menu
     else:
         not_connected.append("Web search (needs the local SearXNG container — SEARXNG_URL in .env)")
 
@@ -136,9 +129,7 @@ def capability_brief() -> str:
         switches = server.get("write_entities") or []
         if switches:
             names = ", ".join(_friendly_entity(e) for e in switches)
-            lines.append(f"- Check and switch these smart plugs (switching needs the owner's yes): {names}.")
-        if any("temp" in e or "humid" in e for e in sensors):
-            lines.append("- Read the bedroom temperature/humidity, plug power and energy use.")
+            lines.append(f"- Switchable home devices: {names}. Readable: temperature/humidity, plug power and energy, purifier air quality.")
     else:
         not_connected.append("Smart home (needs the Home Assistant URL + token)")
 

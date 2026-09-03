@@ -9,13 +9,18 @@ def test_full_setup_lists_all_live_capabilities(monkeypatch):
               "HASS_URL", "HASS_TOKEN", "SEARXNG_URL", "GOOGLE_MAPS_API_KEY"):
         monkeypatch.setenv(k, "x")
     brief = capabilities.capability_brief()
-    assert "Read the Google Calendar" in brief
-    assert "Create calendar events" in brief
+    # abilities live in the tool menu now (token audit 2026-09-03); the
+    # brief carries the truths the menu cannot: what is NOT connected,
+    # what the internet really is, the privacy answer, the can't-do line
     assert "senders and subjects ONLY" in brief
-    assert "smart plugs" in brief and "ac" in brief
-    assert "Search the web" in brief
+    assert "Switchable home devices" in brief and "ac" in brief
+    assert "EXACTLY the web.search tool" in brief
     assert "NOT CONNECTED" not in brief
     assert "you can NOT do yet" in brief  # the honest everything-else line
+    from kyraan.agents import agent_loop
+    menu = agent_loop._tools_block()
+    assert "- calendar.list_events {" in menu and "- calendar.create_event {" in menu
+    assert "- web.search {" in menu
 
 
 def test_missing_setup_moves_capabilities_to_not_connected(monkeypatch):
@@ -34,8 +39,9 @@ def test_reminders_and_memory_are_always_live(monkeypatch):
     for k in ("HASS_URL", "HASS_TOKEN"):
         monkeypatch.delenv(k, raising=False)
     brief = capabilities.capability_brief()
-    assert "Reminders: create/list/cancel" in brief
     assert "Remember stated personal facts" in brief
+    from kyraan.agents import agent_loop
+    assert "- reminders.create {" in agent_loop._tools_block()
 
 
 def test_brief_denies_internet_and_answers_privacy(monkeypatch):

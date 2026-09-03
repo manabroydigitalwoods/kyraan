@@ -129,7 +129,6 @@ def test_brief_with_key_scopes_internet_to_snippets(monkeypatch):
     monkeypatch.setenv("SEARXNG_URL", "k")
     brief = capability_brief()
     assert "YOU HAVE NO INTERNET ACCESS" not in brief
-    assert "Search the web" in brief
     assert "EXACTLY the web.search tool" in brief
     assert "opening full web pages" in brief   # browsing still denied
 

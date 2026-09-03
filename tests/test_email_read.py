@@ -140,5 +140,5 @@ def test_brief_tracks_the_flag(monkeypatch):
     assert "opening email bodies" in brief
     monkeypatch.setenv("KYRAAN_EMAIL_BODIES", "local")
     brief = capability_brief()
-    assert "READ email bodies" in brief and "never leave the machine" in brief
+    assert "Email bodies are read by the local model" in brief and "never leave the machine" in brief
     assert "opening email bodies" not in brief

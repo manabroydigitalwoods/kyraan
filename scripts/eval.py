@@ -21,6 +21,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+import os  # noqa: E402
+os.environ.setdefault("KYRAAN_SPEND_BUCKET", "eval")   # eval spend is dev spend, not Kyraan's
 
 from kyraan.agents import orchestrator  # noqa: E402
 from kyraan.control_plane import kill_switch  # noqa: E402

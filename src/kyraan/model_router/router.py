@@ -59,12 +59,31 @@ def today_cost_usd() -> float:
     return float(_read_ledger().get(local_now().date().isoformat(), 0.0))
 
 
+def dev_cost_today() -> float:
+    """Spend recorded under a KYRAAN_SPEND_BUCKET today (eval runs) —
+    reported beside the live figure, never inside it."""
+    ledger = _read_ledger()
+    day = local_now().date().isoformat()
+    return round(sum(float(v) for k, v in ledger.items()
+                     if k.endswith(f":{day}") and ":" not in k[:-len(day) - 1]
+                     and not k.startswith(("tokens:", "person:"))), 6)
+
+
 def _record_cost(cost_usd: float) -> None:
     if cost_usd <= 0:
         return
     with locked(COST_LEDGER_PATH):
         ledger = _read_ledger_file()
         key = local_now().date().isoformat()
+        bucket = os.environ.get("KYRAAN_SPEND_BUCKET", "").strip()
+        if bucket:
+            # Dev-loop spend (eval runs, scripts) is not Kyraan's own
+            # (owner 2026-09-03: "$0.53 today" was ~85% eval runs) —
+            # its own key, outside the budget picture
+            bkey = f"{bucket}:{key}"
+            ledger[bkey] = round(float(ledger.get(bkey, 0.0)) + cost_usd, 6)
+            _save_ledger(ledger)
+            return
         ledger[key] = round(ledger.get(key, 0.0) + cost_usd, 6)
         # P3.5d: attribute a non-owner viewer's spend to them too, so
         # their per-person cap has a durable counter.
@@ -91,7 +110,9 @@ def _record_tokens(provider: str, usage: "Usage") -> None:
         return
     with locked(COST_LEDGER_PATH):
         ledger = _read_ledger_file()
-        key = f"tokens:{provider}:{local_now().date().isoformat()}"
+        bucket = os.environ.get("KYRAAN_SPEND_BUCKET", "").strip()
+        key = (f"{bucket}:tokens:{provider}:{local_now().date().isoformat()}" if bucket
+               else f"tokens:{provider}:{local_now().date().isoformat()}")
         ledger[key] = int(ledger.get(key, 0)) + total
         _save_ledger(ledger)
 

@@ -1,5 +1,6 @@
 """Regressions pinned by the 2026-09-03 whole-codebase review."""
 import asyncio
+import json
 
 import pytest
 
@@ -98,3 +99,31 @@ def test_extraction_ignores_assistant_lines(monkeypatch):
     from kyraan.memory import extraction
     src = open(extraction.__file__).read()
     assert 'startswith(("assistant:", "kyraan:"))' in src
+
+
+def test_compact_about_keeps_rules_and_drops_generic_notes():
+    from kyraan.agents.agent_loop import _compact_about
+    about = ("Create a calendar event. Asks the owner to confirm first — that is automatic. "
+             "A start date in the PAST is refused — point it out instead of asking for details. "
+             "Missing end time: default to one hour, don't ask. Confirm is automatic. "
+             "For example you might use this for lunches, dinners and meetings with friends.")
+    out = _compact_about(about)
+    assert out.startswith("Create a calendar event.")
+    assert "PAST is refused" in out and "default to one hour" in out
+    assert "For example" not in out and out.count("Confirm is automatic") == 0
+
+
+def test_eval_spend_lands_in_its_own_bucket(monkeypatch, tmp_path):
+    from kyraan.model_router import router
+    monkeypatch.setattr(router, "COST_LEDGER_PATH", tmp_path / "ledger.json")
+    monkeypatch.setattr(router, "_read_ledger_file", lambda: json.loads((tmp_path / "ledger.json").read_text()) if (tmp_path / "ledger.json").exists() else {})
+    saved = {}
+    monkeypatch.setattr(router, "_save_ledger", lambda led: saved.update(led) or (tmp_path / "ledger.json").write_text(json.dumps(led)))
+    monkeypatch.setattr(router, "_read_ledger", lambda: dict(saved))
+    monkeypatch.setenv("KYRAAN_SPEND_BUCKET", "eval")
+    router._record_cost(0.5)
+    monkeypatch.delenv("KYRAAN_SPEND_BUCKET")
+    router._record_cost(0.25)
+    day = router.local_now().date().isoformat()
+    assert saved[f"eval:{day}"] == 0.5 and saved[day] == 0.25
+    assert router.today_cost_usd() == 0.25 and router.dev_cost_today() == 0.5
