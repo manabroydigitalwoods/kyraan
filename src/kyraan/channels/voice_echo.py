@@ -23,8 +23,14 @@ import time
 from kyraan.control_plane import kernel
 from kyraan.control_plane.logging_setup import log_event
 
-WAKE = re.compile(r"^\s*(?:hey\s+|ok\s+|okay\s+)?(?:kyraan|kiran|keeran|kira+n|karan|kyran|kyra)\b[\s,:.!-]*(.*)$",
-                  re.IGNORECASE)
+# Alexa's transcript of "Kyraan" (live 2026-09-04 00:13: "Kyraan house
+# status" arrived as "current house status"). Every mishearing seen or
+# likely is a wake word; "ask/tell Kyraan …" is how people address a
+# skill and is accepted too.
+WAKE = re.compile(
+    r"^\s*(?:hey\s+|ok\s+|okay\s+|ask\s+|tell\s+)?"
+    r"(?:kyraan|kyran|kyra|kiran|kieran|keeran|kira+n|kirin|karan|karen|current|curran|cairn|korean|kiara)"
+    r"\b[\s,:.!-]*(?:to\s+)?(.*)$", re.IGNORECASE)
 SPEECH_MAX = 240
 _last_ts: dict = {}          # device -> last handled timestamp (process memory)
 _boot = time.time()
@@ -121,6 +127,9 @@ async def tick(owner_chat: int, send_fn) -> int:
             continue
         text = parse_wake(summary)
         if not text:
+            # the owner's own words to Alexa, kept short, so mishearings
+            # of the name can be added to WAKE
+            log_event("voice_echo_ignored", device=entity, heard=summary[:40])
             continue
         log_event("voice_echo_heard", device=entity, chars=len(text))
         handled += 1

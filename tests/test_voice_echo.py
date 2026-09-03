@@ -8,6 +8,8 @@ def test_wake_word_and_variants():
     assert ve.parse_wake("kyraan what's open") == "what's open"
     assert ve.parse_wake("Kiran, when is Kiaan's next vaccine") == "when is Kiaan's next vaccine"
     assert ve.parse_wake("hey kyraan turn on the ac") == "turn on the ac"
+    assert ve.parse_wake("current house status") == "house status"      # Alexa's spelling of Kyraan, live
+    assert ve.parse_wake("ask kyraan what's open") == "what's open"
     assert ve.parse_wake("stop") is None
     assert ve.parse_wake("kyraan") is None                       # the name alone is not a request
 
