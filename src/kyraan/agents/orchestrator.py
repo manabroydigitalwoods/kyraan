@@ -1071,7 +1071,11 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         keeper_status = _re.match(
             r"^\s*(?:kiaan(?:'s|’s)?\s+(?:status|vaccines?|vaccinations?|schedule|next\s+(?:vaccine|shot|dose))"
             r"|(?:when|what)\s+is\s+kiaan(?:'s|’s)?\s+next\s+(?:vaccine|vaccination|shot|dose)"
-            r"|kiaan\s+milestones?)\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+            r"|kiaan\s+milestones?"
+            # any short ask that names Kiaan and vaccination (live 2026-09-04:
+            # "kiaan's vaccination upcoming days" went to the model, which
+            # asked "what year?")
+            r"|(?=.*\bkiaan)(?=.*vaccin)[\w'’ ,?-]{6,60})\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
         keeper_mark = _re.match(
             r"^\s*kiaan\s+(?:got|had|took|received|has\s+(?:had|got|taken))\s+(?:the\s+|his\s+)?"
             r"(.{2,60}?)\s*(?:shot|dose|vaccine|vaccination|jab|injection)?\s*(?:today|yesterday|on\s+(\S+))?\s*[.!]*\s*$",
@@ -1185,7 +1189,10 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     return f"Sent the latest {sent} of {photos_m.group(1).strip()}'s photos ({len(rows)} listed)."
                 return ("I have " + "; ".join(f'"{r["caption"]}" ({r["date"]})' for r in rows)
                         + " — the originals aren't stored for these; re-send one and I'll keep the file.")
-        where_q = _re.match(r"^\s*where\s+am\s+i\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        where_q = _re.match(
+            r"^\s*(?:where\s+(?:am\s+i|i\s+am)(?:\s+now|\s+right\s+now)?|(?:what'?s\s+|check\s+|show\s+)?my\s+(?:current\s+)?location"
+            r"|(?:can\s+you\s+)?check\s+(?:my\s+location\s+)?again|did\s+you\s+get\s+(?:my\s+)?(?:live\s+)?location)\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
         place_m = _re.match(
             r"^\s*(?:remember|save|mark)\s+(?:this\s+)?(?:place|location|spot|here)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z .'-]{1,40}?)\s*[.!]*\s*$",
             raw_text, _re.IGNORECASE)

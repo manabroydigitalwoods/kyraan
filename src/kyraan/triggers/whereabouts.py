@@ -220,6 +220,7 @@ async def announce(chat_id: int, lines: list, send_fn) -> int:
 
 
 PERSON_ENTITY = "person.manab_roy"
+MAX_ACCURACY_M = 250
 _person_seen: dict = {}
 
 
@@ -236,6 +237,16 @@ async def poll_person(chat_id: int, send_fn) -> int:
     attrs = raw.get("attributes") or {}
     lat, lon = attrs.get("latitude"), attrs.get("longitude")
     if lat is None or lon is None:
+        return 0
+    try:
+        acc = float(attrs.get("gps_accuracy") or 0)
+    except (TypeError, ValueError):
+        acc = 0
+    if acc > MAX_ACCURACY_M:
+        # the app's first report was a coarse one (live 2026-09-04 02:48:
+        # "8.2 km from home" while the owner sat at home); a rough fix is
+        # not a whereabouts
+        log_event("whereabouts_fix_rejected", accuracy_m=int(acc))
         return 0
     stamp = str(raw.get("last_updated") or "")
     if _person_seen.get("stamp") == stamp:

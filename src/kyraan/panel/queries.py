@@ -12,6 +12,7 @@ Sources are the ones that already exist; the panel adds no instrumentation:
 - data/reminders.json, agent_tasks.json, goals.json via the trigger stores
 """
 import json
+from pathlib import Path
 from urllib.parse import quote
 import time
 from collections import Counter, defaultdict
@@ -796,6 +797,17 @@ def _synapses(ids: list, vectors: list, floor: float = _SYNAPSE_FLOOR) -> list:
 # Which tool family manages which kind of task. Not a guess about
 # content — the task TYPE determines the tools that operate on it, which
 # is what wires the skill lobe to the task lobe.
+def _code_jobs() -> list:
+    """The coding-task ledger (tools/code_agent.JOBS_PATH), read, never
+    imported: the tool module talks to the outside world at import."""
+    path = Path(__file__).resolve().parents[3] / "data" / "code_jobs.json"
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    return [j for j in data if isinstance(j, dict)] if isinstance(data, list) else []
+
+
 _TASK_TOOLS = {
     "reminder": ("reminders.create", "reminders.list", "reminders.cancel"),
     "agent_task": ("tasks.create", "tasks.list", "tasks.cancel"),
@@ -1301,6 +1313,28 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             edges.append({"a": node_id, "b": f"p:{owner}", "kind": "owns",
                           "weight": 0.4})
 
+    # Coding tasks (tools/code_agent, 2026-09-03) are work too: a job
+    # Kyraan handed to Claude Code in its own worktree. They live in
+    # data/code_jobs.json, not the trigger board, so they join the work
+    # lobe from there — queued, running, done, failed or discarded — owned
+    # by whoever asked, resolved through the registry's chat ids.
+    by_chat = {str(chat): person for person, chat in registry_people.items() if chat}
+    for job in _code_jobs():
+        if not job.get("id"):
+            continue
+        node_id = f"t:code:{job['id']}"
+        status = job.get("status", "?")
+        nodes.append({
+            "id": node_id, "type": "task", "label": _clip(job.get("task", ""), 140),
+            "lobe": "task", "group": "code", "task_type": "code",
+            "overdue": status == "failed", "repeat": "", "fires_in": None,
+            "status": status, "branch": job.get("branch", ""),
+            "created": str(job.get("started") or job.get("created") or ""),
+        })
+        owner = by_chat.get(str(job.get("chat_id", "")))
+        if owner and f"p:{owner}" in {n["id"] for n in nodes}:
+            edges.append({"a": node_id, "b": f"p:{owner}", "kind": "owns", "weight": 0.4})
+
     # --- skill lobe -------------------------------------------------------
     usage, pairs = _tool_activity()
     registry = {}
@@ -1328,7 +1362,9 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                           "kind": "coactivation", "weight": count})
 
     for node in [n for n in nodes if n["type"] == "task"]:
-        for tool in _TASK_TOOLS.get(node["task_type"], ()):
+        tools = (_TASK_TOOLS.get(node["task_type"], ()) if node["task_type"] != "code"
+                 else [s[2:] for s in skill_ids if s.startswith("s:code.")])
+        for tool in tools:
             if f"s:{tool}" in skill_ids:
                 edges.append({"a": node["id"], "b": f"s:{tool}",
                               "kind": "managed_by", "weight": 0.3})
@@ -1467,7 +1503,28 @@ _FIRED_KINDS = {
     "agent_task_ran": ("agent_task", "fired"),
     "brief_sent": ("brief", "fired"),
     "evening_brief_sent": ("brief", "fired"),
+    "brief_send_failed": ("brief", "failed"),
+    "evening_brief_send_failed": ("brief", "failed"),
     "goal_cycle_ran": ("goal", "fired"),
+    # The four duties (2026-09-03): each speaks first on its own clock,
+    # so each belongs on the timeline the moment it does.
+    "kiaan_keeper_sent": ("duty", "fired"),
+    "house_steward_sent": ("duty", "fired"),
+    "chief_of_staff_sent": ("duty", "fired"),
+    "chief_of_staff_morning_failed": ("duty", "failed"),
+    "chief_of_staff_prep_failed": ("duty", "failed"),
+    "whereabouts_sent": ("duty", "fired"),
+}
+
+# What a duty's event is called on the timeline. A uuid-less kind needs a
+# name, not "duty —".
+_DUTY_LABELS = {
+    "kiaan_keeper_sent": "Kiaan's keeper spoke",
+    "house_steward_sent": "the house steward spoke",
+    "chief_of_staff_sent": "the chief of staff spoke",
+    "chief_of_staff_morning_failed": "the chief of staff's morning failed",
+    "chief_of_staff_prep_failed": "the chief of staff's prep failed",
+    "whereabouts_sent": "whereabouts: met the owner on the way",
 }
 
 
@@ -1505,9 +1562,10 @@ def routines(hours: float = 24) -> dict:
         label = (record.get("text") or record.get("instruction")
                  or names.get(ref) or "")
         if not label:
-            label = ("the morning brief" if "morning" in record.get("kind", "")
-                     else "the evening brief" if "evening" in record.get("kind", "")
-                     else kind + " " + (ref[:8] or "—"))
+            label = (_DUTY_LABELS.get(record.get("kind", ""))
+                     or ("the morning brief" if "morning" in record.get("kind", "")
+                         else "the evening brief" if "evening" in record.get("kind", "")
+                         else kind + " " + (ref[:8] or "—")))
         rows.append({
             "at": record.get("ts", ""), "type": kind, "status": status,
             "text": _clip(label, 120), "id": ref[:8],

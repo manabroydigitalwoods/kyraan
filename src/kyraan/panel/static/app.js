@@ -1246,6 +1246,8 @@ const EDGE_STYLE = {
   talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
   // A capture and the note it illustrates (server: document.related).
   illustrates: { alpha: 0.6,  width: 1.3, rest: 90,  key: "--ok" },
+  // Two notes joined by an Obsidian [[wikilink]] — the owner's own edge.
+  wikilink:    { alpha: 0.7,  width: 1.4, rest: 85,  key: "--accent" },
 };
 const CORE = "k:kyraan";
 
@@ -2740,6 +2742,11 @@ function renderSelection() {
     kvRow(list, "talks with", `${by.talks || 0}`);
     kvRow(list, "will fire", `${by.fires || 0} scheduled`);
     kvRow(list, "received", `${by.received || 0} files and notes`);
+  } else if (node.type === "task" && node.task_type === "code") {
+    kvRow(list, "task", "coding job");
+    kvRow(list, "status", node.status, node.status === "failed");
+    kvRow(list, "branch", node.branch || "—");
+    kvRow(list, "started", (node.created || "").slice(0, 16).replace("T", " ") || "—");
   } else if (node.type === "task") {
     kvRow(list, "task", node.task_type);
     kvRow(list, "repeat", node.repeat || "once");

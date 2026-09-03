@@ -103,6 +103,9 @@ def capability_brief() -> str:
         except Exception:
             pass
     lines.append('- A shared location pin arrives as "[I\'m sharing my current location: <place> (lat, lon)]" — use it for local answers immediately; never ask which city after a pin. You cannot request or track location.')
+    lines.append("- The owner's phone reports its position to Home Assistant (2026-09-04): "
+                 "\"where am I\" is answered deterministically from that — never from a saved "
+                 "address, never by asking for a pin.")
     from kyraan.agents.commands import brief_line
     lines.append("- " + brief_line())
     lines.append("- The OWNER can grant or revoke another person's chat access right here: persons.set_access (\"enroll ruma\", \"cut X off\"). Granting requires their recorded consent + chat id and a clean subject review; revoking is instant. persons.add only makes someone trackable — it gives them nothing.")

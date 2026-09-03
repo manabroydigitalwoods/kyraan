@@ -63,3 +63,30 @@ def test_homeward_becomes_an_ac_ask_when_the_ac_is_off(monkeypatch, tmp_path):
     async def send(chat_id, text): sent.append(text); return True
     n = asyncio.run(wh.announce(1, [("homeward", "You're about 6 minutes from home (2.4 km).")], send))
     assert n == 1 and "Turn the AC on" in sent[0] and 'reply "yes"' in sent[0]
+
+
+def test_where_phrasings_and_coarse_fix_rejected(monkeypatch, tmp_path):
+    import asyncio
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.tools import home_assistant as ha
+    _iso(monkeypatch, tmp_path)
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(wh, "where_text", lambda: "Last I knew (0 min ago): home.")
+    for q in ("where i am?", "where am I now", "my location", "can you check again?", "did you get live location?"):
+        assert asyncio.run(orchestrator.handle_message(1, q)).startswith("Last I knew"), q
+    wh._person_seen.clear()
+    monkeypatch.setattr(ha, "_raw", lambda entity: {"attributes": {"latitude": 26.71, "longitude": 88.42, "gps_accuracy": 3200}, "last_updated": "t9"})
+
+    async def send(c, t): return True
+    assert asyncio.run(wh.poll_person(1, send)) == 0 and wh.last_fix() is None      # coarse: ignored
+
+
+def test_keeper_takes_any_kiaan_vaccination_ask(monkeypatch):
+    import asyncio
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.triggers import kiaan_keeper
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(kiaan_keeper, "status_text", lambda: "Kiaan is 10 months old.")
+    assert asyncio.run(orchestrator.handle_message(1, "kiaan’s vaccination upcoming days")).startswith("Kiaan is 10")
