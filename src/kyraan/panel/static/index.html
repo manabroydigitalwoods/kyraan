@@ -223,6 +223,15 @@
             <option value="term">term</option>
           </select>
         </label>
+        <label title="light what the brain learned recently; dim the rest">new
+          <select id="mem-since">
+            <option value="0">off</option>
+            <option value="1">24h</option>
+            <option value="7">7d</option>
+            <option value="30">30d</option>
+          </select>
+          <span class="readout-value" id="mem-since-count"></span>
+        </label>
         <!-- Checklists behind a dropdown: eleven inline checkboxes took a
              whole row and pushed the camera controls onto a second line.
              The ids are unchanged, so filters and URL state are untouched. -->

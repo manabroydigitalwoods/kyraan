@@ -1255,6 +1255,7 @@ const SHORT_TERM_DAYS = 14;        // memory/engine._SHORT_TERM_DAYS
 const brain = {
   nodes: [], edges: [], byId: new Map(),
   colour: "lobe",
+  since: 0,                 // ms; 0 = the whole brain, else only what was learned inside
   showType: { core: true, memory: true, person: true, episode: true, face: true,
               document: true, task: true, skill: true, contact: true,
               note: true, tag: true },
@@ -1339,8 +1340,37 @@ function runSearch(text) {
 }
 
 function matchAlpha(node) {
-  if (!brain.query) return 1;
-  return brain.matches.has(node.id) ? 1 : 0.12;
+  let alpha = 1;
+  if (brain.query) alpha *= brain.matches.has(node.id) ? 1 : 0.12;
+  // "What's new": with a since-window set, what the brain learned inside
+  // it stays lit and the rest falls back. The core never dims; a neuron
+  // with no date (a skill, a contact, a person) dims by half — its age
+  // is unknown, not old.
+  if (brain.since) {
+    if (node.type === "core") return alpha;
+    const born = Date.parse(node.created || "");
+    if (!isFinite(born)) alpha *= 0.5;
+    else if (Date.now() - born > brain.since) alpha *= 0.12;
+  }
+  return alpha;
+}
+
+/* How many neurons were learned inside the since-window. */
+function freshCount() {
+  if (!brain.since) return 0;
+  const now = Date.now();
+  return brain.nodes.filter((n) => {
+    const born = Date.parse(n.created || "");
+    return isFinite(born) && now - born <= brain.since;
+  }).length;
+}
+
+function setSince(days) {
+  brain.since = days > 0 ? days * 86400000 : 0;
+  const box = $("mem-since");
+  if (box) box.value = String(days);
+  const count = $("mem-since-count");
+  if (count) count.textContent = brain.since ? `${freshCount()} new` : "";
 }
 
 /* Hover focus, the way Obsidian's graph does it: the hovered neuron, its
@@ -2130,6 +2160,7 @@ function drawGraph(canvas, view, opts) {
   // Lobe halos — the brain has regions, and they should read as regions.
   const drawnLabels = [];   // rects {x, y, w, h} of every label on this frame
   brain.labelStats = { drawn: 0, skipped: 0 };
+  brain.captionHits = [];
   {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
@@ -2167,6 +2198,9 @@ function drawGraph(canvas, view, opts) {
         }
       }
       drawnLabels.push({ x: lx, y: ly - 11 * ratio, w: captionWidth, h: 13 * ratio });
+      // A caption is a target: tap it to fly to its lobe (see captionAt).
+      brain.captionHits.push({ type, x: lx - 4 * ratio, y: ly - 14 * ratio,
+                               w: captionWidth + 8 * ratio, h: 20 * ratio });
       ctx.fillText(caption, lx, ly);
       ctx.globalAlpha = 1;
     }
@@ -2376,8 +2410,11 @@ function drawGraph(canvas, view, opts) {
     // Labels appear when zoomed in, or for the big structural nodes.
     // Memories carry long text, so they stay unlabelled by default — but
     // a search hit or a selection has earned its name on the canvas.
-    const named = view.scale > 1.7 || node.type === "person"
-      || (node.type === "skill" && (node.uses || 0) > 200)
+    // At rest only people are named (the core and the lobe captions
+    // carry the rest); everything else earns its name by zoom, hover,
+    // selection, search or focus. Naming the busiest skills at rest was
+    // the last of the standing clutter.
+    const named = view.scale > 2.0 || node.type === "person"
       || selected || (brain.query && brain.matches.has(node.id))
       // A focused neighbourhood is named only while it is small enough
       // to read (or zoomed in): the owner's 251 neighbours as text was
@@ -2496,7 +2533,10 @@ function drawBrain() {
   if (!canvas || currentView !== "memory") return;
   fadeLiveLine();
   sizeCanvas(canvas);
-  simulate();
+  // The layout runs while it is hot and freezes when it has cooled to
+  // the floor; a drag or any change reheats it. On a phone at 400 nodes
+  // the O(n²) step was the frame's biggest cost for no visible motion.
+  if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
   advanceCamera();
   drawGraph(canvas, brain.view, {});
@@ -2508,7 +2548,7 @@ function drawHub() {
   const canvas = $("hub-canvas");
   if (!canvas || currentView !== "overview") return;
   sizeCanvas(canvas);
-  simulate();
+  if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
   advanceCamera();
   // Keep it framed while the simulation is still moving, then stop: a
@@ -2579,6 +2619,23 @@ function zoomAbout(canvas, about, targetScale) {
    skill lobe simply walked off the bottom-right edge. Called after the
    simulation has had a moment to settle, not immediately, or it fits the
    seed positions instead of the result. */
+/* The lobe whose caption is under a canvas point, or null. Tapping a
+   caption flies to that lobe — the one-tap way into a region on a phone. */
+function captionAt(canvas, event) {
+  const p = canvasPoint(canvas, event);
+  const hit = (brain.captionHits || []).find((r) =>
+    p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h);
+  return hit ? hit.type : null;
+}
+
+function flyToLobe(canvas, type) {
+  const members = visibleNodes().filter((n) => n.type === type);
+  if (!members.length) return false;
+  focusOn(canvas, members);
+  brain.lastTouch = performance.now();
+  return true;
+}
+
 function fitAll() {
   const canvas = $("mem-canvas");
   if (canvas) focusOn(canvas, visibleNodes());
@@ -3232,7 +3289,11 @@ function wireMemory() {
 
   canvas.addEventListener("click", (event) => {
     const hit = nodeAt(canvas, event);
-    if (!hit) { if (!event.shiftKey) brain.selection.clear(); }
+    if (!hit) {
+      const lobe = captionAt(canvas, event);
+      if (lobe && flyToLobe(canvas, lobe)) return;
+      if (!event.shiftKey) brain.selection.clear();
+    }
     else if (event.shiftKey) {
       if (brain.selection.has(hit.id)) brain.selection.delete(hit.id);
       else brain.selection.add(hit.id);
@@ -3334,7 +3395,10 @@ function wireMemory() {
       const isDouble = prev && now - prev.t < 340
         && Math.hypot(touchState.start.x - prev.x, touchState.start.y - prev.y) < 24 * (window.devicePixelRatio || 1);
       touchState.lastTap = isDouble ? null : { t: now, x: touchState.start.x, y: touchState.start.y };
-      if (isDouble) {
+      const lobe = !hit && t ? captionAt(canvas, { clientX: t.clientX, clientY: t.clientY }) : null;
+      if (lobe && !isDouble) {
+        flyToLobe(canvas, lobe);
+      } else if (isDouble) {
         if (hit) {
           brain.selection = new Set([hit.id]);
           const hood = [...focusSetFor(hit)].map((id) => brain.byId.get(id))
@@ -3439,6 +3503,8 @@ function wireMemory() {
     brain.colour = e.target.value;
     buildPalette(); renderLegend();
   });
+  const since = $("mem-since");
+  if (since) since.addEventListener("change", (e) => { setSince(Number(e.target.value)); syncUrl(false); });
   for (const [id, type] of [["show-memory", "memory"], ["show-person", "person"],
                             ["show-episode", "episode"], ["show-document", "document"],
                             ["show-face", "face"], ["show-contact", "contact"],
@@ -3949,6 +4015,7 @@ function collectState(view) {
     params.set("days", $("cost-days").value);
   } else if (view === "memory") {
     params.set("colour", brain.colour);
+    if (brain.since) params.set("since", String(Math.round(brain.since / 86400000)));
     if (brain.query) params.set("q", brain.query);
     if (!brainCam.spin) params.set("spin", "0");
     if (brain.dragMode !== "orbit") params.set("drag", brain.dragMode);
@@ -4059,6 +4126,7 @@ function applyState(view, params) {
       if (box) box.checked = false;
     }
     if (params.get("colour")) brain.colour = params.get("colour");
+    if (params.get("since")) setSince(Number(params.get("since")) || 0);
     const colourSelect = $("mem-colour");
     if (colourSelect) colourSelect.value = brain.colour;
     const lobes = params.get("lobes");
@@ -4164,7 +4232,7 @@ window.addEventListener("popstate", navigate);
 
 // Every control that changes what you are looking at writes the URL.
 for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
-                  "turns-hours", "cost-days", "mem-colour", "show-memory",
+                  "turns-hours", "cost-days", "mem-colour", "mem-since", "show-memory",
                   "show-person", "show-task", "show-skill",
                   // Added with the recall/docs/faces lobes — but not here, so
                   // hiding any of the three changed the view and never the
