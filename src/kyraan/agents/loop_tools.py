@@ -2624,6 +2624,8 @@ VERIFICATION_CLASS = {
     "home.speaker_volume": "same_store",  # prior captured; result audible
     "home.media": "same_store",   # visible on the TV itself
     "home.tv_play": "same_store",  # Alexa resolves; receipt says requested
+    "code.task": "same_store",     # the job record is the store; the report is the truth
+    "code.discard": "same_store",
     "calendar.create_event": "read_after_write",
     "calendar.reschedule": "read_after_write",
     "calendar.delete_event": "read_after_write",
@@ -2667,6 +2669,11 @@ UNDO_MAP = {
     # the observed prior when the state read captured it.
     "music.play": lambda a, r, p: ("music.pause", {}),
     "home.announce": lambda a, r, p: None,  # a spoken word has no unsay
+    # a started coding task is undone by dropping its branch (once it
+    # has finished); a dropped branch is gone
+    "code.task": lambda a, r, p: (("code.discard", {"job": r.get("id")})
+                                  if isinstance(r, dict) and r.get("id") else None),
+    "code.discard": lambda a, r, p: None,
     "home.media": lambda a, r, p: (
         ("home.media", {"action": "pause"}) if a.get("action") == "play"
         else None),
@@ -2908,6 +2915,45 @@ def _register_home_switches() -> None:
 _register_home_switches()
 
 
+def _register_code_agent() -> None:
+    """Coding tasks delegated to Claude Code (owner 2026-09-03)."""
+    async def task(chat_id, args, raw_text):
+        text = str(args.get("task", "") or "").strip()
+        if len(text) < 8:
+            raise kernel.ToolFailed("describe the coding task in a sentence or two")
+        result = await kernel.run_tool(kernel.ToolCall(
+            "code.task", {"task": text, "chat_id": chat_id}))
+        return result if isinstance(result, dict) else {"ok": result}
+
+    async def status(chat_id, args, raw_text):
+        return await kernel.run_tool(kernel.ToolCall("code.status", {}))
+
+    async def diff(chat_id, args, raw_text):
+        return await kernel.run_tool(kernel.ToolCall(
+            "code.diff", {"job": str(args.get("job", "") or "")}))
+
+    async def discard(chat_id, args, raw_text):
+        return await kernel.run_tool(kernel.ToolCall(
+            "code.discard", {"job": str(args.get("job", "") or "")}))
+
+    TOOLS["code.task"] = {
+        "params": '{"task": "<what to change or build, in a sentence or two>"}',
+        "about": ("Hand a CODING task on Kyraan's own repo to Claude Code — it works in "
+                  "a separate branch and reports back later; the owner reviews and "
+                  "merges. Only when the user asks for a code change/feature/fix. "
+                  "Confirm is automatic."),
+        "run": task,
+    }
+    TOOLS["code.status"] = {"params": "{}", "about": "The latest coding task's state and branch.", "run": status}
+    TOOLS["code.diff"] = {"params": '{"job": "<optional id prefix>"}',
+                          "about": "The diff a finished coding task produced.", "run": diff}
+    TOOLS["code.discard"] = {"params": '{"job": "<optional id prefix>"}',
+                             "about": "Drop a finished coding task's branch. Confirm is automatic.", "run": discard}
+
+
+_register_code_agent()
+
+
 def register_mcp_tools() -> None:
     """MCP client bridge (§3d #3, 2026-08-31): every tool declared in
     permissions.yaml on an mcp-stdio server gets a loop menu entry
@@ -3048,6 +3094,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "home.purifier":
         parts = [f"{k} → {args[k]}" for k in ("mode", "timer", "index") if args.get(k)]
         return "About to set the air purifier: " + ", ".join(parts)
+    if tool == "code.task":
+        return (f"About to start a CODING task on kyraan2.0 in Claude Code (own branch, "
+                f"reports back when done, you merge): {str(args.get('task', ''))[:200]}")
+    if tool == "code.discard":
+        return f"About to DROP coding task {args.get('job') or '(latest)'}: its branch and worktree"
     if tool == "faces.remember":
         return (f'About to store a FACE TEMPLATE for "{args.get("name")}" from '
                 "the photo just sent — biometric data, kept ONLY on this "
@@ -3102,7 +3153,8 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 
 
 
-_READ_ONLY_TOOLS = {"calendar.list_events", "email.unread", "home.get_state",
+_READ_ONLY_TOOLS = {"code.status", "code.diff",
+                    "calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
                     "goals.list", "goals.show", "web.open", "contacts.find", "music.devices",
@@ -3149,6 +3201,11 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "memory.forget" and isinstance(outcome, dict):
         gone = outcome.get("forgotten") or []
         return "Forgotten: " + "; ".join(gone) if gone else "Nothing matched — nothing forgotten."
+    if tool == "code.task" and isinstance(outcome, dict):
+        return (f"Started — branch {outcome.get('branch')}. I'll message you when it "
+                "finishes (summary + diff). \"code status\" any time.")
+    if tool == "code.discard" and isinstance(outcome, dict):
+        return f"Dropped {outcome.get('discarded')} ({outcome.get('branch')})."
     if tool == "home.purifier" and isinstance(outcome, dict):
         got = ", ".join(f"{k} {outcome.get(k)}" for k in ("mode", "timer", "index")
                         if k in (outcome.get("requested") or {}))

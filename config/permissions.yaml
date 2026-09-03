@@ -223,6 +223,12 @@ tool_servers:
   weather:
     transport: builtin
     module: kyraan.tools.weather
+  code:
+    # Claude Code, headless, in its own git worktree of the Kyraan repo
+    # (owner 2026-09-03, "option 2"). Kyraan is the messenger; the agent
+    # that touches files runs with a fixed tool allowlist and no .env.
+    transport: builtin
+    module: kyraan.tools.code_agent
   places:
     transport: builtin
     module: kyraan.tools.places
@@ -485,6 +491,52 @@ tools:
     failure:
       retries: 2
       timeout_s: 10
+      on_failure: surface
+  code.task:
+    description: Start a coding task on the kyraan2.0 repo in Claude Code (own worktree + branch; reports back when done). Owner reviews and merges.
+    server: code
+    permission: confirm
+    side_effects: write
+    params:
+      task: {type: string, required: true}
+      chat_id: {type: number}
+    returns: "{id, branch, status}"
+    failure:
+      retries: 0
+      timeout_s: 60
+      on_failure: surface
+  code.status:
+    description: The latest coding task's state (running/done/failed) and branch.
+    server: code
+    permission: auto
+    side_effects: read
+    params: {}
+    returns: "{jobs, last}"
+    failure:
+      retries: 0
+      timeout_s: 10
+  code.diff:
+    description: The diff a coding task produced against main (truncated).
+    server: code
+    permission: auto
+    side_effects: read
+    params:
+      job: {type: string}
+    returns: "{job, branch, diff}"
+    failure:
+      retries: 0
+      timeout_s: 30
+  code.discard:
+    description: Drop a finished coding task's worktree and branch.
+    server: code
+    permission: confirm
+    side_effects: write
+    params:
+      job: {type: string}
+    returns: "{discarded, branch}"
+    failure:
+      retries: 0
+      timeout_s: 60
       on_failure: surface
   weather.get:
     description: Current conditions + 3-day forecast from Open-Meteo (free, keyless) — by place name (geocoded) or exact lat/lon from a shared location pin. Structured data, no web snippets involved.

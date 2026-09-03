@@ -49,6 +49,12 @@ COMMANDS = [
     {"phrase": "what are my medications", "suggest": False,
      "what": "list your saved medicines and supplements (or Kiaan's)",
      "words": "medicines medications meds supplements prescription tablets"},
+    {"phrase": "code: <task>",
+     "what": "hand a coding task on the kyraan2.0 repo to Claude Code (own branch; you merge)",
+     "words": "code coding claude develop implement repo programming"},
+    {"phrase": "code status",
+     "what": "state of the latest coding task",
+     "words": "code coding claude running done progress"},
     {"phrase": "list learned rules",
      "what": "show the behaviour rules Kyraan learned from corrections",
      "words": "list learned rules lessons corrections behaviour"},
@@ -103,7 +109,7 @@ def suggest(text: str, min_score: float = 0.6) -> list:
     for cmd in COMMANDS:
         if not cmd.get("suggest", True):
             continue      # covered by a tool: the model answers the natural ask
-        core = _words(cmd["phrase"])
+        core = _words(re.sub(r"<[^>]*>", " ", cmd["phrase"]))   # a slot is not a word
         theirs = core | _words(cmd["words"])
         hit = len(mine & theirs)
         if not hit:

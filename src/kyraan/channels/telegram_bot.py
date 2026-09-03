@@ -935,6 +935,8 @@ def _wire_agent_tasks(job_queue: JobQueue, bot) -> None:
 
     agent_tasks.init(schedule_fn=schedule_fn, run_fn=run_fn, send_fn=send_fn,
                      only_chat=_owner_id())
+    from kyraan.tools import code_agent as _code_agent
+    _code_agent.init(send_fn=send_fn)   # coding-task reports come back the same way
 
 
 async def _goal_cycle_job(context: ContextTypes.DEFAULT_TYPE) -> None:

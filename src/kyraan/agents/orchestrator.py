@@ -954,6 +954,45 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        code_m = _re.match(r"^\s*(?:code|coding\s+task|dev\s+task)\s*:\s*(.{8,})$",
+                           raw_text, _re.IGNORECASE | _re.DOTALL)
+        code_cmd = _re.match(r"^\s*code\s+(status|diff|discard)(?:\s+(\S+))?\s*[?!.]*\s*$",
+                             raw_text, _re.IGNORECASE)
+        if (code_m or code_cmd) and kernel.viewer_person() == "owner":
+            # "code: <task>" — a coding task for Claude Code on the repo
+            # (owner 2026-09-03, option 2). Deterministic and confirm-
+            # gated; "code status/diff/discard" read or drop the result.
+            from kyraan.agents import loop_tools as _lt_code
+            _skip_extraction.set(True)
+            if code_m:
+                task_text = code_m.group(1).strip()
+
+                async def _start(_a: dict) -> str:
+                    out = await _lt_code.TOOLS["code.task"]["run"](chat_id, {"task": task_text}, raw_text)
+                    return _lt_code._confirmed_reply("code.task", {"task": task_text}, out)
+
+                return await _gated(
+                    chat_id, SkillCall("code.task", {"task": task_text}), _start,
+                    describe=_lt_code._describe_call("code.task", {"task": task_text}, raw_text, chat_id))
+            sub, job = code_cmd.group(1).lower(), (code_cmd.group(2) or "")
+            if sub == "status":
+                out = await _lt_code.TOOLS["code.status"]["run"](chat_id, {}, raw_text)
+                last = out.get("last") if isinstance(out, dict) else None
+                if not last:
+                    return "No coding tasks yet. Start one with \"code: <what to change>\"."
+                return (f"Latest coding task: {last['task'][:120]}\n{last['status']} — branch "
+                        f"{last['branch']}" + (f", ${last['cost_usd']:.2f}" if last.get("cost_usd") else ""))
+            if sub == "diff":
+                out = await _lt_code.TOOLS["code.diff"]["run"](chat_id, {"job": job}, raw_text)
+                _history_redaction.set("[showed a coding task's diff]")
+                return f"Diff for {out['job']} ({out['branch']}, {out['chars']} chars):\n{out['diff']}"
+
+            async def _drop(_a: dict) -> str:
+                out = await _lt_code.TOOLS["code.discard"]["run"](chat_id, {"job": job}, raw_text)
+                return _lt_code._confirmed_reply("code.discard", {"job": job}, out)
+
+            return await _gated(chat_id, SkillCall("code.discard", {"job": job}), _drop,
+                                describe=_lt_code._describe_call("code.discard", {"job": job}, raw_text, chat_id))
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"
