@@ -493,8 +493,29 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     from kyraan.control_plane import kernel as _idkernel
     _idkernel.set_viewer(*_viewer_for(update))  # task-scoped; PTB
     # runs each handler in its own task, so no reset is needed
-    if update.message is None:  # a live-location EDIT arrives as
-        return                  # edited_message — initial pin only
+    from kyraan.triggers import whereabouts as _where
+    if update.message is None:
+        # a live-location EDIT (edited_message): not a message for the
+        # pipeline, but a fix for whereabouts (2026-09-04) — transitions
+        # (nearly home, a known place) speak on their own
+        edited = getattr(update, "edited_message", None)
+        epin = getattr(edited, "location", None)
+        try:
+            is_owner_fix = epin is not None and _owner_private(update)
+        except Exception:
+            is_owner_fix = False
+        if is_owner_fix:
+            try:
+                lines = await asyncio.to_thread(_where.observe, epin.latitude, epin.longitude)
+
+                async def _send_where(chat_id: int, text: str) -> bool:
+                    await context.bot.send_message(chat_id=chat_id, text=_plain(text))
+                    orchestrator.record_proactive(chat_id, text)
+                    return True
+                await _where.announce(update.effective_chat.id, lines, _send_where)
+            except Exception as exc:
+                logger.warning("whereabouts edit failed: %s", exc)
+        return
     from kyraan.channels import location as geo
 
     venue = getattr(update.message, "venue", None)
@@ -518,6 +539,17 @@ async def _on_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         finally:
             typing.cancel()
     logger.info("Location pin resolved: %s", described)
+    if _owner_private(update):
+        try:
+            lines = await asyncio.to_thread(_where.observe, pin.latitude, pin.longitude)
+
+            async def _send_where2(chat_id: int, text: str) -> bool:
+                await context.bot.send_message(chat_id=chat_id, text=_plain(text))
+                orchestrator.record_proactive(chat_id, text)
+                return True
+            await _where.announce(update.effective_chat.id, lines, _send_where2)
+        except Exception as exc:
+            logger.warning("whereabouts pin failed: %s", exc)
     await _ingest(update, context,
                   f"[I'm sharing my current location: {described}]")
 

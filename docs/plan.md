@@ -357,8 +357,10 @@ switch + DND) and delivery truth as reminders.
 | 3 | **Chief of staff** | "Needs a reply" inside the 07:30 brief (unanswered Slack mentions, important-mail COUNT, slipped reminders), 18:00 "still open" on weekdays (silent when nothing is), meeting prep inside the evening brief from the people notes; "what's open" on demand | 07:30 / 18:00 / evening brief | **built 2026-09-03** (`triggers/chief_of_staff.py`) |
 | 4 | **Voice in the room** | the Echo's own transcript (`last_called_summary`, via Alexa Media Player) polled every 3 s; "Alexa, Kyraan …" runs the owner's pipeline — rails, tools, confirm gate ("Alexa, Kyraan yes") — and the reply is spoken on that Echo (240 chars) and mirrored to Telegram. No Alexa skill, no public endpoint; the words do pass through Amazon, as any Echo utterance does | on demand | **built 2026-09-03** (`channels/voice_echo.py`) |
 
+| 5 | **Whereabouts** | the owner's last Telegram fix (pins AND live-location edits, which were dropped before); home = HA's zone.home; owner-named places | nearly home and closing in — once per trip, an AC-on confirm ask when the AC is off; arriving at a named place — what Kyraan holds about it; "where am I" | **built 2026-09-04** (`triggers/whereabouts.py`) |
+
 Build order: 1 (data already held, emotional value, proves "speaks
-first"), then 3 (daily felt value), then 2, then 4. Each duty is one
+first"), then 3 (daily felt value), then 2, then 4, then 5. Each duty is one
 module under `triggers/`, one scheduled job, one state file, one
 status command, and a test that it speaks at most once per fact.
 

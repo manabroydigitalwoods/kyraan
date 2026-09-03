@@ -1133,6 +1133,30 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     return f"Sent the latest {sent} of {photos_m.group(1).strip()}'s photos ({len(rows)} listed)."
                 return ("I have " + "; ".join(f'"{r["caption"]}" ({r["date"]})' for r in rows)
                         + " — the originals aren't stored for these; re-send one and I'll keep the file.")
+        where_q = _re.match(r"^\s*where\s+am\s+i\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        place_m = _re.match(
+            r"^\s*(?:remember|save|mark)\s+(?:this\s+)?(?:place|location|spot|here)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z .'-]{1,40}?)\s*[.!]*\s*$",
+            raw_text, _re.IGNORECASE)
+        forget_place_m = _re.match(r"^\s*forget\s+(?:the\s+)?place\s+(.{2,40}?)\s*[.!]*\s*$", raw_text, _re.IGNORECASE)
+        if (where_q or place_m or forget_place_m) and kernel.viewer_person() == "owner":
+            # Whereabouts (2026-09-04): the last shared fix, and the
+            # owner's own named places for arrival notes.
+            from kyraan.triggers import whereabouts as _wh
+            _skip_extraction.set(True)
+            if where_q:
+                _history_redaction.set("[told the owner where they were last seen]")
+                return _wh.where_text()
+            if forget_place_m:
+                name = forget_place_m.group(1).strip().lower()
+                return (f"Forgot the place \"{name}\"." if _wh.forget_place(name)
+                        else f"No saved place called \"{name}\". Saved: {', '.join(_wh.places()) or 'none'}.")
+            name = place_m.group(1).strip().lower()
+            saved = _wh.remember_place(name)
+            if not saved:
+                return ("I need a recent location first — share a pin in Telegram, then say "
+                        f"\"remember this place as {name}\".")
+            return (f"Saved \"{name}\" as a place ({saved['lat']:.4f}, {saved['lon']:.4f}). "
+                    "When you arrive there with live location on, I'll mention what I hold about it.")
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"

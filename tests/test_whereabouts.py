@@ -1,0 +1,65 @@
+"""Whereabouts — location awareness (2026-09-04)."""
+import asyncio
+
+from kyraan.triggers import whereabouts as wh
+
+HOME = (26.6536, 88.4724)
+
+
+def _iso(monkeypatch, tmp_path):
+    monkeypatch.setattr(wh, "STATE_PATH", tmp_path / "w.json")
+    monkeypatch.setattr(wh, "home", lambda: HOME)
+
+
+def test_homeward_fires_once_per_trip_when_closing_in(monkeypatch, tmp_path):
+    _iso(monkeypatch, tmp_path)
+    far = (26.72, 88.47)                     # ~7.4 km north
+    assert wh.observe(*far, when=1) == []
+    mid = (26.675, 88.4724)                  # ~2.4 km, closing in
+    got = wh.observe(*mid, when=2)
+    assert got and got[0][0] == "homeward" and "minutes from home" in got[0][1]
+    assert wh.observe(26.665, 88.4724, when=3) == []             # not again this trip
+    assert wh.observe(*far, when=4) == []                        # leaving re-arms
+    assert wh.observe(*mid, when=5)[0][0] == "homeward"
+
+
+def test_named_place_arrival_once_per_visit(monkeypatch, tmp_path):
+    _iso(monkeypatch, tmp_path)
+    monkeypatch.setattr(wh.time, "time", lambda: 1000.0)
+    wh.observe(26.70, 88.50, when=990)
+    assert wh.remember_place("clinic")["lat"] == 26.70
+    wh.observe(26.60, 88.40, when=995)                            # away
+    got = wh.observe(26.7001, 88.5001, when=999)                  # back at the clinic
+    assert got == [("arrived", "clinic")]
+    assert wh.observe(26.7002, 88.5001, when=1000) == []          # still there: silent
+    assert wh.forget_place("clinic") and wh.places() == {}
+
+
+def test_where_text_and_rails(monkeypatch, tmp_path):
+    _iso(monkeypatch, tmp_path)
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(wh, "where_text", lambda: "Last I knew (3 min ago): Sevoke Road, Siliguri, 2.1 km from home.")
+    assert asyncio.run(orchestrator.handle_message(1, "where am I?")).startswith("Last I knew")
+    monkeypatch.setattr(wh, "last_fix", lambda: None)
+    out = asyncio.run(orchestrator.handle_message(1, "remember this place as the clinic"))
+    assert out.startswith("I need a recent location first")
+
+
+def test_homeward_becomes_an_ac_ask_when_the_ac_is_off(monkeypatch, tmp_path):
+    _iso(monkeypatch, tmp_path)
+    from kyraan.agents import orchestrator
+    monkeypatch.setattr(wh.kernel, "can_send_proactively", lambda **kw: True)
+
+    async def fake_run(call, **kw): return {"entity": "switch.ac", "state": "off"}
+    monkeypatch.setattr(wh.kernel, "run_tool", fake_run)
+
+    async def fake_gated(chat_id, call, handler, describe="", **kw):
+        return describe + ' — reply "yes" to confirm or "no" to cancel.'
+    monkeypatch.setattr(orchestrator, "_gated", fake_gated)
+    sent = []
+
+    async def send(chat_id, text): sent.append(text); return True
+    n = asyncio.run(wh.announce(1, [("homeward", "You're about 6 minutes from home (2.4 km).")], send))
+    assert n == 1 and "Turn the AC on" in sent[0] and 'reply "yes"' in sent[0]
