@@ -885,3 +885,5 @@ Short-term memories (owner, 2026-09-04: "show the short-term memories in the bra
 ## Brain, third round (owner: "do all")
 
 Stage one of six. (1) "What's new": a since-window (off/24h/7d/30d, `since=` in the URL) keeps what the brain learned inside it lit and drops the rest to 12% — a dateless neuron (skill, contact, person) to 50%, the core never; the count sits by the control ("106 new" over 7 days). (2) Lobe captions are targets: a tap flies to that lobe (skills: scale 0.73 → 2.03, 70/70 on screen). (3) A quieter rest: only people are named at rest; the busiest-skills rule is gone; zoom names past 2.0×. (4) The layout freezes when it has cooled to the floor (alpha 0.02) and reheats on any change — the O(n²) step no longer runs for no motion, on the brain and the hub alike.
+
+Stage two: the Selection card gets one action per kind of wire — "44 facts", "211 episodes", "4 work", "1 talks with" for the owner — each selecting exactly those neurons and framing them (44 facts: scale 0.69 → 1.72). A selection larger than 24 is no longer named unless zoomed past 2.0×; it had drawn 44 labels at once.

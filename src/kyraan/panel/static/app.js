@@ -2415,7 +2415,8 @@ function drawGraph(canvas, view, opts) {
     // selection, search or focus. Naming the busiest skills at rest was
     // the last of the standing clutter.
     const named = view.scale > 2.0 || node.type === "person"
-      || selected || (brain.query && brain.matches.has(node.id))
+      || (selected && (brain.selection.size <= 24 || view.scale > 2.0))
+      || (brain.query && brain.matches.has(node.id))
       // A focused neighbourhood is named only while it is small enough
       // to read (or zoomed in): the owner's 251 neighbours as text was
       // a wall, not a label.
