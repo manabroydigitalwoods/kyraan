@@ -1381,12 +1381,31 @@ const FOCUS_DIM = 0.10;
 
 function focusSetFor(node) {
   const set = new Set([node.id]);
+  // A day stands for its exchanges: its wiring is theirs, seen through
+  // the fold (a wire to a folded neuron lands on that neuron's day).
+  const heads = node.dayNode ? new Set(node.members) : new Set([node.id]);
   for (const edge of brain.edges) {
     if (!brain.showEdge[edge.kind]) continue;
-    if (edge.a === node.id) set.add(edge.b);
-    else if (edge.b === node.id) set.add(edge.a);
+    if (heads.has(edge.a)) set.add(standIn(edge.b));
+    else if (heads.has(edge.b)) set.add(standIn(edge.a));
   }
   return set;
+}
+
+/* Wires a neuron has, through the fold: for a day, its exchanges' wires
+   to anything outside the day, each counted once. */
+function wireCount(node) {
+  if (!node.dayNode) return brain.edges.filter((e) => e.a === node.id || e.b === node.id).length;
+  const members = new Set(node.members);
+  const seen = new Set();
+  for (const e of brain.edges) {
+    const inA = members.has(e.a), inB = members.has(e.b);
+    if (inA === inB) continue;
+    const other = standIn(inA ? e.b : e.a);
+    if (other === node.id) continue;
+    seen.add(other + "|" + e.kind);
+  }
+  return seen.size;
 }
 
 /* What the focus follows: the hovered neuron, else the SELECTION. A
@@ -1400,7 +1419,7 @@ function updateFocus() {
   const key = heads.map((n) => n.id).sort().join("|");
   if (heads.length && brain.focusFor !== key) {
     brain.focusFor = key;
-    brain.focusHeads = new Set(heads.map((n) => n.id));
+    brain.focusHeads = new Set(heads.flatMap((n) => n.dayNode ? [n.id, ...n.members] : [n.id]));
     brain.focusSet = new Set();
     for (const head of heads) for (const id of focusSetFor(head)) brain.focusSet.add(id);
   }
@@ -1505,6 +1524,8 @@ function routeSegment(route, idx, strength, back) {
 
 function emitRoute(route, opts) {
   opts = opts || {};
+  route = route.map(standIn);
+  route = route.filter((id, i) => i === 0 || id !== route[i - 1]);
   if (route.length < 2 || brain.signals.length >= MAX_SIGNALS) return false;
   for (const id of route) if (!brain.byId.has(id) || !brain.showType[brain.byId.get(id).type]) return false;
   const segment = routeSegment(route, 0, opts.strength ?? 1, false);
@@ -1910,6 +1931,7 @@ function nodeColour(node, alpha) {
 
 function nodeRadius(node) {
   if (node.type === "core") return 12;
+  if (node.dayNode) return 4 + Math.log2((node.members || []).length + 1) * 2.2;
   if (node.type === "person") return 7.5;
   if (node.type === "task") return 6.5;
   // An episode is one exchange — small and numerous by nature.
@@ -1930,7 +1952,76 @@ function nodeRadius(node) {
 /* -- layout ------------------------------------------------------------ */
 
 function visibleNodes() {
-  return brain.nodes.filter((n) => brain.showType[n.type]);
+  return brain.nodes.filter((n) => brain.showType[n.type] && !n.hidden);
+}
+
+/* Semantic zoom for the recall lobe. 212 episodes were the hairball at
+   the centre, and the lobe grows by ~15 a day. Zoomed out, the episodes
+   fold into their DAYS — one neuron per day, sized by how many exchanges
+   it holds, placed at the centroid of the exchanges it stands for; zoom
+   in past the threshold and the day opens into its episodes again. The
+   wires an episode has are drawn to its day while it is folded. Hysteresis
+   so the boundary does not flicker: fold below 1.15, open above 1.35.
+   Only when the lobe is big enough to need it (> 60 episodes). */
+const FOLD_BELOW = 1.15, OPEN_ABOVE = 1.35, FOLD_WHEN_MORE_THAN = 60;
+
+function dayLabel(day) {
+  const d = new Date(day + "T00:00:00");
+  if (!isFinite(d)) return day;
+  return d.getDate() + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getMonth()];
+}
+
+function updateCollapse(scale) {
+  const episodes = brain.nodes.filter((n) => n.type === "episode" && !n.dayNode);
+  const key = episodes.length + ":" + (episodes[0] || {}).id + ":" + (episodes[episodes.length - 1] || {}).id;
+  if (brain.dayKey !== key) {
+    // (Re)build the day neurons for this set of episodes.
+    brain.nodes = brain.nodes.filter((n) => !n.dayNode);
+    const byDay = new Map();
+    for (const ep of episodes) {
+      const day = ep.day || "undated";
+      if (!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(ep.id);
+    }
+    brain.dayOf = new Map();
+    for (const [day, members] of byDay) {
+      const id = "e:day:" + day;
+      brain.nodes.push({
+        id, type: "episode", dayNode: true, lobe: "recall",
+        label: `${dayLabel(day)} · ${members.length}`,
+        day, group: day, members, created: day, hidden: true,
+        x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, pinned: true,
+      });
+      for (const m of members) brain.dayOf.set(m, id);
+    }
+    brain.byId = new Map(brain.nodes.map((n) => [n.id, n]));
+    brain.dayKey = key;
+    brain.folded = false;
+  }
+  const want = episodes.length > FOLD_WHEN_MORE_THAN
+    && (brain.folded ? scale < OPEN_ABOVE : scale < FOLD_BELOW);
+  if (want !== brain.folded) {
+    brain.folded = want;
+    for (const ep of episodes) ep.hidden = want;
+    for (const n of brain.nodes) if (n.dayNode) n.hidden = !want;
+  }
+  if (brain.folded) {
+    // A day sits where its exchanges are.
+    for (const n of brain.nodes) {
+      if (!n.dayNode) continue;
+      let x = 0, y = 0, z = 0, k = 0;
+      for (const m of n.members) { const e = brain.byId.get(m); if (e) { x += e.x; y += e.y; z += e.z; k++; } }
+      if (k) { n.x = x / k; n.y = y / k; n.z = z / k; }
+    }
+  }
+}
+
+/* The neuron that stands for `id` right now: itself, or its day while
+   the recall lobe is folded. */
+function standIn(id) {
+  const node = brain.byId.get(id);
+  if (node && node.hidden && brain.dayOf && brain.dayOf.has(id)) return brain.dayOf.get(id);
+  return id;
 }
 
 function seedPositions() {
@@ -1977,7 +2068,7 @@ function simulate() {
   for (const edge of brain.edges) {
     if (!brain.showEdge[edge.kind]) continue;
     const a = brain.byId.get(edge.a), b = brain.byId.get(edge.b);
-    if (!a || !b || !brain.showType[a.type] || !brain.showType[b.type]) continue;
+    if (!a || !b || !brain.showType[a.type] || !brain.showType[b.type] || a.hidden || b.hidden) continue;
     const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.synapse;
     const rest = style.rest / 900;
     const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
@@ -1995,6 +2086,8 @@ function simulate() {
   for (const node of nodes) lobeSize[node.type] = (lobeSize[node.type] || 0) + 1;
 
   for (const node of nodes) {
+    // A day neuron sits at its exchanges' centroid (updateCollapse).
+    if (node.dayNode) { node.vx = 0; node.vy = 0; node.vz = 0; continue; }
     // The core does not drift: everything else arranges itself around it.
     if (node.type === "core") {
       node.x = 0; node.y = 0; node.z = 0; node.vx = 0; node.vy = 0; node.vz = 0;
@@ -2180,8 +2273,10 @@ function drawGraph(canvas, view, opts) {
       ctx.beginPath(); ctx.arc(cx, cy, spread, 0, Math.PI * 2); ctx.fill();
       ctx.font = `${11 * ratio}px ui-monospace, monospace`;
       ctx.fillStyle = dim; ctx.globalAlpha = 0.8;
-      const caption = lobe.label.toUpperCase() + "  " + members.length
-        + (type === "contact" && brain.contactsTotal ? ` of ${brain.contactsTotal}` : "");
+      const held = members.reduce((s, n) => s + (n.members ? n.members.length : 1), 0);
+      const caption = lobe.label.toUpperCase() + "  " + held
+        + (type === "contact" && brain.contactsTotal ? ` of ${brain.contactsTotal}` : "")
+        + (type === "episode" && members.some((n) => n.dayNode) ? ` · ${members.length} days` : "");
       const captionWidth = ctx.measureText(caption).width;
       // Clamped into the canvas: a lobe drifting off the top edge took
       // its own label with it and the regions went unnamed.
@@ -2218,8 +2313,20 @@ function drawGraph(canvas, view, opts) {
 
   // Axons. A selected node's edges are drawn bright so "what is this
   // wired to" is answered by clicking rather than by squinting.
-  for (const edge of brain.edges) {
-    if (!brain.showEdge[edge.kind]) continue;
+  const drawnFolded = new Set();
+  for (const edge0 of brain.edges) {
+    if (!brain.showEdge[edge0.kind]) continue;
+    let edge = edge0;
+    if (brain.folded) {
+      const ra = standIn(edge0.a), rb = standIn(edge0.b);
+      if (ra !== edge0.a || rb !== edge0.b) {
+        if (ra === rb) continue;                       // inside one day
+        const key = ra < rb ? ra + "|" + rb + "|" + edge0.kind : rb + "|" + ra + "|" + edge0.kind;
+        if (drawnFolded.has(key)) continue;
+        drawnFolded.add(key);
+        edge = { ...edge0, a: ra, b: rb };
+      }
+    }
     if (!shown.has(edge.a) || !shown.has(edge.b)) continue;
     const a = brain.byId.get(edge.a), b = brain.byId.get(edge.b);
     const style = EDGE_STYLE[edge.kind] || EDGE_STYLE.synapse;
@@ -2414,7 +2521,7 @@ function drawGraph(canvas, view, opts) {
     // carry the rest); everything else earns its name by zoom, hover,
     // selection, search or focus. Naming the busiest skills at rest was
     // the last of the standing clutter.
-    const named = view.scale > 2.0 || node.type === "person"
+    const named = view.scale > 2.0 || node.type === "person" || node.dayNode
       || (selected && (brain.selection.size <= 24 || view.scale > 2.0))
       || (brain.query && brain.matches.has(node.id))
       // A focused neighbourhood is named only while it is small enough
@@ -2437,7 +2544,8 @@ function drawGraph(canvas, view, opts) {
       const text_ = node.label.slice(0, 26);
       const rect = { x: p.x + radius + 4 * ratio, y: p.y - 6 * ratio,
                      w: ctx.measureText(text_).width, h: 11 * ratio };
-      const wanted = selected || node === brain.hover
+      // A selected day yields to collisions: the callout names it already.
+      const wanted = (selected && !node.dayNode) || node === brain.hover
         || (brain.query && brain.matches.has(node.id));
       const collides = !wanted && drawnLabels.some((r) =>
         rect.x < r.x + r.w && r.x < rect.x + rect.w && rect.y < r.y + r.h && r.y < rect.y + rect.h);
@@ -2476,7 +2584,7 @@ function drawGraph(canvas, view, opts) {
       const id = [...brain.selection][0];
       const node = brain.byId.get(id);
       if (node && shown.has(id)) {
-        const wires = brain.edges.filter((e) => e.a === id || e.b === id).length;
+        const wires = wireCount(node);
         target = node;
         lines = [node.label.slice(0, 44),
                  `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap zooms in`];
@@ -2537,6 +2645,7 @@ function drawBrain() {
   // The layout runs while it is hot and freezes when it has cooled to
   // the floor; a drag or any change reheats it. On a phone at 400 nodes
   // the O(n²) step was the frame's biggest cost for no visible motion.
+  updateCollapse(brain.view.scale);
   if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
   advanceCamera();
@@ -2549,6 +2658,7 @@ function drawHub() {
   const canvas = $("hub-canvas");
   if (!canvas || currentView !== "overview") return;
   sizeCanvas(canvas);
+  updateCollapse(hub.view.scale);
   if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
   advanceCamera();
@@ -2774,6 +2884,10 @@ function renderSelection() {
     kvRow(list, "calls", String(node.uses));
     kvRow(list, "registered", node.registered ? "yes" : "no — loop tool",
           !node.registered);
+  } else if (node.dayNode) {
+    kvRow(list, "day", node.day);
+    kvRow(list, "exchanges", String((node.members || []).length));
+    kvRow(list, "folded", "zoom in, or open below, to see each one");
   } else if (node.type === "episode") {
     kvRow(list, "day", node.day);
     kvRow(list, "with", (node.participants || []).join(", "));
@@ -2849,9 +2963,10 @@ function renderSelection() {
       body.appendChild(row);
     }
   }
-  const focus = el("button", null, "zoom to its wiring");
+  const focus = el("button", null, node.dayNode ? "open this day" : "zoom to its wiring");
   focus.addEventListener("click", () => focusOn($("mem-canvas"),
-    [node, ...links.map((l) => l.other)]));
+    node.dayNode ? node.members.map((id) => brain.byId.get(id)).filter(Boolean)
+                 : [node, ...links.map((l) => l.other)]));
   body.appendChild(focus);
   // One action per kind of wire this neuron has: a person's "12 facts
   // (subject)", a tag's "4 notes (tagged)", a skill's "3 co-firing".
@@ -3023,7 +3138,7 @@ function renderLegend() {
     swatch.style.background = `hsl(${hsl.h}, ${hsl.s}%, ${hsl.l}%)`;
     label.insertBefore(swatch, box.nextSibling);
     label.appendChild(el("span", "pick-count",
-      String(brain.nodes.filter((n) => n.type === type).length)));
+      String(brain.nodes.filter((n) => n.type === type && !n.dayNode).length)));
   }
 }
 
@@ -3341,6 +3456,12 @@ function wireMemory() {
   canvas.addEventListener("dblclick", (event) => {
     const hit = nodeAt(canvas, event);
     if (!hit) return;
+    if (hit.dayNode) {
+      brain.selection = new Set([hit.id]);
+      focusOn(canvas, hit.members.map((id) => brain.byId.get(id)).filter(Boolean));
+      renderSelection();
+      return;
+    }
     // Zoom into the cluster this neuron belongs to.
     const cluster = visibleNodes().filter((n) => groupKey(n) === groupKey(hit));
     brain.selection = new Set(cluster.map((n) => n.id));
@@ -3433,7 +3554,10 @@ function wireMemory() {
       if (lobe && !isDouble) {
         flyToLobe(canvas, lobe);
       } else if (isDouble) {
-        if (hit) {
+        if (hit && hit.dayNode) {
+          brain.selection = new Set([hit.id]);
+          focusOn(canvas, hit.members.map((id) => brain.byId.get(id)).filter(Boolean));
+        } else if (hit) {
           brain.selection = new Set([hit.id]);
           const hood = [...focusSetFor(hit)].map((id) => brain.byId.get(id))
             .filter((n) => n && brain.showType[n.type]);
