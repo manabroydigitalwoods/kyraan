@@ -502,6 +502,37 @@ def _persona() -> dict:
         return {}
 
 
+_OPENERS = r"(?:yes|yep|sure|of course|okay|ok|got it|done|alright|absolutely|certainly|noted)"
+_VOCATIVE_RE = re.compile(
+    # "Yes, Maan — …" / "Of course, Maan Volume…" (opener + name, punctuation optional)
+    rf"^\s*{_OPENERS}[,!.]?\s*(?:maan|manab)\s*[,!—–:.-]*\s*"
+    # "Maan, …" / "Maan — …" (name + punctuation; a bare "Maan is …" is a sentence)
+    r"|^\s*(?:maan|manab)\s*[,!—–:-]+\s*", re.IGNORECASE)
+_EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF\u2600-\u27BF\uFE0F]")
+_FILLER_RE = re.compile(r"^\s*(?:sure thing|no problem|of course|absolutely|certainly)[,!.]\s*", re.IGNORECASE)
+
+
+def voice(reply: str) -> str:
+    """Kyraan's voice, enforced after the model (owner 2026-09-04: "it
+    doesn't feel like Jarvis"; measured: 40% of replies opened with
+    "Maan," and a third carried emoji). The name is for emphasis, not
+    every line; emoji never; no eager openers; one exclamation mark at
+    most. Content is untouched."""
+    t = reply or ""
+    if t.startswith(("🔒", "☁️", "🎙", "🏠", "👶", "🗂", "🗓", "🛠", "📍", "🔍", "🩺", "🌅", "✅", "📎", "📝", "⚠️", "🖼", "📄", "⚡", "🌡")):
+        return t                                  # a receipt's own marker
+    t = _EMOJI_RE.sub("", t)                  # first: an emoji often sits inside the vocative
+    t = _VOCATIVE_RE.sub("", t, count=1)
+    t = _FILLER_RE.sub("", t, count=1)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"!{2,}", "!", t)
+    t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    t = re.sub(r"(?m)^[ \t]+$", "", t).strip()
+    if t and t[0].islower():
+        t = t[0].upper() + t[1:]
+    return t or reply
+
+
 def _persona_block() -> str:
     """Kyraan's voice, owner-editable in config (persona:) — personality
     is configuration, not vibes scattered through prompt rules."""
@@ -879,7 +910,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                               count=stripped)
             _termination.set("replied_after_correction"
                              if contract_corrections else "replied")
-            return reply
+            return voice(reply)
 
         tool_name = decision.get("tool")
         if (action != "call" or not isinstance(tool_name, str)
