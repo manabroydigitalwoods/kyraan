@@ -1109,6 +1109,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
     # carry the version count. Rows arrive newest first.
     seen_paths: dict = {}
     related_drawn: set = set()
+    doc_kind = {str(row[0]): row[1] for row in documents}
     collapsed = []
     for row in documents:
         kind, source_path, suppressed = row[1], row[7], row[10]
@@ -1179,7 +1180,12 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             a, b = sorted((node_id, f"d:{rid}"))
             if (a, b) not in related_drawn:
                 related_drawn.add((a, b))
-                edges.append({"a": a, "b": b, "kind": "illustrates",
+                # two notes related to each other is an Obsidian [[wikilink]]
+                # (notes.link_wikilinks, 2026-09-03); note<->capture is the
+                # capture illustrating the note
+                pair_kind = ("wikilink" if is_note and doc_kind.get(str(rid)) == "note"
+                             else "illustrates")
+                edges.append({"a": a, "b": b, "kind": pair_kind,
                               "weight": 0.7})
 
     # A tag becomes a node only when it joins notes: two or more sharing

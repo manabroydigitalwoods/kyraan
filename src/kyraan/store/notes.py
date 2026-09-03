@@ -105,7 +105,12 @@ def parse_note(text: str, rel_path: str) -> dict:
                                   v.strip("[]").split(",") if x.strip()]
                                  if v.startswith("[") else v)
     title = meta.get("title") or Path(rel_path).stem.replace("_", " ")
-    links = [l.strip() for l in _WIKILINK.findall(body) if l.strip()]
+    # [[Title|alias]] and [[Title#heading]] both point at the note "Title"
+    links = []
+    for raw in _WIKILINK.findall(body):
+        target = re.split(r"[|#]", str(raw), 1)[0].strip()
+        if target and target not in links:
+            links.append(target)
     tags = [t.lower() for t in _TAG.findall(body)]
     for raw_tag in _as_list(meta.get("tags")):
         raw_tag = raw_tag.strip().strip("#").lower()
@@ -412,5 +417,50 @@ def sync(chat_id: int, root: Path | None = None, force: bool = False) -> dict:
                 "WHERE id = %s", (DELETED, doc_id))
         conn.commit()
     counts["removed"] = len(gone)
+    try:
+        counts["wikilinks"] = link_wikilinks(chat_id)
+    except Exception as exc:
+        log_event("wikilink_pass_failed", error=str(exc)[:120])
     log_event("vault_synced", **counts)
     return counts
+
+
+def link_wikilinks(chat_id: int) -> int:
+    """Obsidian's own hard edges (owner 2026-09-03: "add wikilink
+    indexing"). A note's [[Title]] targets are its `links` entities;
+    after a sync every live note's links are resolved against the other
+    live notes — by title, or by the file's stem — and stored in
+    `related` both ways, the same field a capture uses for the note it
+    illustrates. The graph draws note<->note related pairs as wikilinks.
+    Returns how many new pairs were made. Links that resolve to nothing
+    (a note outside the allowlist, or not written yet) are left alone."""
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """SELECT id, caption, source_path, entities, related FROM document
+               WHERE chat_id = %s AND kind = 'note' AND suppressed_by = '{}'""",
+            (chat_id,)).fetchall()
+        by_title: dict = {}
+        for doc_id, caption, source_path, _e, _r in rows:
+            by_title[str(caption or "").strip().lower()] = doc_id
+            by_title[Path(str(source_path or "")).stem.strip().lower()] = doc_id
+        made = 0
+        for doc_id, caption, _sp, entities, related in rows:
+            have = {str(r) for r in (related or [])}
+            targets = [e for e in (entities or [])
+                       if not str(e).startswith(("#", "type:", "relation:"))]
+            for target in targets:
+                other = by_title.get(str(target).strip().lower())
+                if other is None or other == doc_id or str(other) in have:
+                    continue
+                for a, b in ((doc_id, other), (other, doc_id)):
+                    conn.execute(
+                        """UPDATE document
+                           SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
+                                          FROM unnest(related || %s::uuid[]) r)
+                           WHERE id = %s""", ([str(b)], a))
+                have.add(str(other))
+                made += 1
+                log_event("wikilink_linked", note=str(doc_id), target=str(other),
+                          title=str(target)[:60])
+        conn.commit()
+    return made

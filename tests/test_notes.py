@@ -253,3 +253,36 @@ async def test_reindex_phrase_forces_a_full_pass(monkeypatch, phrase, forced):
     reply = await orchestrator._dispatch(4545, phrase)
     assert seen["force"] is forced
     assert ("re-applied" in reply) is forced
+
+
+def test_wikilink_targets_resolve_titles_with_alias_and_heading():
+    from kyraan.store import notes
+    parsed = notes.parse_note("# x\n\nSee [[Ruma Roy|Ruma]] and [[Kiaan Roy#Family]] and [[Ruma Roy]].", "a/x.md")
+    assert parsed["links"] == ["Ruma Roy", "Kiaan Roy"]
+
+
+@pytest.mark.pg
+def test_wikilinks_become_related_pairs_both_ways(monkeypatch):
+    """Owner 2026-09-03: "add wikilink indexing" — Obsidian's hard edges."""
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import notes
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4248")
+        conn.execute("""INSERT INTO document (id, chat_id, kind, caption, text, source_path, entities) VALUES
+          ('00000000-0000-0000-0000-0000000000d1', 4248, 'note', 'Kiaan Roy', 'son', 'Kyraan/people/Kiaan Roy.md', ARRAY['#person', 'Ruma Roy', '1st wear sree krishna dress', 'Nobody Here']),
+          ('00000000-0000-0000-0000-0000000000d2', 4248, 'note', 'Ruma Roy', 'wife', 'Kyraan/people/Ruma Roy.md', ARRAY['#person']),
+          ('00000000-0000-0000-0000-0000000000d3', 4248, 'note', '1st wear sree krishna dress', 'x', 'Kyraan/milestone/kiaan/1st wear sree krishna dress.md', ARRAY['#milestone'])""")
+        conn.commit()
+    assert notes.link_wikilinks(4248) == 2
+    assert notes.link_wikilinks(4248) == 0                    # idempotent
+    with pg.connection() as conn:
+        rel = dict(conn.execute("SELECT caption, related::text[] FROM document WHERE chat_id = 4248").fetchall())
+    assert sorted(rel["Kiaan Roy"]) == ['00000000-0000-0000-0000-0000000000d2', '00000000-0000-0000-0000-0000000000d3']
+    assert rel["Ruma Roy"] == ['00000000-0000-0000-0000-0000000000d1']     # both ways; "Nobody Here" ignored
+    pg.reset_pool_for_tests()
