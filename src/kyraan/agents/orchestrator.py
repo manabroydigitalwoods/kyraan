@@ -401,8 +401,12 @@ async def _extraction_note(chat_id: int, raw_text: str) -> str:
             # already hold (the model skips what the conversation already
             # knows — qwen especially). Deterministic check, honest note:
             # silence read as "not saved" in the degraded eval.
+            # ...but a 2-word overlap is not "already saved" (live: "i have
+            # mentioned 5 minutes but still you are confused" got the note).
             from kyraan.memory import engine as _engine
-            if _engine.find_matches(raw_text):
+            asked = _engine._words(raw_text)
+            if any(asked <= _engine._words(m["content"]) or len(asked & _engine._words(m["content"])) >= 4
+                   for m in _engine.find_matches(raw_text)):
                 return "\n\n📝 I already have that saved in memory."
         return ""
     facts = "; ".join(f.lstrip("- ").strip() for f in queued)
@@ -1217,6 +1221,15 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             r"^\s*(?:remember|save|mark)\s+(?:this\s+)?(?:place|location|spot|here)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z .'-]{1,40}?)\s*[.!]*\s*$",
             raw_text, _re.IGNORECASE)
         forget_place_m = _re.match(r"^\s*forget\s+(?:the\s+)?place\s+(.{2,40}?)\s*[.!]*\s*$", raw_text, _re.IGNORECASE)
+        phone_q = _re.match(
+            r"^\s*(?:(?:what\s+(?:can\s+)?you\s+(?:can\s+)?tell\s+me\s+)?about\s+(?:this|my)\s+phone|(?:my\s+)?phone\s+(?:status|battery|info)"
+            r"|(?:how\s+much\s+)?(?:battery|charge)\s+(?:on|in|of)\s+my\s+phone|is\s+my\s+phone\s+charging)\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
+        if phone_q and kernel.viewer_person() == "owner":
+            from kyraan.triggers import whereabouts as _wh
+            _skip_extraction.set(True)
+            _history_redaction.set("[reported the owner's phone status]")
+            return _wh.phone_text()
         if (where_q or place_m or forget_place_m) and kernel.viewer_person() == "owner":
             # Whereabouts (2026-09-04): the last shared fix, and the
             # owner's own named places for arrival notes.

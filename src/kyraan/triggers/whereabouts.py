@@ -182,6 +182,58 @@ def where_text() -> str:
             + (f" That's your saved place: {', '.join(near)}." if near else ""))
 
 
+PHONE_ENTITIES = {
+    "battery": "sensor.manabs_iphone_battery_level",
+    "battery_state": "sensor.manabs_iphone_battery_state",
+    "permission": "sensor.manabs_iphone_location_permission",
+    "app": "sensor.manabs_iphone_app_version",
+    "tracker": "device_tracker.manabs_iphone",
+}
+
+
+def phone_text() -> str:
+    """What the companion app reports about the owner's phone (live
+    2026-09-04: "about my phone" was taken as a photo request)."""
+    from kyraan.tools import home_assistant as ha
+    got = {}
+    for key, entity in PHONE_ENTITIES.items():
+        try:
+            got[key] = ha._raw(entity) or {}
+        except Exception:
+            got[key] = {}
+    tr = got["tracker"]
+    if not tr.get("state"):
+        return "I can't reach your phone's Home Assistant app right now."
+    attrs = tr.get("attributes") or {}
+    lines = []
+    batt = got["battery"].get("state")
+    if batt not in (None, "unknown", "unavailable"):
+        bs = got["battery_state"].get("state", "")
+        lp = (got["battery_state"].get("attributes") or {}).get("Low Power Mode")
+        lines.append(f"Battery {batt}%" + (f", {bs.lower()}" if bs else "")
+                     + (", low power mode on" if lp else ""))
+    zone = tr.get("state")
+    acc = attrs.get("gps_accuracy")
+    loc = "at home" if zone == "home" else ("away" if zone == "not_home" else f"in zone {zone}")
+    lines.append(f"Location: {loc}" + (f" (GPS accuracy {float(acc):.0f} m)" if acc else "")
+                 + (", " + where_text().split(": ", 1)[-1] if last_fix() and zone != "home" else ""))
+    perm = got["permission"].get("state")
+    if perm and perm not in ("unknown", "unavailable"):
+        lines.append(f"Location permission: {perm}")
+    app = got["app"].get("state")
+    if app and app not in ("unknown", "unavailable"):
+        lines.append(f"Home Assistant app {app}")
+    lu = tr.get("last_updated", "")
+    if lu:
+        try:
+            from datetime import datetime, timezone
+            age = int((datetime.now(timezone.utc) - datetime.fromisoformat(lu.replace("Z", "+00:00"))).total_seconds() / 60)
+            lines.append(f"Last report {age} min ago")
+        except Exception:
+            pass
+    return "📱 Your phone:\n• " + "\n• ".join(lines)
+
+
 # ------------------------------------------------------------- proactive --
 
 async def announce(chat_id: int, lines: list, send_fn) -> int:

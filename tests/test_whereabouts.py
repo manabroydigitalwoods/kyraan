@@ -90,3 +90,34 @@ def test_keeper_takes_any_kiaan_vaccination_ask(monkeypatch):
     monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
     monkeypatch.setattr(kiaan_keeper, "status_text", lambda: "Kiaan is 10 months old.")
     assert asyncio.run(orchestrator.handle_message(1, "kiaan’s vaccination upcoming days")).startswith("Kiaan is 10")
+
+
+def test_phone_status_rail(monkeypatch, tmp_path):
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.tools import home_assistant as ha
+    _iso(monkeypatch, tmp_path)
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    raw = {"device_tracker.manabs_iphone": {"state": "home", "attributes": {"gps_accuracy": 8.1}, "last_updated": "2026-09-04T00:00:00+00:00"},
+           "sensor.manabs_iphone_battery_level": {"state": "80"},
+           "sensor.manabs_iphone_battery_state": {"state": "Not Charging", "attributes": {"Low Power Mode": False}},
+           "sensor.manabs_iphone_location_permission": {"state": "Authorized Always"},
+           "sensor.manabs_iphone_app_version": {"state": "2026.9.0"}}
+    monkeypatch.setattr(ha, "_raw", lambda e: raw[e])
+    for q in ("what you can tell me about this phone?", "about my phone", "phone battery"):
+        out = asyncio.run(orchestrator.handle_message(1, q))
+        assert "Battery 80%, not charging" in out and "at home (GPS accuracy 8 m)" in out and "Authorized Always" in out, q
+
+
+def test_forget_narrows_by_the_owners_words(monkeypatch):
+    from kyraan.agents import loop_tools
+    from kyraan.memory import engine
+    from kyraan.control_plane import kernel
+    facts = [{"id": "a", "content": "Every day remind me every 5 minutes to drink water."},
+             {"id": "b", "content": "User wants reminders every hour each day to drink water."}]
+    monkeypatch.setattr(engine, "find_matches", lambda t: list(facts))
+    monkeypatch.setattr(kernel, "confirmed_context", lambda: True)
+    got = []
+    monkeypatch.setattr(engine, "forget", lambda ids: got.extend(ids) or ["x"])
+    asyncio.run(loop_tools._memory_forget(1, {"fact": "5 minute water reminder"}, "forget the 5 minute water reminder fact"))
+    assert got == ["a"]

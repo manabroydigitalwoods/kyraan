@@ -2852,6 +2852,39 @@ function renderSelection() {
   focus.addEventListener("click", () => focusOn($("mem-canvas"),
     [node, ...links.map((l) => l.other)]));
   body.appendChild(focus);
+  // One action per kind of wire this neuron has: a person's "12 facts
+  // (subject)", a tag's "4 notes (tagged)", a skill's "3 co-firing".
+  // Each selects exactly those neurons and frames them — the question
+  // "what is this wired to, by what?" answered in one tap, on a phone
+  // where the list above is folded away.
+  const byKind = new Map();
+  for (const { edge, other } of links) {
+    if (!byKind.has(edge.kind)) byKind.set(edge.kind, []);
+    byKind.get(edge.kind).push(other);
+  }
+  if (byKind.size) {
+    const actions = el("div", "wire-actions");
+    const noun = (kind, n) => ({
+      subject: "facts", relation: "relations", spoke: "episodes", recalls: "facts recalled",
+      about: "documents", recognises: "faces", is: "contacts", maybe: "maybe-contacts",
+      owns: "work", managed_by: "skills", coactivation: "co-firing skills",
+      synapse: "nearest by meaning", tagged: "tagged", illustrates: "illustrated",
+      wikilink: "wikilinked notes", acts: "skills", fires: "scheduled", received: "received",
+      talks: "talks with",
+    })[kind] || kind;
+    for (const [kind, others] of [...byKind.entries()].sort((a, b) => b[1].length - a[1].length)) {
+      const btn = el("button", "wire-action", `${others.length} ${noun(kind, others.length)}`);
+      btn.title = `select the ${others.length} neuron${others.length === 1 ? "" : "s"} wired by ${kind}`;
+      btn.addEventListener("click", () => {
+        brain.selection = new Set(others.map((n) => n.id));
+        focusOn($("mem-canvas"), [node, ...others]);
+        renderSelection();
+        syncUrl(false);
+      });
+      actions.appendChild(btn);
+    }
+    body.appendChild(actions);
+  }
   if (node.type === "skill") {
     const inStream = el("button", null, "watch it firing");
     inStream.addEventListener("click", () => focusToolsIn("stream", [node.label]));

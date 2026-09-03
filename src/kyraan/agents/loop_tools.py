@@ -936,6 +936,20 @@ async def _memory_forget(chat_id: int, args: dict, raw_text: str):
     if not matches:
         raise kernel.ToolFailed(
             f"no saved fact matches {wanted!r} — show the user what IS saved and ask which to forget")
+    if len(matches) > 1:
+        # The words the owner chose decide (live 2026-09-04: "forget the 5
+        # minute water reminder fact" matched both water facts and got
+        # "which one?" — "5 minute" was the answer already).
+        import re as _re
+        def toks(t): return set(_re.findall(r"[a-z]{3,}|\d+", t.lower()))
+        def hit(a, b): return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
+        asked = toks(wanted) | toks(raw_text)
+        def score(m):
+            have = toks(m["content"])
+            return sum(1 for a in asked if any(hit(a, h) for h in have))
+        scored = sorted(((score(m), m) for m in matches), key=lambda t: -t[0])
+        if scored[0][0] > scored[1][0]:
+            matches = [scored[0][1]]
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("memory.forget", {"fact": wanted})
     forgotten = engine.forget([m["id"] for m in matches])

@@ -298,6 +298,11 @@ tool_servers:
       - light.air_purifier_display_backlight
       # the owner's phone via the HA companion app (2026-09-04; whereabouts)
       - person.manab_roy
+      - device_tracker.manabs_iphone
+      - sensor.manabs_iphone_battery_level
+      - sensor.manabs_iphone_battery_state
+      - sensor.manabs_iphone_location_permission
+      - sensor.manabs_iphone_app_version
       # Alexa media devices (2026-09-02)
       - media_player.manab_s_firetvstick
       - media_player.manab_s_echo_dot
