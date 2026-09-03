@@ -157,3 +157,20 @@ async def test_play_kind_playlist_reaches_the_search(monkeypatch):
     await loop_tools._music_play(7, {"query": "kids songs",
                                      "kind": "playlist"}, "")
     assert seen["prefer"] == "playlist"
+
+
+async def test_same_volume_twice_in_a_turn_is_a_no_op(monkeypatch):
+    """Live 2026-09-03 16:10: "echo volume 4" set 40% twice (target "" then
+    "echo" — different args, so the repeat guard let it through)."""
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: True)
+    ran = []
+
+    async def fake_run(call, **kw):
+        ran.append(dict(call.args))
+        return {"volume": call.args["percent"], "on": "manab_s_echo_dot", "prior": 50}
+    monkeypatch.setattr(kernel, "run_tool", fake_run)
+    loop_tools._last_volume_set.pop(9, None)
+    first = await loop_tools._speaker_volume(9, {"percent": 4}, "")
+    second = await loop_tools._speaker_volume(9, {"percent": 4, "target": "echo"}, "")
+    assert first["volume"] == 40 and second["changed"] is False and len(ran) == 1
+    loop_tools._last_volume_set.pop(9, None)

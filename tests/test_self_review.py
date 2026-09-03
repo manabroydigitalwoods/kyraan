@@ -130,3 +130,23 @@ async def test_critique_appends_to_review_and_never_sinks_it(monkeypatch):
     monkeypatch.setattr(self_review, "_prompt_critique", broken)
     report = await self_review.compose(chat_id=1)
     assert "Daily self-review" in report and "Prompt critique" not in report
+
+
+def test_self_review_skips_private_placeholders(monkeypatch, tmp_path):
+    """The 2026-09-03 review called private-mode placeholders 'broken
+    secret handling' — they are redactions, not exchanges to judge."""
+    import json
+    from kyraan.triggers import self_review
+    from kyraan.control_plane import logging_setup
+    from kyraan.control_plane.dnd import local_now
+    ts = local_now().isoformat()
+    log = tmp_path / "chat.jsonl"
+    rows = [{"ts": ts, "chat_id": 5, "role": "user", "text": "how is the weather"},
+            {"ts": ts, "chat_id": 5, "role": "assistant", "text": "sunny"},
+            {"ts": ts, "chat_id": 5, "role": "user", "text": "secret", "cloud_text": "[a private matter the owner asked to keep secret]"},
+            {"ts": ts, "chat_id": 5, "role": "assistant", "text": "ok", "cloud_text": "[a private matter the owner asked to keep secret]"}]
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    monkeypatch.setattr(logging_setup, "CHAT_LOG", log)
+    lines = self_review._todays_transcript(5)
+    assert [t for _, _, t in lines] == ["how is the weather", "sunny"]
+    assert "deliberate redactions" in self_review._SYSTEM

@@ -1717,9 +1717,24 @@ async def _speaker_volume(chat_id: int, args: dict, raw_text: str):
              else _VOLUME_AUTO_MAX)
     if percent > limit and not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("home.speaker_volume", dict(args))
-    return await kernel.run_tool(kernel.ToolCall(
-        "home.speaker_volume",
-        {"percent": percent, "target": str(args.get("target", "") or "")}))
+    target = str(args.get("target", "") or "")
+    # The same level set twice in one turn (live 2026-09-03 16:10: "echo
+    # volume 4" -> 40% with target "", then 40% with target "echo" —
+    # different args, so the exact-repeat guard let it through) is a
+    # no-op: say so instead of sending it again.
+    import time as _time
+    last = _last_volume_set.get(chat_id)
+    if last and last[0] == percent and _time.monotonic() - last[1] < 60:
+        return {"changed": False, "volume": percent, "on": last[2],
+                "note": f"already set to {percent}% a moment ago — reply, don't repeat"}
+    result = await kernel.run_tool(kernel.ToolCall(
+        "home.speaker_volume", {"percent": percent, "target": target}))
+    _last_volume_set[chat_id] = (percent, _time.monotonic(),
+                                 (result or {}).get("on", "") if isinstance(result, dict) else "")
+    return result
+
+
+_last_volume_set: dict = {}   # chat_id -> (percent, monotonic, device)
 
 
 async def _music_devices(chat_id: int, args: dict, raw_text: str):

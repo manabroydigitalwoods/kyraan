@@ -21,6 +21,13 @@ _SYSTEM = """You are reviewing ONE day of a personal assistant's chat with its
 owner. Identify where the assistant did badly: misunderstandings, wrong or
 unhelpful answers, missed intent, awkward repetition, broken promises.
 Also note one thing it did notably well. Be concrete — quote the moment.
+Know the system's own mechanics before judging them: a line ending in
+'reply "yes" to confirm or "no" to cancel' is the confirm gate every
+write must pass (not the assistant over-asking); "Done — …" after a yes
+is its receipt; "link the enrolled face" means attaching a face that was
+ALREADY enrolled to a person (not a new biometric capture); bracketed
+placeholders are deliberate redactions. Judge the conversation, not the
+machinery.
 Output a SHORT owner-facing report:
 - first line: "Reviewed N exchanges today. X looked wrong."
 - then at most 4 bullets (the problems, quoted briefly, plus the one good
@@ -67,6 +74,11 @@ def _todays_transcript(chat_id: int) -> list:
         text = entry.get("cloud_text") or entry.get("text") or ""
         if role == "assistant" and "cloud_text" not in entry:
             text = _legacy_cloud_placeholder(text) or text
+        if text.strip().startswith("[a private matter"):
+            # a private-mode turn: redacted by design, nothing to review
+            # (the 2026-09-03 review called the placeholders "broken
+            # secret handling")
+            continue
         lines.append((when.strftime("%H:%M"), role, text[:400]))
     return lines
 
