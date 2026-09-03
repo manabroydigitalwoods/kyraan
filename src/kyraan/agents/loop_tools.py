@@ -3202,8 +3202,10 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         gone = outcome.get("forgotten") or []
         return "Forgotten: " + "; ".join(gone) if gone else "Nothing matched — nothing forgotten."
     if tool == "code.task" and isinstance(outcome, dict):
-        return (f"Started — branch {outcome.get('branch')}. I'll message you when it "
-                "finishes (summary + diff). \"code status\" any time.")
+        return (f"Started on {outcome.get('model', 'sonnet')} ({outcome.get('model_why', '')}) — "
+                f"branch {outcome.get('branch')}. I'll message you when it finishes "
+                "(summary + diff); a stalled run steps up one model on its own. "
+                "\"code status\" any time.")
     if tool == "code.discard" and isinstance(outcome, dict):
         return f"Dropped {outcome.get('discarded')} ({outcome.get('branch')})."
     if tool == "home.purifier" and isinstance(outcome, dict):

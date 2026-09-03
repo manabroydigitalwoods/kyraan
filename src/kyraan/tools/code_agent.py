@@ -43,6 +43,47 @@ _ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TERM", "USER", "SHELL", "TMPDIR"
 _send_fn = None
 _running: dict = {}   # job_id -> asyncio.Task (process memory)
 
+# Model by task load (owner 2026-09-03: "coding task model switch is very
+# important as per task load and tough task"). Three rungs; a task is
+# scored by what it says, an explicit "(use opus)" wins, and a failure
+# on a lower rung is retried ONCE on the next rung up in the same
+# worktree, so the stronger model continues the weaker one's work.
+LADDER = ["haiku", "sonnet", "opus"]
+_HARD = re.compile(
+    r"\b(?:refactor|redesign|rearchitect|architecture|migrat\w*|across|multiple|modules?|"
+    r"concurren\w*|race|deadlock|security|performance|optimi[sz]e|investigate|debug|"
+    r"root\s+cause|why\s+does|flaky|intermittent|end[- ]to[- ]end|integration|"
+    r"database|migration|schema|protocol|async|threading|every|all\s+(?:the\s+)?(?:tools|tests|files))\b",
+    re.IGNORECASE)
+_EASY = re.compile(
+    r"\b(?:typo|docstring|comment|rename|spelling|wording|one[- ]line|small|tiny|trivial|"
+    r"constant|default\s+value|log\s+line|add\s+a\s+flag|help\s+text)\b", re.IGNORECASE)
+_OVERRIDE = re.compile(r"\b(?:use|with|on)\s+(haiku|sonnet|opus|fable)\b", re.IGNORECASE)
+
+
+def pick_model(task: str) -> tuple:
+    """(model, reason). Explicit ask wins; hard words or a long brief or
+    several files -> opus; easy words on a short single-file ask ->
+    haiku; otherwise sonnet."""
+    m = _OVERRIDE.search(task)
+    if m:
+        return m.group(1).lower(), "you asked for it"
+    words = len(task.split())
+    files = len(re.findall(r"[\w/.-]+\.(?:py|yaml|md|html|js|sql|toml|json)\b", task))
+    if _HARD.search(task) or words > 45 or files >= 3:
+        return "opus", "hard words, a long brief, or several files"
+    if _EASY.search(task) and words <= 18 and files <= 1:
+        return "haiku", "a small, single-file change"
+    return "sonnet", "an ordinary change"
+
+
+def next_rung(model: str):
+    try:
+        i = LADDER.index(model)
+    except ValueError:
+        return None
+    return LADDER[i + 1] if i + 1 < len(LADDER) else None
+
 
 def init(send_fn) -> None:
     global _send_fn
@@ -145,13 +186,16 @@ def start(chat_id: int, task: str) -> dict:
                 fh.write("\n.venv\n")
         except Exception as exc:
             log_event("code_task_exclude_failed", error=str(exc)[:100])
+    model, why = pick_model(task)
     job = {"id": job_id, "chat_id": chat_id, "task": task, "branch": branch,
-           "dir": str(workdir), "status": "running",
+           "dir": str(workdir), "status": "running", "model": model, "model_why": why,
+           "escalated_from": "",
            "started": datetime.now(timezone.utc).isoformat(), "finished": "",
            "summary": "", "diffstat": "", "cost_usd": 0.0, "turns": 0, "error": ""}
     with locked(JOBS_PATH):
         _save(_load() + [job])
-    log_event("code_task_started", job=job_id, task=task[:120], branch=branch)
+    log_event("code_task_started", job=job_id, task=task[:120], branch=branch,
+              model=model, why=why)
     loop = asyncio.get_event_loop()
     _running[job_id] = loop.create_task(_run(job))
     return job
@@ -160,6 +204,7 @@ def start(chat_id: int, task: str) -> dict:
 def _run_claude(job: dict) -> dict:
     cmd = ["claude", "-p", prompt_for(job["task"], job["branch"]),
            "--output-format", "json", "--max-turns", str(MAX_TURNS),
+           "--model", job.get("model") or "sonnet",
            "--allowedTools", *ALLOWED_TOOLS]
     out = subprocess.run(cmd, cwd=job["dir"], env=_clean_env(),
                          capture_output=True, text=True, timeout=TIMEOUT_S)
@@ -171,23 +216,47 @@ def _run_claude(job: dict) -> dict:
             "stderr": (out.stderr or "")[-400:], "raw": (out.stdout or "")[-400:]}
 
 
+def _looks_unfinished(summary: str, data: dict) -> bool:
+    """The agent stopped short: hit the turn cap, or says so itself."""
+    if int(data.get("num_turns") or 0) >= MAX_TURNS:
+        return True
+    return bool(re.search(r"\b(?:could not|couldn'?t|unable to|not able to|ran out of|"
+                          r"gave up|too complex|beyond)\b", summary, re.IGNORECASE))
+
+
 async def _run(job: dict) -> None:
     job_id = job["id"]
     try:
         res = await asyncio.to_thread(_run_claude, job)
         data = res["data"]
         summary = str(data.get("result") or "").strip()
-        if res["rc"] != 0 or data.get("is_error"):
+        failed = res["rc"] != 0 or bool(data.get("is_error"))
+        spent = float(data.get("total_cost_usd") or 0)
+        higher = next_rung(job.get("model") or "sonnet")
+        if (failed or _looks_unfinished(summary, data)) and higher and not job.get("escalated_from"):
+            # one rung up, same worktree: the stronger model continues
+            log_event("code_task_escalated", job=job_id, frm=job.get("model"), to=higher)
+            job = _update(job_id, escalated_from=job.get("model"), model=higher,
+                          cost_usd=round(float(job.get("cost_usd") or 0) + spent, 4))
+            job["task"] = job["task"] + (
+                " (A previous attempt by a smaller model stopped short; its partial "
+                "edits, if any, are in this worktree — review them, then finish the task.)")
+            res = await asyncio.to_thread(_run_claude, job)
+            data = res["data"]
+            summary = str(data.get("result") or "").strip()
+            failed = res["rc"] != 0 or bool(data.get("is_error"))
+            spent = float(job.get("cost_usd") or 0) + float(data.get("total_cost_usd") or 0)
+        if failed:
             err = summary or res["stderr"] or res["raw"] or f"exit {res['rc']}"
             job = _update(job_id, status="failed", error=err[:600],
                           finished=datetime.now(timezone.utc).isoformat(),
-                          cost_usd=float(data.get("total_cost_usd") or 0),
+                          cost_usd=round(spent, 4),
                           turns=int(data.get("num_turns") or 0))
         else:
             diffstat = _git(["diff", "--stat", "main"], Path(job["dir"])).strip()
             job = _update(job_id, status="done", summary=summary[:2000], diffstat=diffstat[:1500],
                           finished=datetime.now(timezone.utc).isoformat(),
-                          cost_usd=float(data.get("total_cost_usd") or 0),
+                          cost_usd=round(spent, 4),
                           turns=int(data.get("num_turns") or 0))
     except subprocess.TimeoutExpired:
         job = _update(job_id, status="failed", error=f"timed out after {TIMEOUT_S // 60} minutes",
@@ -209,13 +278,19 @@ async def _run(job: dict) -> None:
 def report(job: dict) -> str:
     head = f"🛠 Coding task {job['status']}: {job['task'][:100]}"
     if job["status"] == "failed":
-        return f"{head}\nBranch {job['branch']} kept for inspection.\nError: {job['error']}"
+        return (f"{head}\nModel: {job.get('model', '?')}"
+                + (f" (escalated from {job['escalated_from']})" if job.get("escalated_from") else "")
+                + f"\nBranch {job['branch']} kept for inspection.\nError: {job['error']}")
     lines = [head, "", job["summary"] or "(no summary)"]
     if job["diffstat"]:
         lines += ["", "Changed:", job["diffstat"]]
     else:
         lines += ["", "Changed: nothing (no diff against main)"]
-    lines += ["", f"Branch {job['branch']} — ${job['cost_usd']:.2f}, {job['turns']} turns.",
+    model_line = (f"{job.get('model', '?')}" + (f" (escalated from {job['escalated_from']})"
+                                                 if job.get("escalated_from") else
+                                                 f" — {job.get('model_why', '')}"))
+    lines += ["", f"Model: {model_line}",
+              f"Branch {job['branch']} — ${job['cost_usd']:.2f}, {job['turns']} turns.",
               'Say "code diff" to read it, "code discard" to drop it; merge it yourself when happy.']
     return "\n".join(lines)
 
@@ -225,8 +300,8 @@ def status() -> dict:
     if not jobs:
         return {"jobs": 0, "note": "no coding tasks yet"}
     last = jobs[-1]
-    return {"jobs": len(jobs), "last": {k: last[k] for k in
-            ("id", "task", "status", "branch", "started", "finished", "cost_usd")}}
+    return {"jobs": len(jobs), "last": {k: last.get(k) for k in
+            ("id", "task", "status", "branch", "started", "finished", "cost_usd", "model")}}
 
 
 def diff(job_id: str = "", max_chars: int = 3500) -> dict:
