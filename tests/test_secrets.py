@@ -165,3 +165,22 @@ def test_private_turn_without_a_local_answer_refuses_honestly(monkeypatch):
     assert out.startswith("I couldn't get an answer from the local model") and called == []
     secrets.set_private(58, False)
     session._history[58] = []
+
+
+def test_private_photo_turns_leave_placeholders(monkeypatch):
+    """A photo sent in private mode is recorded as a placeholder on both
+    sides — the channel declines the cloud vision call, and the record
+    never reaches a cloud prompt."""
+    from kyraan.agents import session
+    monkeypatch.setenv("KYRAAN_SESSION_BACKEND", "memory")
+    logged = []
+    monkeypatch.setattr(session, "log_chat", lambda chat_id, role, text, **f: logged.append((role, f.get("cloud_text"))))
+    session._history[59] = []
+    secrets.set_private(59, True)
+    session.record_exchange(59, "[sent a photo: kiaan]", "a photo of kiaan")
+    assert list(session._history[59]) == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    assert logged == [("user", secrets.PLACEHOLDER), ("assistant", secrets.PLACEHOLDER)]
+    secrets.set_private(59, False)
+    src = open(__import__("kyraan.channels.telegram_bot", fromlist=["x"]).__file__).read()
+    assert "_secrets.active(chat_id)" in src and "didn't look at this one" in src
+    session._history[59] = []

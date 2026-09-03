@@ -581,6 +581,19 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             image_bytes = bytes(await tg_file.download_as_bytearray())
         if is_owner_turn:
             faces.stash_photo(chat_id, image_bytes)   # biometric intake is owner-only
+        from kyraan.agents import secrets as _secrets
+        if is_owner_turn and _secrets.active(chat_id):
+            # PRIVATE MODE: photos need the cloud vision model, and the
+            # promise is "everything stays on this Mac" (review 2026-09-03:
+            # a photo turn went to the cloud and into history in clear).
+            reply = ("🔒 Private mode is on, and reading a photo needs the "
+                     "cloud vision model — so I didn't look at this one. Say "
+                     "\"private mode off\" and send it again.")
+            orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
+            from kyraan.control_plane.logging_setup import turn_summary
+            log_trace("turn_end", chat_id=chat_id, reply=reply, **turn_summary())
+            await update.message.reply_text(_plain(reply), do_quote=True)
+            return
 
         # Either form: the strict phrase ("remember this face as X") or
         # the natural one ("remember this is Suman Ghosh") — with the
