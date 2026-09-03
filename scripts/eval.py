@@ -228,6 +228,11 @@ async def main() -> int:
     logging_setup.CHAT_LOG = eval_dir / "chat.jsonl"
     logging_setup.EVENT_LOG = eval_dir / "events.jsonl"
     logging_setup.TRACE_LOG = eval_dir / "traces.jsonl"
+    # rotation archives by file STEM under ARCHIVE_DIR — without this the
+    # eval's events landed in logs/archive/<day>/events-*.jsonl and the
+    # health census counted the harness as live traffic (2026-09-04:
+    # 108 of 134 "corrections")
+    logging_setup.ARCHIVE_DIR = eval_dir / "archive"
 
     scheduler.init(schedule_fn=lambda *a, **k: None, cancel_fn=lambda *a, **k: None,
                    send_fn=None, only_chat=CHAT)

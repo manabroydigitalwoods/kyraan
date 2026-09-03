@@ -32,6 +32,32 @@ from kyraan.model_router import router
 # A reply that asks permission to do the thing the user just asked for.
 # Matched case-insensitively against the model's DRAFT reply; one forced
 # re-decide, then the model's second answer stands (see the guard in run()).
+_OFFER_TAIL_RE = re.compile(
+    r"(?:\s*(?:\(|—|-)?\s*(?:if you (?:want|like|prefer),?\s*)?"
+    r"(?:do you want me to|would you like me to|want me to|should i|shall i|"
+    r"do you want (?:a|me|to)|would you like (?:a|me|to))\b[^.?!]*\?\s*(?:😊|🙂|👍)?\s*)+$",
+    re.IGNORECASE)
+_REQUEST_WORDS_RE = re.compile(
+    r"\?|\b(?:can|could|please|set|remind|play|turn|what|when|how|show|list|check|"
+    r"send|add|create|book|find|search|tell me)\b", re.IGNORECASE)
+
+
+def _strip_trailing_offer(reply: str, user_text: str) -> str | None:
+    """A trailing permission offer after a substantive reply to a
+    STATEMENT is dropped. Returns the shortened reply, or None when
+    nothing was stripped (a request, an opening offer, or an offer that
+    IS the whole reply stay with the guard)."""
+    if _REQUEST_WORDS_RE.search(user_text or ""):
+        return None
+    m = _OFFER_TAIL_RE.search(reply or "")
+    if not m:
+        return None
+    head = reply[:m.start()].rstrip()
+    if len(head) < 15 or "?" in head[-2:]:
+        return None
+    return head
+
+
 _DEFLECTION_RE = re.compile(
     r"\b(?:do you want me to|would you like me to|shall i\b"
     r"|should i (?:schedule|set|create|add|go ahead|remember|save)"
@@ -726,6 +752,16 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                         f"{person}. Do not ask again — answer or act for "
                         f"{person} directly now.")
                     continue
+            stripped = _strip_trailing_offer(reply, raw_text)
+            if stripped is not None:
+                # A real answer followed by "Want me to set a reminder?"
+                # (live 2026-09-01..03: 21 of the owner's 26 deflections
+                # were an offer tacked onto an acknowledgment of a
+                # STATEMENT). Dropping the offer keeps the answer and
+                # saves the re-decide call.
+                log_event("agent_offer_stripped", chat_id=chat_id, tier=tier,
+                          dropped=reply[len(stripped):][:100])
+                reply = stripped
             if (deflection_corrections < 2 and not read_only and not last_step
                     and _DEFLECTION_RE.search(reply)):
                 # Deflection guard. The prompt-level "stated request IS the

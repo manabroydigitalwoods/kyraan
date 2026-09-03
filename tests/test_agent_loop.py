@@ -811,7 +811,10 @@ async def test_third_deflection_stands_as_a_genuine_offer(scripted_model, monkey
     ])
 
     reply = await agent_loop.run(90, "I keep forgetting to drink water these days")
-    assert reply == offer
+    # 2026-09-04 (owner's Jarvis brief, reliability pass): a trailing offer
+    # after a statement is STRIPPED and the substantive reply stands — no
+    # re-decide at all, and never "do you want me to".
+    assert reply == "You mentioned forgetting water"
 
 
 async def test_tool_executing_turn_skips_fact_extraction(scripted_model, monkeypatch):

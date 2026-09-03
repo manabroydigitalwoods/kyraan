@@ -129,3 +129,4 @@ def _never_flushall(monkeypatch):
     def _refuse(self, *a, **k):
         raise AssertionError("FLUSHALL is forbidden in tests — use flushdb on the test db")
     monkeypatch.setattr(redis.Redis, "flushall", _refuse, raising=False)
+

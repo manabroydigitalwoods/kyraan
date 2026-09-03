@@ -1074,6 +1074,65 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             from kyraan.triggers import house_steward as _steward_r
             _skip_extraction.set(True)
             return await _steward_r.status_text()
+        vol_m = _re.match(
+            r"^\s*(?:(?:can\s+you\s+|please\s+)?(?:set|adjust|make|put|up|turn|change)\s+)?"
+            r"(?:the\s+)?(?:echo(?:\s+dot)?\s+)?vol(?:ume|um|\.)?\s*(?:to\s+|at\s+|=\s*)?(\d{1,3})\s*%?\s*"
+            r"(?:on\s+(?:the\s+)?echo)?\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        if vol_m and kernel.viewer_person() == "owner":
+            # "volum 4", "up the volume 7", "adjust echo dot volume to 7"
+            # (live 2026-09-02: five deflections asking "4% or level 4/10?").
+            # The scale rule already lives in the executor (≤10 is Alexa's
+            # scale); the ask never needs a question.
+            from kyraan.agents import loop_tools as _lt_v
+            _skip_extraction.set(True)
+            try:
+                out = await _lt_v._speaker_volume(chat_id, {"percent": int(vol_m.group(1))}, raw_text)
+            except kernel.ConfirmationRequired:
+                out = None
+            except kernel.ToolFailed as exc:
+                return f"Couldn't set the volume: {exc}"
+            if out is None:
+                # above the auto cap: the executor asked; route through the gate
+                from kyraan.control_plane.kernel import SkillCall as _SC
+
+                async def _set_loud(_a: dict) -> str:
+                    r = await _lt_v._speaker_volume(chat_id, {"percent": int(vol_m.group(1))}, raw_text)
+                    return f"Volume set to {r.get('volume')}% on {r.get('on', 'the Echo')}."
+                return await _gated(chat_id, _SC("home.speaker_volume", {"percent": int(vol_m.group(1))}),
+                                    _set_loud, describe=f"About to set the Echo volume to {vol_m.group(1)} (loud)")
+            if isinstance(out, dict) and out.get("changed") is False:
+                return f"Already at {out.get('volume')}%."
+            return f"Volume set to {out.get('volume')}% on {out.get('on', 'the Echo')}."
+        photos_m = _re.match(
+            r"^\s*(?:show|send|display)\s+(?:me\s+)?(?:all\s+|the\s+|some\s+)?"
+            r"(?:(?:latest|recent|last)\s+)?([a-z][a-z .'’-]{1,30}?)(?:'s|’s|s')\s+(?:photos?|pictures?|pics?|images?|moments?)"
+            r"\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        if photos_m and kernel.viewer_person() == "owner":
+            # "show kiaan's photos" (live 2026-09-02: "Which Kiaan photo?"
+            # with a list — asking is the failure; sending the latest
+            # three is the answer).
+            from kyraan.store import persons as _persons_p
+            from kyraan.store import documents as _docs_p
+            pid = _persons_p.resolve(photos_m.group(1).strip())
+            if pid:
+                _skip_extraction.set(True)
+                _history_redaction.set(f"[sent {photos_m.group(1).strip()}'s latest photos]")
+                import asyncio as _aio_p
+                rows = await _aio_p.to_thread(_docs_p.list_documents, chat_id, 3, pid, "", "moment")
+                rows = rows or await _aio_p.to_thread(_docs_p.list_documents, chat_id, 3, pid, "", "photo")
+                if not rows:
+                    return f"No photos of {photos_m.group(1).strip()} saved yet — send one and I'll keep it."
+                from kyraan.channels import file_send as _fs
+                sent = 0
+                for r in rows:
+                    stored = await _aio_p.to_thread(_docs_p.original_file, chat_id, r["id"])
+                    if stored and _fs.available():
+                        await _fs.send_stored(chat_id, stored[0], stored[1], caption=r["caption"])
+                        sent += 1
+                if sent:
+                    return f"Sent the latest {sent} of {photos_m.group(1).strip()}'s photos ({len(rows)} listed)."
+                return ("I have " + "; ".join(f'"{r["caption"]}" ({r["date"]})' for r in rows)
+                        + " — the originals aren't stored for these; re-send one and I'll keep the file.")
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"
