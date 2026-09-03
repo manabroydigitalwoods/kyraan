@@ -167,6 +167,18 @@ async def _roll_summary(chat_id: int) -> None:
     """Condense the backlog chunk into the running summary — LOCAL tier
     only (free, and the summary may contain anything the conversation
     did). Best-effort: a failure drops nothing user-visible."""
+    import asyncio as _aio
+    lock = _roll_locks.setdefault(chat_id, _aio.Lock())
+    if lock.locked():
+        return                     # a roll is in flight; the next turn re-checks
+    async with lock:
+        await _roll_summary_locked(chat_id)
+
+
+_roll_locks: dict = {}
+
+
+async def _roll_summary_locked(chat_id: int) -> None:
     backlog = _summary_backlog.get(chat_id) or []
     if len(backlog) < _SUMMARY_CHUNK:
         return
@@ -274,12 +286,17 @@ def record_exchange(chat_id: int, user_text: str, assistant_text: str) -> None:
     """Record a user/assistant exchange that happened OUTSIDE
     handle_message (photo turns) — same history/backlog/chat-log
     treatment, so follow-ups and the rolling summary see it."""
-    for entry in (("user", user_text), ("assistant", assistant_text)):
+    from kyraan.agents import secrets as _secrets
+    private = _secrets.active(chat_id)
+    ph = _secrets.PLACEHOLDER
+    for entry in (("user", ph if private else user_text),
+                  ("assistant", ph if private else assistant_text)):
         if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
             _summary_backlog[chat_id].append(_history[chat_id][0])
         _history[chat_id].append(entry)
-    log_chat(chat_id, "user", user_text)
-    log_chat(chat_id, "assistant", assistant_text)
+    extra = {"cloud_text": ph} if private else {}
+    log_chat(chat_id, "user", user_text, **extra)
+    log_chat(chat_id, "assistant", assistant_text, **extra)
 
 
 def record_proactive(chat_id: int, text: str) -> None:

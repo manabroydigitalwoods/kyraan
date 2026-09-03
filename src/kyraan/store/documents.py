@@ -178,10 +178,11 @@ def latest_capture(chat_id: int, max_age_h: int = 24) -> dict | None:
                               AND r.exposure = 'local_only')
                FROM document d
                WHERE d.chat_id = %s AND d.suppressed_by = '{}'
+                     AND d.exposure = ANY(%s)
                      AND d.kind IN ('photo', 'moment', 'pdf', 'file', 'docx', 'text')
                      AND d.created_at > now() - make_interval(hours => %s)
                ORDER BY d.created_at DESC LIMIT 1""",
-            (list(_allowed_exposures()), chat_id, max_age_h)).fetchone()
+            (list(_allowed_exposures()), chat_id, list(_allowed_exposures()), max_age_h)).fetchone()
     if row is None:
         return None
     doc_id, kind, caption, created, subjects, ents, related, local_related = row
@@ -379,7 +380,21 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         if row:
             log_event("document_deduped_by_hash", chat_id=chat_id,
                       doc_id=str(row[0]))
+            # the re-send may carry what the first send lacked: a title,
+            # people, entities (review 2026-09-03) — union them in
+            with pg.connection() as conn:
+                conn.execute(
+                    """UPDATE document
+                       SET caption = CASE WHEN %s <> '' THEN %s ELSE caption END,
+                           subject_persons = (SELECT coalesce(array_agg(DISTINCT p), '{}')
+                                              FROM unnest(subject_persons || %s::text[]) p),
+                           entities = CASE WHEN cardinality(%s::text[]) > 0
+                                           THEN %s::text[] ELSE entities END
+                       WHERE id = %s""",
+                    (caption[:300], caption[:300], subjects,
+                     list(entities or []), list(entities or []), row[0]))
             return str(row[0])
+    explicit_caption = bool(caption)
     if not caption and not filename:
         # Last-resort human name: the first meaningful content line —
         # "show me all docs" listing photo "(untitled)" rows told the
@@ -401,6 +416,10 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
             entities = []
     from kyraan.store.episodes import sensitivity_flags
     flags = sensitivity_flags(text)
+    # Discretion classes keep a capture off the cloud tier (review
+    # 2026-09-03: flags were stored and never read). Health alone does
+    # not: the owner's medicine photos are asked about in normal turns.
+    exposure = "local_only" if set(flags) & {"sensitive", "emotional"} else "cloud_ok"
     try:
         vectors = embed.embed(_chunks(text))
     except Exception:
@@ -410,11 +429,17 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
                                      text, flags, subject_persons,
-                                     file_path, file_sha256, entities)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     file_path, file_sha256, entities, exposure)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
-                   caption = EXCLUDED.caption, flags = EXCLUDED.flags,
-                   subject_persons = EXCLUDED.subject_persons,
+                   caption = CASE WHEN %s THEN EXCLUDED.caption
+                                  ELSE document.caption END,
+                   flags = EXCLUDED.flags,
+                   exposure = CASE WHEN document.exposure = 'local_only'
+                                   THEN 'local_only' ELSE EXCLUDED.exposure END,
+                   subject_persons = (SELECT coalesce(array_agg(DISTINCT p), '{}')
+                                      FROM unnest(document.subject_persons
+                                                  || EXCLUDED.subject_persons) p),
                    entities = CASE WHEN cardinality(EXCLUDED.entities) > 0
                                    THEN EXCLUDED.entities
                                    ELSE document.entities END,
@@ -426,7 +451,8 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
                                       ELSE document.file_sha256 END""",
             (doc_id, chat_id, kind, caption[:300], filename[:200], text,
              flags, subjects, file_path, file_hash,
-             [str(e).strip()[:60] for e in (entities or []) if str(e).strip()][:12]))
+             [str(e).strip()[:60] for e in (entities or []) if str(e).strip()][:12],
+             exposure, explicit_caption))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):
@@ -541,6 +567,8 @@ def relate(doc_id: str) -> list:
                 conn.execute(
                     "UPDATE document SET entities = entities || %s::text[] "
                     "WHERE id = %s", (inherited, cap_id))
+                if not i_am_note:
+                    ents.extend(inherited)   # the next matching note sees them
             if str(oid) not in [str(r) for r in (related or [])]:
                 newly.append(str(oid))
                 log_event("documents_related", capture=str(cap_id),

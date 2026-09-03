@@ -101,8 +101,23 @@ def invite_followup(last_assistant: str) -> str | None:
 
 
 _TEXT_ENROLL_RE = re.compile(
+    # a NAME: one to three word tokens, no possessive — "remember this is
+    # Ruma's pain killer gel" / "remember this is important" are not
+    # enrollments (review 2026-09-03)
     r"^\s*remember\s+(?:(?:this|that|it|him|her)\s+)?(?:face\s+)?(?:is|as)\s+"
-    r"([A-Za-z][A-Za-z .'-]{1,30}?)\s*[.!]?\s*$", re.IGNORECASE)
+    r"([A-Za-z][A-Za-z-]*(?:\s+[A-Za-z][A-Za-z-]*){0,2})\s*[.!]?\s*$", re.IGNORECASE)
+_NOT_A_NAME = frozenset(
+    "important done ok okay fine good bad here there now later today tomorrow "
+    "me you it this that mine yours home work busy free true false".split())
+
+
+def face_count(image_bytes: bytes) -> int:
+    """How many faces the local detector sees — the floor under any
+    natural-language enrollment: no face, no biometric ask."""
+    try:
+        return len(_detect_and_embed(image_bytes))
+    except Exception:
+        return 0
 
 # The most recent photo per chat — process memory ONLY, never persisted;
 # lets both the channel fast-path and the agent loop's faces.remember
@@ -132,7 +147,12 @@ def enroll_from_text(text: str):
     must sit directly against 'is/as', which is how people refer to the
     photo they just sent, not how they state a family fact."""
     m = _TEXT_ENROLL_RE.match(text or "")
-    return m.group(1).strip() if m else None
+    if not m:
+        return None
+    name = m.group(1).strip()
+    if name.lower() in _NOT_A_NAME or name.lower().split()[0] in {"my", "the", "a", "an"}:
+        return None
+    return name
 
 
 def enroll_hint(caption: str):

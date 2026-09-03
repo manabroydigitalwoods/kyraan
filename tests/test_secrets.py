@@ -12,7 +12,7 @@ def test_secret_phrases_in_any_wording():
     assert secrets.opens("ek secret baat hai or esko secret rakha hai ok?")
     assert secrets.opens("keep this between us")
     assert secrets.opens("this is confidential, don't tell anyone")
-    assert not secrets.opens("what is the secret ingredient of biryani") is False  # a word is enough to open
+    assert not secrets.opens("what is the secret ingredient of biryani")   # a bare noun never opens
     assert not secrets.opens("what did we discuss this morning")
     assert secrets.retro("isko secret rakho")
     assert secrets.retro("keep this secret")

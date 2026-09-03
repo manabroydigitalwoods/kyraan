@@ -196,6 +196,7 @@ def _resolve_name(nm: dict, raw: str) -> str | None:
     low = str(raw or "").strip().lower()
     if not low:
         return None
+    low = low.rstrip(".!,").replace("-", " ")
     hit = nm.get(low) or nm.get(low.replace(" ", "_"))
     if hit:
         return hit
@@ -253,8 +254,12 @@ def register_person_note(parsed: dict, rel: str) -> str | None:
             pid = _slug(name)
             if not pid or pid == "owner":
                 return None
-            persons.enroll(pid, None, "none", None)
-            log_event("person_registered_from_note", person=pid, path=rel)
+            known = set(persons.name_map().values()) | {row[0] for row in persons.list_persons()}
+            if pid not in known:
+                # an EXISTING id must never be re-enrolled — enroll's upsert
+                # would wipe its chat_id and stage (review 2026-09-03)
+                persons.enroll(pid, None, "none", None)
+                log_event("person_registered_from_note", person=pid, path=rel)
         for alias in [name] + _as_list(parsed["meta"].get("aliases")):
             if alias and _slug(alias) != pid and alias.lower() != pid:
                 persons.add_alias(pid, alias)

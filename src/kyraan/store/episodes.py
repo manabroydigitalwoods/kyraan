@@ -219,9 +219,13 @@ def ingest_day(day: str, records: list, tag=None,
         texts = [texts[k] for k in keep]
         meta = [meta[k] for k in keep]
     vectors = embed.embed(texts)
+    # tagging is a model call per chunk — never inside a held pool
+    # connection (review 2026-09-03: a busy day pinned one of four for
+    # a minute and hot-path lookups timed out)
+    flags_list = [tag(body) for (_c, _t, body) in meta]
     written = 0
     with pg.connection() as conn:
-        for (chat_id, first_ts, body), vector in zip(meta, vectors):
+        for (chat_id, first_ts, body), vector, flags in zip(meta, vectors, flags_list):
             participants = _participants(conn, chat_id)
             conn.execute(
                 """INSERT INTO episode (id, chat_id, day, participants,
@@ -234,7 +238,7 @@ def ingest_day(day: str, records: list, tag=None,
                        flags = EXCLUDED.flags,
                        embedding = EXCLUDED.embedding""",
                 (episode_uuid(chat_id, first_ts), chat_id, day, participants,
-                 tag(body), body, json.dumps(vector),
+                 flags, body, json.dumps(vector),
                  datetime.fromisoformat(first_ts)))
             written += 1
         conn.commit()

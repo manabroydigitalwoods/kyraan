@@ -225,6 +225,7 @@ async def tick(channels: list, owner_chat: int) -> int:
         fresh = [r for r in rows if r["ts"] > marks[channel]
                  and r["user_id"] != _owner_user_id]
         failed = False
+        last_ok_ts = ""
         ordered = sorted(rows, key=lambda x: x["ts"])
         for r in sorted(fresh, key=lambda x: x["ts"]):
             if not mentions_owner(r["text"], _owner_user_id, _owner_handle):
@@ -265,8 +266,14 @@ async def tick(channels: list, owner_chat: int) -> int:
                 log_event("slack_watch_surface_failed", channel=channel,
                           error=str(exc)[:100])
                 failed = True
+                # the mentions surfaced BEFORE this one are done — the
+                # watermark moves past them so they are not re-asked next
+                # tick (review 2026-09-03); this one is retried
+                if last_ok_ts:
+                    marks[channel] = max(marks[channel], last_ok_ts)
                 break  # keep order; retry this mention next tick
             surfaced += 1
+            last_ok_ts = r.get("ts") or last_ok_ts
             log_event("slack_watch_mention", channel=channel, by=r["user"])
         if newest and not failed:
             # delivery truth: the watermark advances only past messages

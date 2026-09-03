@@ -2,6 +2,7 @@
 on startup so a restart doesn't lose pending reminders.
 """
 import json
+from datetime import datetime, timezone
 
 from kyraan.control_plane.filelock import atomic_write_text, locked
 import uuid
@@ -30,6 +31,8 @@ class Reminder:
     interval_minutes: int = 0   # for repeat="interval" (floor 15)
     window_start: str = ""      # "HH:MM" — interval reminders pause
     window_end: str = ""        # outside this daily window
+    delivered_at: str = ""      # a series' last delivery (claim released
+                                # on roll-forward; "remind me again" needs it)
 
 
 def _load_all() -> list[dict]:
@@ -163,6 +166,7 @@ def roll_forward(reminder_id: str, next_when_iso: str) -> None:
         for record in records:
             if record["id"] == reminder_id:
                 record["when_iso"] = next_when_iso
+                record["delivered_at"] = record.get("claimed_at") or datetime.now(timezone.utc).isoformat()
                 record["claimed_at"] = ""
                 record["takeover"] = False
         _save_all(records)

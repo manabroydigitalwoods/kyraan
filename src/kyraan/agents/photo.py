@@ -180,6 +180,14 @@ async def answer(chat_id: int, image_data_url: str, caption: str,
         log_event("photo_empty_retry", chat_id=chat_id, attempt=attempt)
     if enroll_name and (len(enroll_name) < 2 or len(enroll_name) > 40):
         enroll_name = None
+    if enroll_name:
+        # the channel accepts a vision-read enrollment only when the
+        # caption carries an enrollment word; decide that HERE too, so a
+        # rejected one still stores the photo as a moment instead of
+        # dropping it (review 2026-09-03)
+        from kyraan.agents import faces as _faces
+        if not _faces.enroll_words(caption):
+            enroll_name = None
     if document_text:
         # Document memory (2026-08-27): the transcription rode the SAME
         # vision call — ingest is free. Best-effort; the photo answer

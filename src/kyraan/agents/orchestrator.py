@@ -234,15 +234,27 @@ def _anchor_clock_time(raw_text: str, when_iso: str) -> str:
     global _CLOCK_RE
     import re
     if _CLOCK_RE is None:
-        _CLOCK_RE = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", re.I)
+        # "10.15 pm" is a dotted-minute time, common in Indian English —
+        # the old pattern read its ".15 pm" as "15 pm" and rewrote the
+        # reminder to 15:00 (review 2026-09-03). The lookbehind refuses
+        # a digit run that continues a number; the dot joins the minutes.
+        _CLOCK_RE = re.compile(r"(?<![\d.:])(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b", re.I)
     matches = _CLOCK_RE.findall(raw_text)
     if len(matches) != 1:
         return when_iso
     hh, mm, ap = matches[0]
     hour = int(hh) % 12 + (12 if ap.lower() == "pm" else 0)
     minute = int(mm) if mm else 0
+    if not (0 <= int(hh) <= 12 and minute < 60):
+        return when_iso
     parsed = scheduler._parse_when(when_iso)
     if (parsed.hour, parsed.minute) == (hour, minute):
+        return when_iso
+    # Only a NEAR miss is an extraction slip worth overriding; a stated
+    # time hours away from the model's is another event's boundary or a
+    # date the model resolved differently — leave it to the confirm gate.
+    stated_min, model_min = hour * 60 + minute, parsed.hour * 60 + parsed.minute
+    if min(abs(stated_min - model_min), 1440 - abs(stated_min - model_min)) > 90:
         return when_iso
     corrected = parsed.replace(hour=hour, minute=minute, second=0, microsecond=0)
     log_event("clock_time_anchored", stated=f"{hh}:{mm or '00'}{ap}", model_gave=when_iso,
@@ -489,6 +501,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
 
 
 _last_processing: dict = {}
+_background_tasks: set = set()
 
 
 def processing_marker(chat_id: int) -> str:
@@ -620,6 +633,7 @@ async def _finish_turn_async(chat_id, raw_text, reply, turn_started, redaction_t
                               "the local model is too slow to respond. Nothing "
                               "was saved; tell me again in a minute.)")
         _skip_extraction.reset(skip_token)
+        was_degraded = _degraded_turn.get()   # read BEFORE the reset (review 2026-09-03)
         _degraded_turn.reset(degraded_token)
         # Health layer (2026-08-27): the turn's verdict — one event with the
         # anomaly kinds this turn saw and its latency; a crossed threshold
@@ -630,7 +644,7 @@ async def _finish_turn_async(chat_id, raw_text, reply, turn_started, redaction_t
                   anomalies=sorted(set(anomalies)) or None,
                   anomaly_count=len(anomalies),
                   latency_ms=round((time.monotonic() - turn_started) * 1000),
-                  degraded=_degraded_turn.get() or None)
+                  degraded=was_degraded or None)
         if kernel.viewer_person() == "owner":
             # Warning lights are OWNER-ONLY: a non-owner turn's anomalies
             # still land in events and the nightly census, but the in-band
@@ -669,7 +683,9 @@ async def _finish_turn_async(chat_id, raw_text, reply, turn_started, redaction_t
         # Summary rolling is equally off-path: fire-and-forget — its own
         # error handling re-queues the backlog chunk on failure.
         import asyncio as _aio2
-        _aio2.create_task(_roll_summary(chat_id))
+        _task = _aio2.create_task(_roll_summary(chat_id))
+        _background_tasks.add(_task)          # the loop holds tasks weakly
+        _task.add_done_callback(_background_tasks.discard)
         _history_redaction.reset(redaction_token)
         _secret_turn.reset(secret_token)
         _user_redaction.reset(user_red_token)
@@ -746,6 +762,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     # never fall to the catch-all: re-stash and ask
                     # honestly instead of reporting a phantom failure.
                     log_event("confirmation_replay_regated", skill=call.skill_name)
+                    import uuid as _uuid_r
+                    _confirmation_nonce[chat_id] = _uuid_r.uuid4().hex[:12]  # buttons need a live nonce
                     _pending_confirmations[chat_id] = (call, handler, time.monotonic())
                     return (f"'{call.skill_name}' still needs a confirmation "
                             'step — reply "yes" again to proceed, or "no" to cancel.')
@@ -891,7 +909,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             return await _forget_document(chat_id, forget_doc.group(1).strip())
 
         forget_face = _FORGET_FACE_RE.match(raw_text)
-        if forget_face:
+        if forget_face and kernel.viewer_person() == "owner":   # the roster is biometric, owner-only
             # Deterministic, like the review phrases: deleting a biometric
             # must never depend on a model's routing choice.
             from kyraan.agents import faces as _faces
@@ -1166,7 +1184,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # out of the worker thread and broke the app's ability to handle
         # any further input. Log the real error, tell the user something
         # generic and safe.
-        log_event("handle_message_error", raw_text=raw_text, error=str(exc), error_type=type(exc).__name__)
+        log_event("handle_message_error", user_text=raw_text, error=str(exc), error_type=type(exc).__name__)
         return "Something went wrong handling that — try again, or rephrase."
 
 

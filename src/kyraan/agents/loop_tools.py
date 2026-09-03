@@ -250,7 +250,7 @@ async def _email_unread(chat_id: int, args: dict, raw_text: str):
         return await _email_read(chat_id, {"limit": min(int(args.get("limit", 2) or 2), 3)},
                                  raw_text)
     result = await kernel.run_tool(kernel.ToolCall(
-        "email.unread", {"limit": min(int(args.get("limit", 5)), 10)}))
+        "email.unread", {"limit": min(int(args.get("limit", 5) or 5), 10)}))
     from kyraan.agents import orchestrator
     if not orchestrator._cloud_tier_in_use():
         return result  # all-local models: nothing leaves the machine anyway
@@ -607,9 +607,13 @@ async def _reminders_cancel(chat_id: int, args: dict, raw_text: str):
 
 
 async def _reminders_cancel_gated(chat_id: int, args: dict):
-    wanted = str(args["reminder_id"]).lower()
-    match = next((r for r in scheduler.store.list_pending(chat_id)
-                  if r.id.startswith(wanted)), None)
+    wanted = str(args.get("reminder_id", "") or "").lower().strip()
+    if len(wanted) < 4:
+        raise kernel.ToolFailed("say which reminder — list reminders first and use its id")
+    hits = [r for r in scheduler.store.list_pending(chat_id) if r.id.startswith(wanted)]
+    if len(hits) > 1:
+        raise kernel.ToolFailed(f"{wanted!r} matches {len(hits)} reminders — use a longer id")
+    match = hits[0] if hits else None
     if match is None:
         raise kernel.ToolFailed(f"no pending reminder with id {wanted!r} — list reminders first")
     scheduler.cancel_reminder(match.id)
@@ -807,7 +811,8 @@ async def _goals_create(chat_id: int, args: dict, raw_text: str):
             chat_id, person=person, stage=kernel.viewer_stage(),
             title=str(args.get("title", "")),
             why=str(args.get("why", "") or ""),
-            steps=args.get("steps") or [],
+            steps=([x.strip() for x in args["steps"].split(",") if x.strip()]
+                   if isinstance(args.get("steps"), str) else (args.get("steps") or [])),
             cadence_hours=int(args.get("cadence_hours", 24) or 24))
     except ValueError as exc:
         raise kernel.ToolFailed(str(exc))
@@ -870,6 +875,10 @@ async def _goals_set_status(chat_id: int, args: dict, raw_text: str):
 
 async def _rules_create(chat_id: int, args: dict, raw_text: str):
     from kyraan.triggers import event_rules
+    try:
+        args = {**args, "for_minutes": int(float(args.get("for_minutes") or 0))}
+    except (TypeError, ValueError):
+        raise kernel.ToolFailed("for_minutes must be a number of minutes")
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("rules.create", dict(args))
     try:
@@ -1335,7 +1344,8 @@ async def _persons_set_access(chat_id: int, args: dict, raw_text: str):
 _MEDIA_CAPABILITIES = ("media.photo", "media.file", "media.voice",
                        "media.location")
 # Owner-authority tools can NEVER be granted — no escalation path exists.
-_NEVER_GRANTABLE = ("persons.set_access", "persons.set_tools")
+_NEVER_GRANTABLE = ("persons.set_access", "persons.set_tools",
+                    "faces.check_photo", "faces.remember", "faces.forget", "faces.list")
 
 
 async def _my_abilities(chat_id: int, args: dict, raw_text: str):
@@ -1675,9 +1685,12 @@ async def _speaker_volume(chat_id: int, args: dict, raw_text: str):
     0-10, we store percent: a value ≤10 is the Alexa scale (7 -> 70%).
     Same owner caps as music volume: auto ≤70%, confirm above, ≤40 in
     quiet hours."""
+    import math
     try:
         value = float(args.get("percent"))
-    except (TypeError, ValueError):
+        if not math.isfinite(value):
+            raise ValueError
+    except (TypeError, ValueError, OverflowError):
         raise kernel.ToolFailed("give the volume as a number (0-10 like "
                                 "Alexa, or 0-100)")
     percent = int(value * 10) if 0 <= value <= 10 else int(value)
@@ -1731,8 +1744,11 @@ async def _music_play(chat_id: int, args: dict, raw_text: str):
         state = await _aio.to_thread(_sp.player_state)
     except Exception:
         pass
+    verified = (bool(state.get("is_playing")) if state else None)
     return {"playing": match["label"], "on": device["name"],
-            "verified": bool(state.get("is_playing")) or None,
+            "verified": verified,
+            **({"verify_note": "Spotify accepted the request but the device is not playing"}
+               if verified is False else {}),
             "now": state.get("track", "")}
 
 
@@ -1764,9 +1780,13 @@ async def _music_volume(chat_id: int, args: dict, raw_text: str):
     if not _sp.configured():
         raise kernel.ToolFailed("Spotify isn't connected — run "
                                 "scripts/setup_spotify_oauth.py once")
+    import math
     try:
-        percent = max(0, min(100, int(float(args.get("percent")))))
-    except (TypeError, ValueError):
+        _v = float(args.get("percent"))
+        if not math.isfinite(_v):
+            raise ValueError
+        percent = max(0, min(100, int(_v)))
+    except (TypeError, ValueError, OverflowError):
         raise kernel.ToolFailed("give the volume as a number 0-100")
     limit = (_VOLUME_DND_MAX
              if not kernel.can_send_proactively(chat_id=chat_id)
@@ -2538,6 +2558,8 @@ def _undo_faces_remember(args, result, prior):
 
 
 def _undo_home_switch(args, result, prior):
+    if isinstance(result, dict) and result.get("changed") is False:
+        return SKIP   # nothing changed — nothing to undo (review 2026-09-03)
     wanted = "on" if prior and prior.get("_tool") == "home.turn_on" else "off"
     observed = str((prior or {}).get("state", "")).lower()
     if observed == wanted:
@@ -2731,8 +2753,9 @@ async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
     if tool == "reminders.cancel":
         try:
             from kyraan.triggers import store as _rstore
-            reminder = _rstore.get(str(args.get("reminder_id", "")))
-            return dict(vars(reminder)) if reminder else None
+            wanted = str(args.get("reminder_id", "") or "").lower()
+            hits = [r for r in _rstore.list_pending(chat_id) if r.id.startswith(wanted)] if wanted else []
+            return dict(vars(hits[0])) if len(hits) == 1 else None
         except Exception:
             return None
     if tool == "tasks.cancel":
@@ -3036,6 +3059,11 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
         return f"That failed: {outcome['error']}"
     if isinstance(outcome, dict) and "__direct_reply__" in outcome:
         return outcome["__direct_reply__"]  # executor-composed receipt
+    if isinstance(outcome, dict) and outcome.get("verified") is False:
+        # The executor re-read the world and it disagrees with the write
+        # (review 2026-09-03: this receipt used to say "Deleted" anyway).
+        note = outcome.get("verify_note") or "the re-check did not show the change"
+        return f"I sent the {tool} command, but on re-check {note}. Please look before relying on it."
     if tool == "calendar.create_event":
         link = outcome.get("link", "") if isinstance(outcome, dict) else ""
         executed = outcome.get("start") if isinstance(outcome, dict) else None

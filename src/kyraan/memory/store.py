@@ -98,7 +98,9 @@ def propose_fact(relative_path: str, content: str, source: str, meta: dict | Non
     # the pending queue exactly as today; a reject IS the objection.
     from kyraan.memory import review_scaling
     auto_line = ""
-    if not review_scaling.next_proposal_holds():
+    if reviewer == "owner" and not review_scaling.next_proposal_holds():
+        # earned trust is the OWNER's; another viewer's proposal always
+        # holds for their review (review 2026-09-03)
         auto_line = f"auto_approve_after: {review_scaling.objection_deadline()}\n"
     with open(proposal_path, "x") as handle:
         handle.write(
@@ -173,14 +175,18 @@ def promote(proposal_path: Path, human: bool = True) -> Path:
         raise ValueError(
             "this is a DISPUTE notice, not a fact proposal — resolve it via "
             "the chat review flow (approve/reject), not promote")
-    if human:
-        from kyraan.memory import review_scaling
-        review_scaling.record_decision(approved=True)
     text = proposal_path.read_text()
     _, _, rest = text.partition("---\n")
     frontmatter, _, body = rest.partition("---\n")
     target_line = next(line for line in frontmatter.splitlines() if line.startswith("target:"))
     target_rel = target_line.split("target:", 1)[1].strip()
+    # Validate BEFORE the decision is counted (review 2026-09-03: a lesson
+    # proposal counted as a human review, then failed, then aborted
+    # "promote all").
+    _validate_path(target_rel)
+    if human:
+        from kyraan.memory import review_scaling
+        review_scaling.record_decision(approved=True)
     meta = {}
     meta_line = next((line for line in frontmatter.splitlines() if line.startswith("meta:")), "")
     if meta_line:

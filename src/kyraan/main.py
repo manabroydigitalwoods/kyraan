@@ -4,11 +4,12 @@ Phase 1 has exactly one channel and one orchestrator — no agent router yet.
 """
 from dotenv import load_dotenv
 
-from kyraan.channels import telegram_bot
+load_dotenv()   # BEFORE the import: modules read KYRAAN_* at import time
+
+from kyraan.channels import telegram_bot  # noqa: E402
 
 
 def main() -> None:
-    load_dotenv()
     telegram_bot.run()
 
 

@@ -126,10 +126,37 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             _kernel.reset_viewer_stage(stage_token)
     # where it was processed, on every reply (owner 2026-09-03)
     reply = f"{reply}\n\n{orchestrator.processing_marker(chat_id)}"
-    await _deliver(
-        chat_id,
-        lambda: context.bot.send_message(chat_id=chat_id, text=_plain(reply)),
-        reply)
+
+    async def _send_pieces():
+        for piece in _pieces(_plain(reply)):
+            await context.bot.send_message(chat_id=chat_id, text=piece)
+
+    await _deliver(chat_id, _send_pieces, reply)
+
+
+_TG_MAX = 4000   # Telegram's hard limit is 4096; keep headroom for markers
+
+
+def _pieces(text: str) -> list:
+    """Telegram refuses messages over 4096 chars (a long PDF read, a full
+    listing) — split on paragraph, then line, then hard (review 2026-09-03)."""
+    if len(text) <= _TG_MAX:
+        return [text]
+    out, cur = [], ""
+    for para in text.split("\n\n"):
+        while len(para) > _TG_MAX:
+            cut = para.rfind("\n", 0, _TG_MAX)
+            cut = cut if cut > 0 else _TG_MAX
+            if cur:
+                out.append(cur); cur = ""
+            out.append(para[:cut]); para = para[cut:].lstrip("\n")
+        if len(cur) + len(para) + 2 > _TG_MAX:
+            out.append(cur); cur = para
+        else:
+            cur = f"{cur}\n\n{para}" if cur else para
+    if cur:
+        out.append(cur)
+    return [p for p in out if p]
 
 
 async def _deliver(chat_id: int, send, reply_preview: str) -> bool:
@@ -140,8 +167,18 @@ async def _deliver(chat_id: int, send, reply_preview: str) -> bool:
     "the AC switched but the owner never saw the receipt" is a greppable
     fact instead of a mystery."""
     from kyraan.control_plane.logging_setup import log_event
+    from telegram.error import BadRequest, TimedOut
     try:
         await send()
+        return True
+    except BadRequest as exc:
+        # the same message will fail the same way (too long, bad markup)
+        log_event("reply_delivery_failed", chat_id=chat_id, error=str(exc)[:120],
+                  undelivered=reply_preview[:300])
+        return False
+    except TimedOut as exc:
+        # Telegram may have accepted it — a retry risks a duplicate
+        log_event("reply_delivery_uncertain", chat_id=chat_id, error=str(exc)[:120])
         return True
     except Exception as exc:
         log_event("reply_delivery_retry", chat_id=chat_id,
@@ -223,7 +260,7 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if name:
         chat_id = update.effective_chat.id
         stashed = faces.recent_photo(chat_id)
-        if stashed is not None:
+        if stashed is not None and faces.face_count(stashed) == 1:
             reply = await _enroll_face_gated(chat_id, name, stashed)
             orchestrator.record_exchange(chat_id, update.message.text or "", reply)
             await update.message.reply_text(
@@ -542,16 +579,21 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         with _stage("photo_download"):
             tg_file = await update.message.photo[-1].get_file()
             image_bytes = bytes(await tg_file.download_as_bytearray())
-        faces.stash_photo(chat_id, image_bytes)
+        if is_owner_turn:
+            faces.stash_photo(chat_id, image_bytes)   # biometric intake is owner-only
 
         # Either form: the strict phrase ("remember this face as X") or
         # the natural one ("remember this is Suman Ghosh") — with the
         # photo in the same message the intent is unambiguous, and the
         # confirm gate still stands (seen live 2026-08-26 23:08: the
         # natural caption described the photo instead of enrolling).
-        enroll_name = (faces.enroll_request(caption)
-                       or faces.enroll_from_text(caption)
-                       ) if is_owner_turn else None
+        enroll_name = faces.enroll_request(caption) if is_owner_turn else None
+        if is_owner_turn and enroll_name is None:
+            natural = faces.enroll_from_text(caption)
+            # "remember this is Ruma's gel" on a photo with no face is a
+            # naming, not an enrollment (review 2026-09-03)
+            if natural and faces.face_count(image_bytes) == 1:
+                enroll_name = natural
         if is_owner_turn and enroll_name is None and faces.self_claim(caption):
             # "its me": the owner asserting identity IS enrollment
             # intent for their own face — confirm gate still owns the
@@ -573,7 +615,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
             from kyraan.control_plane.logging_setup import turn_summary
             log_trace("turn_end", chat_id=chat_id, reply=reply, **turn_summary())
-            await update.message.reply_text(_plain(reply), do_quote=True)
+            await update.message.reply_text(_plain(reply), do_quote=True,
+                                            reply_markup=_confirm_keyboard(chat_id))
             return
 
         with _stage("face_recognize"):
@@ -602,8 +645,10 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 reply_markup=_confirm_keyboard(chat_id))
             return
         if (faces.available() and is_owner_turn
-                and re.search(r"who(?:'s| is)|do you (?:know|recogni[sz]e)",
+                and re.search(r"who(?:'s| is)\s+(?:this|that|he|she|they|it|in\b)"
+                              r"|do you (?:know|recogni[sz]e)\s+(?:him|her|them|this|who)",
                               caption, re.IGNORECASE)
+                and recognized.get("unknown_faces", 0) > 0
                 and not recognized["names"] and not recognized.get("maybe")):
             # A who-question with NO match answers with the truth about
             # what IS saved — live 2026-08-28: a no-match got a plain
@@ -635,7 +680,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             elif cap:
                 reply += "\n\nNo similar saved photos yet."
         hint_name = (faces.enroll_hint(caption)
-                     if faces.available() and is_owner_turn else None)
+                     if faces.available() and is_owner_turn
+                     and recognized.get("unknown_faces", 0) > 0 else None)
         if hint_name:
             reply += (f'\n\n(Want me to recognize this face later? Send a solo '
                       f'photo of them captioned "remember this face as '
@@ -655,8 +701,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     log_trace("turn_end", chat_id=update.effective_chat.id, reply=reply,
               **turn_summary())
     # a photo is read by the cloud vision model — say so, every time
-    await update.message.reply_text(_plain(f"{reply}\n\n☁️ via cloud (vision)"),
-                                    do_quote=True)
+    for piece in _pieces(_plain(f"{reply}\n\n☁️ via cloud (vision)")):
+        await update.message.reply_text(piece, do_quote=True)
 
 
 _PDF_MAX_BYTES = 15 * 1024 * 1024
@@ -1097,9 +1143,11 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
         # alert be marked sent and permanently suppressed).
         async def _once():
             await context.bot.send_message(chat_id=chat_id, text=text)
-            orchestrator.record_proactive(chat_id, text)
 
-        return await _deliver(chat_id, _once, text)
+        ok = await _deliver(chat_id, _once, text)
+        if ok:
+            orchestrator.record_proactive(chat_id, text)   # never inside the retried send
+        return ok
 
     at = briefs.brief_time("morning")
     if at is not None:

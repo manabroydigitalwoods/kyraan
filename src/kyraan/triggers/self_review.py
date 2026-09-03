@@ -45,11 +45,14 @@ def _todays_transcript(chat_id: int) -> list:
         raw = logging_setup.CHAT_LOG.read_text(errors="replace").splitlines()
     except OSError:
         return []
+    parsed = []
     for line in raw[-3000:]:
         try:
-            entry = json.loads(line)
+            parsed.append(json.loads(line))
         except json.JSONDecodeError:
             continue
+    from kyraan.agents.secrets import apply_redactions
+    for entry in apply_redactions(parsed):   # a redacted secret never reaches the critic
         if entry.get("chat_id") != chat_id:
             continue
         try:

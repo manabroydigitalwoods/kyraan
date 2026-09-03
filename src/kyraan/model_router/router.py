@@ -113,11 +113,11 @@ def quota_alert_due() -> str:
         if ledger.get(marker):
             continue
         with locked(COST_LEDGER_PATH):
-            ledger = _read_ledger()  # re-read under the lock
+            ledger = _read_ledger_file()  # the file is the write authority (review 2026-09-03)
             if ledger.get(marker):
                 continue
             ledger[marker] = True
-            atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+            _save_ledger(ledger)
         log_event("quota_alert", provider=provider, used=used, limit=limit)
         return (
             f"{provider} is at {used * 100 // limit}% of its {limit:,}-token free daily "
@@ -138,14 +138,16 @@ def budget_alert_due() -> bool:
     if (spent / budget) * 100 < budget_alert_threshold_pct():
         return False
     with locked(COST_LEDGER_PATH):
-        ledger = _read_ledger()
+        # The PG mirror can trail the file by a deferred write; reading it
+        # here and writing the file back regressed today's spend (review
+        # 2026-09-03). The file is the write authority under its lock.
+        ledger = _read_ledger_file()
         key = local_now().date().isoformat()
         alerted = ledger.get("alerted_dates", [])
         if key in alerted:
             return False
         ledger["alerted_dates"] = alerted + [key]
-        COST_LEDGER_PATH.parent.mkdir(exist_ok=True)
-        atomic_write_text(COST_LEDGER_PATH, json.dumps(ledger, indent=2))
+        _save_ledger(ledger)
     log_event("budget_alert", spent_today=spent, budget=budget)
     return True
 
@@ -173,7 +175,8 @@ def _get_anthropic_client(provider_cfg: dict):
     if _anthropic_client is None:
         from anthropic import Anthropic
 
-        _anthropic_client = Anthropic(api_key=os.environ[provider_cfg["api_key_env"]])
+        _anthropic_client = Anthropic(api_key=os.environ[provider_cfg["api_key_env"]],
+                                      timeout=90.0, max_retries=0)
     return _anthropic_client
 
 
@@ -203,7 +206,10 @@ def _get_openai_compatible_client(provider: str, provider_cfg: dict):
             raise ModelProviderError(
                 f"{api_key_env} is not set in this process's environment")
         api_key = os.environ[api_key_env] if api_key_env else "not-needed"
-        kwargs = {"api_key": api_key}
+        # The router is the only retry policy: SDK defaults (600 s timeout,
+        # 2 hidden retries) made one stalled call block a worker thread for
+        # minutes and multiplied doomed attempts (review 2026-09-03).
+        kwargs = {"api_key": api_key, "timeout": 90.0, "max_retries": 0}
         if base_url:
             kwargs["base_url"] = base_url
         _openai_compatible_clients[cache_key] = OpenAI(**kwargs)
@@ -438,6 +444,8 @@ def _call_openai_compatible(
         import re
         thought = "\n".join(re.findall(r"<think>(.*?)</think>", text, re.S)).strip()
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+        # cut off mid-reasoning (max_tokens): the open block is not a reply
+        text = re.sub(r"<think>.*\Z", "", text, flags=re.S).strip()
         reasoning = reasoning or (thought or None)
     return _RawResult(text=text, usage=usage, reasoning=reasoning)
 
@@ -696,6 +704,8 @@ def call(
                           model=model)
                 _cooldown_until[provider] = time.monotonic() + _COOLDOWN_S
                 break
+            if ("cannot process images" in text or "Unknown provider kind" in text):
+                break   # permanent for this call — retries and backoff change nothing
             if ("is not set in this process" in text  # missing api key
                     # Auth failures are permanent for this process: a 401
                     # got 3 full attempts live (2026-08-27, bad key at
@@ -707,7 +717,11 @@ def call(
             if attempt < attempts - 1:
                 time.sleep(_RETRY_BACKOFF_SECONDS[attempt])
 
-    if "429" in str(last_exc) or "rate" in str(last_exc).lower():
+    _err = str(last_exc).lower()
+    if ("429" in _err or "rate limit" in _err or "rate_limit" in _err
+            or "ratelimit" in type(last_exc).__name__.lower()):
+        # "rate" alone matched "generate"/"accurate" and cooled a healthy
+        # provider for two minutes on an unrelated 500 (review 2026-09-03)
         _cooldown_until[provider] = time.monotonic() + _COOLDOWN_S
         log_event("provider_cooldown", provider=provider, seconds=_COOLDOWN_S)
     raise ModelProviderError(f"{provider}/{model} failed after {attempts} attempts: {last_exc}") from last_exc

@@ -101,6 +101,15 @@ def _allowed_hosts(bind_host: str) -> set:
     return hosts
 
 
+
+def _same(a: str, b: str) -> bool:
+    """Constant-time compare that survives non-ASCII input (a bare
+    compare_digest on str raised TypeError and reset the connection)."""
+    try:
+        return hmac.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
+    except Exception:
+        return False
+
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "kyraan-panel"
@@ -157,7 +166,7 @@ class _Handler(BaseHTTPRequestHandler):
         for candidate in (self._cookie_token(),
                           self.headers.get("X-Kyraan-Token") or "",
                           (params.get("token") or [""])[0]):
-            if candidate and hmac.compare_digest(candidate, expected):
+            if candidate and _same(candidate, expected):
                 return True
         return False
 
@@ -187,7 +196,7 @@ class _Handler(BaseHTTPRequestHandler):
             # app.js, which arrive with no token and no cookie — an
             # unstyled page with a stuck "connecting…". Set the cookie and
             # bounce to the same path with only the token removed.
-            if not hmac.compare_digest(supplied, self.server.token):
+            if not _same(supplied, self.server.token):
                 self._error(403, "bad token")
                 return
             cookie = (f"{COOKIE_NAME}={urllib.parse.quote(supplied)}; "
@@ -211,7 +220,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _static(self, path: str):
         name = "index.html" if path == "/" else path.lstrip("/")
         target = (STATIC_DIR / name).resolve()
-        inside = str(target).startswith(str(STATIC_DIR.resolve()))
+        inside = target.is_relative_to(STATIC_DIR.resolve())   # a path test, not a prefix test
         if inside and target.is_file():
             content_type = _STATIC_TYPES.get(target.suffix,
                                              "application/octet-stream")

@@ -96,7 +96,7 @@ def termination() -> str:
 
 # Undoable tools that execute WITHOUT a confirm gate and whose inverse
 # needs pre-write observation. Gated tools capture in confirmed_handler.
-_PRIOR_AT_DISPATCH: frozenset = frozenset()
+_PRIOR_AT_DISPATCH: frozenset = frozenset({"reminders.cancel", "tasks.cancel"})
 
 # Referent dodge (the pronoun disease, third live appearance 2026-08-27
 # 23:41 — the prompt rule lost three times, so this is the rail): a
@@ -642,6 +642,12 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
     web_searches = 0     # per-turn search budget (2) — see the nudge below
 
     for step in range(_MAX_STEPS):
+        # A reply-correction nudge on the FINAL step can never be answered:
+        # the draft would be thrown away and the turn would end as a fake
+        # outage (review 2026-09-03: eight correction caps against five
+        # steps — the live ~12% "step cap without a reply"). On the last
+        # step the draft stands, flaws and all; a reply beats silence.
+        last_step = step == _MAX_STEPS - 1
         try:
             response = await router.acall(prompt=transcript, system=system,
                                            tier=tier, force_json=True)
@@ -677,6 +683,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             answers = decision.get("answers_request")
             reason = str(decision.get("reason", "") or "")
             if (answers is False and contract_corrections < 2
+                    and not last_step
                     and reason not in challenged_reasons):
                 challenge = None
                 if reason == "ambiguous_referent":
@@ -710,7 +717,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                               draft=reply[:150])
                     transcript += f"\nSYSTEM: STOP — {challenge}"
                     continue
-            if (referent_corrections < 1
+            if (referent_corrections < 1 and not last_step
                     and _REFERENT_DODGE_RE.search(reply)):
                 # "Which Kamal do you mean" NAMES the person it claims is
                 # ambiguous — when the questioned word is a capitalized
@@ -730,7 +737,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                         f"{person}. Do not ask again — answer or act for "
                         f"{person} directly now.")
                     continue
-            if (deflection_corrections < 2 and not read_only
+            if (deflection_corrections < 2 and not read_only and not last_step
                     and _DEFLECTION_RE.search(reply)):
                 # Deflection guard. The prompt-level "stated request IS the
                 # want" rule lost, live, to history self-poisoning: once one
@@ -794,7 +801,7 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                             violation = ("PRESENTS a reminder listing that "
                                          "CONTRADICTS the reminders.list "
                                          "result shown above")
-            if violation and false_success_corrections < 3:
+            if violation and false_success_corrections < 3 and not last_step:
                 # P3.7a false-success rail: no write ran, yet the draft
                 # claims/promises/narrates one. The honest exits are
                 # CALLING the tool or admitting nothing happened.
@@ -849,7 +856,9 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                              if contract_corrections else "replied")
             return reply
 
-        if action != "call" or decision.get("tool") not in TOOLS:
+        tool_name = decision.get("tool")
+        if (action != "call" or not isinstance(tool_name, str)
+                or tool_name not in TOOLS):   # a list/dict "tool" is unhashable
             malformed_retries += 1
             if malformed_retries > 1:
                 _termination.set("tier_failed:unknown_action")
@@ -888,8 +897,6 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                            "action was requested, tell the user to send it "
                            "as a fresh message.")
             continue
-        if tool == "web.search":
-            web_searches += 1
         if web_tainted and tool not in _READ_ONLY_TOOLS:
             # The taint rail: once ANY web text is in the transcript, no
             # non-read tool may run this turn — deterministic, so a
@@ -918,6 +925,8 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
                            "its result is above. Use it and reply to the user NOW.")
             continue
         calls_seen[signature] = 1
+        if tool == "web.search":
+            web_searches += 1     # charged for a search that runs, not a refused repeat
         log_event("agent_tool_call", chat_id=chat_id, tool=tool, step=step + 1,
                   consider=consider)
         executed_tool = True
@@ -936,10 +945,18 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             # The standard confirm flow, verbatim: stash the EXACT call;
             # the owner's yes replays it byte-identical through the kernel.
             call = kernel.SkillCall("agent.action", {"tool": tool}, )
+            try:
+                describe = _describe_call(tool, args, raw_text, chat_id)
+            except Exception as exc:
+                # model-supplied args ("10 min", "9am") are validated by the
+                # executor AFTER it raises for confirmation; the describer
+                # must not turn that into a lost turn (review 2026-09-03)
+                log_event("describe_call_failed", tool=tool, error=str(exc)[:100])
+                describe = f"Run {tool} with {json.dumps(args)[:200]}?"
             return await orchestrator._gated(
                 chat_id, call,
                 build_confirmed_handler(chat_id, tool, dict(args), raw_text),
-                describe=_describe_call(tool, args, raw_text, chat_id),
+                describe=describe,
                 replay={"tool": tool, "args": dict(args), "raw_text": raw_text})
         except kernel.KillSwitchEngaged:
             raise
@@ -960,7 +977,10 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
         if (tool not in _READ_ONLY_TOOLS
                 and not (isinstance(result, dict) and result.get("error"))):
             wrote_this_turn = True
-        if taint.source_class(tool) == taint.WEB_UNTRUSTED:
+        if (taint.source_class(tool) in (taint.WEB_UNTRUSTED, taint.EMAIL_UNTRUSTED)
+                and not (isinstance(result, dict) and "__direct_reply__" in result)):
+            # email subjects reach the transcript raw on the local tier —
+            # third-party text locks writes exactly like web text
             # The class map (control_plane/taint.py) is the one checked
             # place naming which tool results are third-party text — the
             # rail reads it instead of hardcoding tool names (plan §3c).

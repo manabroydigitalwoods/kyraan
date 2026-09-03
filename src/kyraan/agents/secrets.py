@@ -38,14 +38,23 @@ WINDOW_S = 15 * 60
 RETRO_ENTRIES = 4   # the two exchanges before "keep this secret"
 
 _OPENS = re.compile(
-    r"\b(?:secret|secrets|confidential|off\s+the\s+record|between\s+(?:us|you\s+and\s+me)|"
-    r"don'?t\s+tell\s+(?:anyone|anybody|nobody)|tell\s+no\s*one|"
-    r"gupt|raaz|raz\s+ki\s+baat|private\s+baat|secret\s+baat)\b", re.IGNORECASE)
+    # An INSTRUCTION shape, never a bare noun (review 2026-09-03: "what's
+    # the secret to good biryani", "list my github secrets", "the meeting
+    # between us and the vendor" would each have flipped the turn to a
+    # tool-less local window).
+    r"\b(?:ek|a|one|my)\s+secret\b(?!\s+(?:ingredient|recipe|sauce|santa|to\b))"
+    r"|\bsecret\s+baat\b|\bprivate\s+baat\b|\bgupt\s+baat\b|\braaz\s+ki\s+baat\b"
+    r"|\bi\s+have\s+a\s+secret\b|\bthis\s+is\s+(?:a\s+)?(?:secret|confidential)\b"
+    r"|\b(?:keep|rakh\w*)\b.{0,30}\b(?:secret|confidential|private|between\s+us)\b"
+    r"|\b(?:secret|confidential)\b.{0,20}\b(?:rakh\w*|rakha)\b"
+    r"|\b(?:stays?|is|strictly|just|only)\s+between\s+us\b|\bbetween\s+us\s+only\b"
+    r"|\boff\s+the\s+record\b|\bdon'?t\s+tell\s+(?:anyone|anybody|nobody)\b|\btell\s+no\s*one\b",
+    re.IGNORECASE)
 _RETRO = re.compile(
-    r"\b(?:isko|isse|is\s+baat|ye|yeh|this|that|it|these|those)\b.*"
-    r"\b(?:secret|confidential|between\s+us|off\s+the\s+record)\b"
-    r"|\b(?:keep|rakh|rakho|rakhna|rakhiye)\b.*\b(?:secret|confidential)\b"
-    r"|\b(?:secret|confidential)\b.*\b(?:rakho|rakhna|rakhiye|rakha)\b",
+    # about what was JUST said: an object pronoun bound to keep/rakho
+    r"\b(?:keep|rakh\w*)\s+(?:this|that|it|these|isko|isse|ye|yeh|is\s+baat)\b"
+    r"|\b(?:isko|isse|is\s+baat|ye|yeh|this|that|it)\s+(?:ko\s+)?(?:secret|confidential)\s+(?:rakh\w*|rakha)\b"
+    r"|\b(?:this|that|it)\s+(?:stays|is)\s+(?:strictly\s+)?(?:between\s+us|off\s+the\s+record)\b",
     re.IGNORECASE)
 _CLOSES = re.compile(
     r"^\s*(?:bas\s+itna\s*hi|bas|that'?s\s+all|that\s+is\s+all|done|ok\s+done|"
@@ -92,7 +101,10 @@ def set_private(chat_id: int, on: bool) -> None:
 
 
 def opens(text: str) -> bool:
-    return bool(_OPENS.search(str(text or "")))
+    t = str(text or "").strip()
+    if t.endswith("?") and not re.search(r"\b(?:rakh\w*|keep)\b", t, re.IGNORECASE):
+        return False               # a question about secrets is not a secret
+    return bool(_OPENS.search(t))
 
 
 def retro(text: str) -> bool:

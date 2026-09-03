@@ -188,8 +188,16 @@ def _schedule(reminder: store.Reminder) -> None:
         # late rather than silently pretending it's on time or never
         # firing at all.
         log_event("reminder_overdue", reminder_id=reminder.id, when_iso=reminder.when_iso)
-        text = f"{reminder.text} (was due {reminder.when_iso})"
-        when = local_now()
+        if reminder.repeat:
+            # A SERIES that was missed skips to its next occurrence —
+            # firing "drink water (was due 10:00)" at 23:00 outside its
+            # window was the alternative (review 2026-09-03). The window
+            # logic lives in advance_past_now.
+            when = advance_past_now(reminder)
+            store.roll_forward(reminder.id, when.isoformat())
+        else:
+            text = f"{reminder.text} (was due {reminder.when_iso})"
+            when = local_now()
     _schedule_fn(
         reminder.id,
         when,
@@ -344,6 +352,15 @@ def advance_for(record, from_when=None) -> "datetime":
     from datetime import time as _time
 
     when = from_when if from_when is not None else _parse_when(record.when_iso)
+    # Recurrence arithmetic runs in the configured ZoneInfo, never on a
+    # frozen "+05:30" offset — a daily 07:00 drifted to 08:00 across DST
+    # in zones that have it (review 2026-09-03).
+    cfg_tz = local_now().tzinfo
+    if when.utcoffset() == when.astimezone(cfg_tz).utcoffset():
+        # same zone, stored as a frozen offset: attach the real ZoneInfo so
+        # the arithmetic below follows DST. A record in a DIFFERENT zone
+        # keeps its own — its window was written in that zone.
+        when = when.astimezone(cfg_tz)
     if record.repeat != "interval":
         return advance_occurrence(when, record.repeat)
     nxt = when + timedelta(minutes=max(record.interval_minutes, _MIN_INTERVAL_MINUTES))
@@ -496,12 +513,16 @@ def snooze_reminder(chat_id: int, minutes: int,
     # no id: the most recently DELIVERED reminder for this chat
     recent, recent_at = None, None
     for record in store._load_all():
-        if record.get("chat_id") != chat_id or not record.get("claimed_at"):
+        # a recurring reminder releases its claim on delivery and keeps
+        # delivered_at instead (review 2026-09-03: the id-less snooze
+        # could never find the water ping it had just sent)
+        stamp = record.get("claimed_at") or record.get("delivered_at")
+        if record.get("chat_id") != chat_id or not stamp:
             continue
         if not (record.get("sent") or record.get("repeat")):
             continue  # never delivered
         try:
-            claimed = datetime.fromisoformat(record["claimed_at"])
+            claimed = datetime.fromisoformat(stamp)
         except ValueError:
             continue
         age = (datetime.now(timezone.utc) - claimed).total_seconds()

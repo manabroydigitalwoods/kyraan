@@ -177,7 +177,8 @@ def _add_locked(entries, new_id, content, target, source, kind, term,
             if not entry["active"]:
                 continue
             entry_words = _words(entry["content"])
-            if entry_words and (entry_words <= old_words or old_words <= entry_words):
+            if entry_words and (entry_words <= old_words
+                                or (len(old_words) >= 3 and old_words <= entry_words)):
                 if entry.get("author", "owner") != author:
                     # P3.5d (arch §4): a contradiction ACROSS people never
                     # supersedes — supersession stays within one
@@ -589,8 +590,9 @@ def _purge_matching_pending(forgotten_contents: list) -> None:
             if not body_words:
                 continue
             for words in forgotten_words:
-                if (body_words <= words or words <= body_words
-                        or len(body_words & words) >= 2):
+                smaller = min(len(body_words), len(words))
+                if ((smaller >= 3 and (body_words <= words or words <= body_words))
+                        or len(body_words & words) >= max(3, smaller // 2)):
                     path.unlink(missing_ok=True)
                     log_event("memory_pending_purged_by_forget",
                               proposal=path.name)

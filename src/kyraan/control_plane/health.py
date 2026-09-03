@@ -115,7 +115,7 @@ def _census_24h() -> Counter:
     files = [logging_setup.EVENT_LOG]
     archive = getattr(logging_setup, "ARCHIVE_DIR", None)
     if archive and archive.exists():
-        files += sorted(archive.glob("*/events.jsonl"))[-2:]
+        files += sorted(archive.glob("*/events-*.jsonl"))[-2:]   # rotated names carry a stamp
     for path in files:
         if not path.exists():
             continue

@@ -26,7 +26,7 @@ def test_web_taint_rail_reads_the_class_map():
 
     from kyraan.agents import agent_loop
     src = inspect.getsource(agent_loop)
-    assert "taint.source_class(tool) == taint.WEB_UNTRUSTED" in src
+    assert "taint.source_class(tool) in (taint.WEB_UNTRUSTED, taint.EMAIL_UNTRUSTED)" in src
 
 
 def test_contracts_derive_and_every_write_is_confirm_gated():

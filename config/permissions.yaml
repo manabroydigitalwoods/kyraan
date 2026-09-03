@@ -383,7 +383,8 @@ tools:
     description: List channels in the owner's personal Slack workspace (public/private/DMs) — names and ids only.
     server: slack
     mcp_name: channels_list
-    taint: none          # metadata listing, not message text (2026-09-02)
+    # topics are free text set by other members — tainted like any Slack
+    # text (review 2026-09-03); slack.post accepts "#name" directly anyway
     permission: auto
     side_effects: read
     params:

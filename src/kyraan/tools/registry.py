@@ -234,6 +234,19 @@ class MCPStdioAdapter:
             stderr=asyncio.subprocess.DEVNULL,
             env={**_os.environ, "PATH": path, **self._env},
         )
+        try:
+            await self._handshake()
+        except Exception:
+            # a child that failed its handshake must not be reused as if
+            # it had succeeded (review 2026-09-03)
+            proc, self._proc = self._proc, None
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise
+
+    async def _handshake(self) -> None:
         await self._request("initialize", {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
@@ -258,11 +271,14 @@ class MCPStdioAdapter:
                 message = _json.loads(raw)
             except _json.JSONDecodeError:
                 continue  # servers may log stray lines to stdout; skip them
-            if message.get("id") != req_id:
-                continue  # notification or stale reply — not ours
+            if not isinstance(message, dict) or message.get("id") != req_id:
+                continue  # notification, array frame, or stale reply — not ours
             if "error" in message:
-                raise ToolError(f"MCP server error: {message['error'].get('message', message['error'])}")
-            return message.get("result", {})
+                err = message["error"]
+                detail = err.get("message", err) if isinstance(err, dict) else err
+                raise ToolError(f"MCP server error: {detail}")
+            result = message.get("result")
+            return result if isinstance(result, dict) else {}
 
     async def call(self, tool_name: str, args: dict) -> object:
         async with self._lock:
@@ -294,8 +310,17 @@ def _adapter(server: str):
         import os as _os
         # ${VAR} in a server's env block resolves from THIS process's
         # environment (.env) — credentials never sit in permissions.yaml.
-        env = {k: _os.path.expandvars(str(v))
-               for k, v in (entry.get("env") or {}).items()}
+        import re as _re
+        env = {}
+        for k, v in (entry.get("env") or {}).items():
+            v = str(v)
+            for name in _re.findall(r"\$\{(\w+)\}", v):
+                if name not in _os.environ:
+                    # expandvars would pass "${SLACK_TOKEN}" through verbatim
+                    # and the server would fail with invalid_auth instead
+                    # of naming the missing secret (review 2026-09-03)
+                    raise ToolError(f"tool server {server!r}: env {name} is not set")
+            env[k] = _os.path.expandvars(v)
         return MCPStdioAdapter(list(entry["command"]), env=env)
     raise ToolError(f"tool server {server!r}: unknown transport {transport!r} (builtin | mcp-stdio)")
 

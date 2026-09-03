@@ -527,7 +527,7 @@ def memory_map(limit: int = 400, include_inactive: bool = True) -> dict:
             cur.execute(
                 "SELECT legacy_id, content, subject, kind, sphere, era, term, "
                 "       importance, active, created_at, target, embedding "
-                "FROM fact ORDER BY created_at LIMIT %s", (limit,))
+                "FROM fact ORDER BY created_at DESC LIMIT %s", (limit,))   # newest first past the cap
             rows = cur.fetchall()
     except Exception as exc:                       # pg down, schema drift
         degraded = f"{type(exc).__name__}: {exc}"

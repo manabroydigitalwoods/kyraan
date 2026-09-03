@@ -183,7 +183,7 @@ def normalized_event_times(args: dict, raw_text: str) -> tuple:
     # before anything writes. Improvements beyond this come from model
     # quality, not more regex.
     matches = []
-    for m in re.finditer(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", raw_text, re.I):
+    for m in re.finditer(r"(?<![\d.:])(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)\b", raw_text, re.I):
         clause_lead = raw_text[max(0, m.start() - 60):m.start()].lower()
         clause_lead = re.split(r"[,.;!?]", clause_lead)[-1]
         if re.search(r"\b(after|before|until|till|by|past|once|when|following)\b", clause_lead):

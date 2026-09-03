@@ -146,8 +146,14 @@ async def test_write_asks_first_and_yes_replays_the_exact_call(scripted_model, m
     yes replays the stashed call byte-identical."""
     dispatched = []
 
+    gone = set()
+
     async def fake_dispatch(spec, args):
         dispatched.append((spec.name, args))
+        if spec.name == "calendar.delete_event":
+            gone.add(args.get("event_id"))
+        if spec.name == "calendar.get_event" and args.get("event_id") in gone:
+            return None            # the re-read after a delete finds nothing
         return {"id": args.get("event_id"), "deleted": True, "already_gone": False}
 
     monkeypatch.setattr(reg, "dispatch", fake_dispatch)

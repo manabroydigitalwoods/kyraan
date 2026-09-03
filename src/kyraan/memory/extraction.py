@@ -98,7 +98,7 @@ def _content_words(text: str) -> frozenset:
                      if w not in _STOPWORDS)
 
 
-def _supersede_pending_near_dup(content: str) -> None:
+def _supersede_pending_near_dup(content: str, keep=None) -> None:
     """A correction restated in chat must REPLACE its stale pending
     proposal, not queue beside it (found live 2026-08-31: "not MRR its
     MMR" left both wordings pending — approve-all would have saved the
@@ -108,10 +108,20 @@ def _supersede_pending_near_dup(content: str) -> None:
     new_words = _content_words(content)
     if len(new_words) < 4:
         return
+    from kyraan.control_plane import kernel as _kernel
+    mine = _kernel.effective_reviewer() or "unknown"
     for path in sorted(store.PENDING_DIR.glob("*.md")):
+        if keep is not None and path == keep:
+            continue
         try:
             body = path.read_text()
         except OSError:
+            continue
+        head = body.split("---", 2)[1] if body.count("---") >= 2 else ""
+        # another person's queue, a dispute notice, or a learned rule is
+        # never "the same fact restated" (review 2026-09-03)
+        if ("\ndispute:" in body or "target: persona/" in head
+                or f"reviewer: {mine}" not in head):
             continue
         old_words = _content_words(body.split("---", 2)[-1])
         if not old_words:
@@ -141,6 +151,11 @@ def _normalize_path(path) -> str:
 
 
 async def propose_from_message(raw_text: str, context: str = "", insist: bool = False) -> list[str]:
+    # The assistant's own guesses must not become facts (review
+    # 2026-09-03): only the user's lines of the context count, for the
+    # prompt and for the anti-fabrication word check alike.
+    context = "\n".join(ln for ln in str(context or "").splitlines()
+                        if not ln.lower().lstrip().startswith(("assistant:", "kyraan:")))
     """Extract stated facts from one message and queue them for human
     review. Returns the queued facts' content lines ([] when none), so the
     caller can tell the user what was noted."""
@@ -280,10 +295,12 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
                 "supersedes": fact.get("supersedes") or None,
             }
             try:
-                _supersede_pending_near_dup(str(fact.get("content", "")))
-                store.propose_fact(_normalize_path(fact["path"]),
-                                   fact["content"], source=args["text"],
-                                   meta=meta)
+                written = store.propose_fact(_normalize_path(fact["path"]),
+                                             fact["content"], source=args["text"],
+                                             meta=meta)
+                # only AFTER the replacement exists (review 2026-09-03: a
+                # rejected new proposal used to erase the good old one)
+                _supersede_pending_near_dup(str(fact.get("content", "")), keep=written)
             except (KeyError, TypeError, ValueError) as exc:
                 # Bad shape or a path outside the allowed memory layout —
                 # drop that fact, keep the rest.
