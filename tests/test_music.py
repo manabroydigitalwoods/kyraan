@@ -13,9 +13,10 @@ def configured(monkeypatch):
     monkeypatch.setattr(spotify, "configured", lambda: True)
 
 
-def test_media_exemption_is_exactly_seven_tools():
+def test_media_exemption_is_exactly_eight_tools():
     from kyraan.tools import registry
-    assert registry.MEDIA_AUTO_EXEMPT == {"music.play", "music.pause",
+    # music.skip joined 2026-09-03 ("next song" on the Echo)
+    assert registry.MEDIA_AUTO_EXEMPT == {"music.play", "music.pause", "music.skip",
                                           "music.volume", "home.announce",
                                           "home.speaker_volume",
                                           "home.media", "home.tv_play"}

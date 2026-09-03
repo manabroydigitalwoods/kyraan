@@ -90,8 +90,18 @@ def init(send_fn) -> None:
     _send_fn = send_fn
 
 
+_EXTRA_PATH = "/opt/homebrew/bin:/usr/local/bin:/opt/homebrew/sbin"
+
+
+def claude_binary() -> str | None:
+    """`claude` on the launchd PATH too (live 2026-09-03 16:08: the first
+    real task from Telegram failed with "not installed" — the service's
+    PATH has no Homebrew; the same lesson as npx for MCP servers)."""
+    return shutil.which("claude", path=f"{_EXTRA_PATH}:{os.environ.get('PATH', '')}")
+
+
 def available() -> bool:
-    return shutil.which("claude") is not None and (REPO / ".git").exists()
+    return claude_binary() is not None and (REPO / ".git").exists()
 
 
 # ---------------------------------------------------------------- jobs --
@@ -143,8 +153,7 @@ def prompt_for(task: str, branch: str) -> str:
 
 def _clean_env() -> dict:
     env = {k: v for k, v in os.environ.items() if k in _ENV_KEEP}
-    env["PATH"] = ":".join(p for p in [
-        "/opt/homebrew/bin", "/usr/local/bin", env.get("PATH", "")] if p)
+    env["PATH"] = ":".join(p for p in [_EXTRA_PATH, env.get("PATH", "")] if p)
     return env
 
 
@@ -202,7 +211,7 @@ def start(chat_id: int, task: str) -> dict:
 
 
 def _run_claude(job: dict) -> dict:
-    cmd = ["claude", "-p", prompt_for(job["task"], job["branch"]),
+    cmd = [claude_binary() or "claude", "-p", prompt_for(job["task"], job["branch"]),
            "--output-format", "json", "--max-turns", str(MAX_TURNS),
            "--model", job.get("model") or "sonnet",
            "--allowedTools", *ALLOWED_TOOLS]

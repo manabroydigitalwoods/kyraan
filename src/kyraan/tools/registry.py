@@ -58,7 +58,7 @@ class ToolSpec:
 # hours). home.announce joined 2026-09-02 (same owner ceremony):
 # spoken and DND-refused in the executor — voice never breaks
 # quiet hours. Nothing else joins without the same ceremony.
-MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause",
+MEDIA_AUTO_EXEMPT = frozenset({"music.play", "music.pause", "music.skip",
                                "music.volume", "home.announce",
                                "home.speaker_volume", "home.media",
                                "home.tv_play"})

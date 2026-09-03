@@ -721,6 +721,29 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # listening…" and the vaccination reminder was never created.
         # Recent turns are scanned (not just the newest) because a
         # proactive can land between the question and the answer.
+        skip_m = _re.match(
+            r"^\s*(?:(?:play\s+(?:the\s+)?)?(next|previous|prev|last)\s+(?:song|track|one)"
+            r"|skip(?:\s+(?:this|the)\s+(?:song|track))?|next|go\s+back(?:\s+(?:a|one)\s+(?:song|track))?)"
+            r"\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        if skip_m and kernel.viewer_person() == "owner":
+            # "next song" (live 2026-09-03 15:58: the loop said it could
+            # not switch tracks on the Echo). Media transport is auto by
+            # doctrine; deterministic here.
+            from kyraan.agents import loop_tools as _lt_m
+            from kyraan.tools import spotify as _sp_m
+            if _sp_m.configured():
+                word = (skip_m.group(1) or "next").lower()
+                direction = "previous" if word.startswith(("prev", "last")) or "back" in raw_text.lower() else "next"
+                _skip_extraction.set(True)
+                try:
+                    out = await _lt_m._music_skip(chat_id, {"direction": direction}, raw_text)
+                except kernel.ToolFailed as exc:
+                    return f"Couldn't skip: {exc}"
+                if out.get("verified") is False:
+                    return f"I sent {direction}, but Spotify still reports the same track — is something playing?"
+                now = f' — now "{out["now"]}"' if out.get("now") else ""
+                where = f' on {out["on"]}' if out.get("on") else ""
+                return f"Skipped to the {direction} track{where}{now}."
         if is_time_fragment(raw_text) and chat_id not in _pending_confirmations:
             recent = [t for role, t in _history[chat_id]
                       if role == "assistant"][-3:]

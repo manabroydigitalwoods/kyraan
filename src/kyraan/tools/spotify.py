@@ -145,6 +145,12 @@ def pause() -> None:
     _api("/me/player/pause", "PUT", {})
 
 
+def skip(direction: str = "next") -> None:
+    """Next/previous track on the active player (live 2026-09-03 15:58:
+    "next song" got "I can't switch tracks on Echo from here")."""
+    _api("/me/player/next" if direction != "previous" else "/me/player/previous", "POST", {})
+
+
 def set_volume(percent: int, device_id: str = "") -> None:
     extra = f"&device_id={device_id}" if device_id else ""
     _api(f"/me/player/volume?volume_percent={int(percent)}{extra}", "PUT", {})

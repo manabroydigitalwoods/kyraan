@@ -1769,6 +1769,29 @@ async def _music_play(chat_id: int, args: dict, raw_text: str):
             "now": state.get("track", "")}
 
 
+async def _music_skip(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.tools import spotify as _sp
+    if not _sp.configured():
+        raise kernel.ToolFailed("Spotify isn't connected — run "
+                                "scripts/setup_spotify_oauth.py once")
+    direction = "previous" if str(args.get("direction", "")).lower().startswith("prev") else "next"
+    try:
+        before = (await _aio.to_thread(_sp.player_state)).get("track", "")
+    except Exception:
+        before = ""
+    await _aio.to_thread(_sp.skip, direction)
+    try:
+        await _aio.sleep(0.8)
+        state = await _aio.to_thread(_sp.player_state)
+        now = state.get("track", "")
+        return {"skipped": direction, "now": now, "on": state.get("device", ""),
+                "verified": (now != before) if (now or before) else None}
+    except Exception:
+        return {"skipped": direction, "verified": None}
+
+
 async def _music_pause(chat_id: int, args: dict, raw_text: str):
     import asyncio as _aio
 
@@ -2391,6 +2414,12 @@ TOOLS = {
         "about": "Pause the music. Immediate, no confirm.",
         "run": _music_pause,
     },
+    "music.skip": {
+        "params": '{"direction": "next|previous"}',
+        "about": ("Next or previous track on whatever is playing via Spotify (Echo "
+                  "included) — \"next song\", \"skip\", \"go back\". Immediate, no confirm."),
+        "run": _music_skip,
+    },
     "home.media": {
         "params": '{"action": "play|pause|stop|next|previous", "target": "<optional: tv>"}',
         "about": ("TV/media transport — \"pause the tv\", \"next episode\", "
@@ -2619,6 +2648,7 @@ def _undo_reminders_reschedule(args, result, prior):
 VERIFICATION_CLASS = {
     "music.play": "read_after_write",
     "music.pause": "read_after_write",
+    "music.skip": "read_after_write",
     "music.volume": "same_store",  # prior-capture; the set itself is audible
     "home.announce": "same_store",  # audible by nature; nothing to re-read
     "home.speaker_volume": "same_store",  # prior captured; result audible
@@ -2682,6 +2712,9 @@ UNDO_MAP = {
         ("home.speaker_volume", {"percent": r["prior"]})
         if isinstance(r, dict) and r.get("prior") is not None else None),
     "music.pause": lambda a, r, p: None,
+    "music.skip": lambda a, r, p: ("music.skip", {"direction": "previous"
+                                                   if str(a.get("direction", "")).startswith("prev") is False
+                                                   else "next"}),
     "music.volume": lambda a, r, p: (
         ("music.volume", {"percent": r["prior"]})
         if isinstance(r, dict) and r.get("prior") is not None else None),

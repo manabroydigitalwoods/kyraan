@@ -43,9 +43,11 @@ class Case:
 
 CASES = [
     # Deterministic surfaces — HARD
-    Case("reminder.create", "remind me to call mom at 9pm today",
+    # "tomorrow", not "today": after 9 PM local the past-time refusal
+    # was correct and reminder.list then failed (2026-09-03 21:49)
+    Case("reminder.create", "remind me to call mom at 9pm tomorrow",
          [["9:00 PM"], ["remind", "Reminder set"]]),
-    Case("reminder.duplicate", "set a reminder to call mom at 9pm",
+    Case("reminder.duplicate", "set a reminder to call mom at 9pm tomorrow",
          [["already"], ["9:00 PM"]]),
     Case("reminder.list", "any reminders?", [["call mom"]]),
     Case("reminder.cancel", "cancel my reminder",
