@@ -1207,6 +1207,17 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                             name="still_open", job_kwargs=_DAILY_GRACE)
         logger.info("Chief of staff 'still open' scheduled daily at %s", cos_at)
 
+    # Duty #2 — house steward (2026-09-03): the 21:45 settle check.
+    from kyraan.triggers import house_steward as _steward
+    settle_at = _steward.settle_time()
+    if settle_at is not None:
+        async def _settle_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await _steward.fire_settle(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_settle_job, time=settle_at.replace(tzinfo=local_now().tzinfo),
+                            name="house_settle", job_kwargs=_DAILY_GRACE)
+        logger.info("House steward settle check scheduled daily at %s", settle_at)
+
     review_at = __import__("kyraan.triggers.self_review", fromlist=["x"]).review_time()
     if review_at is not None:
         from kyraan.triggers import self_review
