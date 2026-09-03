@@ -927,6 +927,24 @@ async def _rules_cancel(chat_id: int, args: dict, raw_text: str):
             "id": rule.id}
 
 
+def _narrow_forget(matches: list, wanted: str, raw_text: str = "") -> list:
+    """The words the owner chose decide between several matches (live
+    2026-09-04: "forget the 5 minute water reminder fact" matched both
+    water facts; the confirm ask then listed both while the forget took
+    one — the ask and the act must share this)."""
+    if len(matches) < 2:
+        return matches
+    import re as _re
+    def toks(t): return set(_re.findall(r"[a-z]{3,}|\d+", t.lower()))
+    def hit(a, b): return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
+    asked = toks(wanted) | toks(raw_text or "")
+    def score(m):
+        have = toks(m["content"])
+        return sum(1 for a in asked if any(hit(a, h) for h in have))
+    scored = sorted(((score(m), m) for m in matches), key=lambda t: -t[0])
+    return [scored[0][1]] if scored[0][0] > scored[1][0] else matches
+
+
 async def _memory_forget(chat_id: int, args: dict, raw_text: str):
     from kyraan.memory import engine
     wanted = str(args.get("fact", "")).strip()
@@ -936,20 +954,7 @@ async def _memory_forget(chat_id: int, args: dict, raw_text: str):
     if not matches:
         raise kernel.ToolFailed(
             f"no saved fact matches {wanted!r} — show the user what IS saved and ask which to forget")
-    if len(matches) > 1:
-        # The words the owner chose decide (live 2026-09-04: "forget the 5
-        # minute water reminder fact" matched both water facts and got
-        # "which one?" — "5 minute" was the answer already).
-        import re as _re
-        def toks(t): return set(_re.findall(r"[a-z]{3,}|\d+", t.lower()))
-        def hit(a, b): return a == b or (len(a) >= 4 and len(b) >= 4 and (a.startswith(b) or b.startswith(a)))
-        asked = toks(wanted) | toks(raw_text)
-        def score(m):
-            have = toks(m["content"])
-            return sum(1 for a in asked if any(hit(a, h) for h in have))
-        scored = sorted(((score(m), m) for m in matches), key=lambda t: -t[0])
-        if scored[0][0] > scored[1][0]:
-            matches = [scored[0][1]]
+    matches = _narrow_forget(matches, wanted, raw_text)
     if not kernel.confirmed_context():
         raise kernel.ConfirmationRequired("memory.forget", {"fact": wanted})
     forgotten = engine.forget([m["id"] for m in matches])
@@ -3154,7 +3159,8 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
                 f"that's about {count} messages a day, every day")
     if tool == "memory.forget":
         from kyraan.memory import engine
-        matched = engine.find_matches(str(args.get("fact", "")))
+        wanted = str(args.get("fact", ""))
+        matched = _narrow_forget(engine.find_matches(wanted), wanted)
         listing = "\n".join(f"- {m['content']}" for m in matched) or "(nothing)"
         return f"About to FORGET from memory:\n{listing}\nKept as history, out of every answer"
     if tool in ("home.turn_on", "home.turn_off"):

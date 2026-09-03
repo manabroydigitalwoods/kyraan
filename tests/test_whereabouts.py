@@ -121,3 +121,13 @@ def test_forget_narrows_by_the_owners_words(monkeypatch):
     monkeypatch.setattr(engine, "forget", lambda ids: got.extend(ids) or ["x"])
     asyncio.run(loop_tools._memory_forget(1, {"fact": "5 minute water reminder"}, "forget the 5 minute water reminder fact"))
     assert got == ["a"]
+
+
+def test_forget_confirm_ask_lists_only_the_narrowed_fact(monkeypatch):
+    from kyraan.agents import loop_tools
+    from kyraan.memory import engine
+    facts = [{"id": "a", "content": "Every day remind me every 5 minutes to drink water."},
+             {"id": "b", "content": "User wants reminders every hour each day to drink water."}]
+    monkeypatch.setattr(engine, "find_matches", lambda t: list(facts))
+    text = loop_tools._describe_call("memory.forget", {"fact": "5 minute water reminder"})
+    assert "5 minutes" in text and "every hour" not in text
