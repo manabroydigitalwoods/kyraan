@@ -1184,6 +1184,18 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                             name="evening_brief", job_kwargs=_DAILY_GRACE)
         logger.info("Evening brief scheduled daily at %s", evening_at)
 
+    # Duty #1 — Kiaan's keeper (2026-09-03): the morning check, after the
+    # brief, same proactive gate and delivery truth.
+    from kyraan.triggers import kiaan_keeper as _keeper
+    keeper_at = _keeper.check_time()
+    if keeper_at is not None:
+        async def _keeper_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await _keeper.fire(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_keeper_job, time=keeper_at.replace(tzinfo=local_now().tzinfo),
+                            name="kiaan_keeper", job_kwargs=_DAILY_GRACE)
+        logger.info("Kiaan's keeper scheduled daily at %s", keeper_at)
+
     review_at = __import__("kyraan.triggers.self_review", fromlist=["x"]).review_time()
     if review_at is not None:
         from kyraan.triggers import self_review

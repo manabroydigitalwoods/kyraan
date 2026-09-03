@@ -1016,6 +1016,47 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
 
             return await _gated(chat_id, SkillCall("code.discard", {"job": job}), _drop,
                                 describe=_lt_code._describe_call("code.discard", {"job": job}, raw_text, chat_id))
+        keeper_status = _re.match(
+            r"^\s*(?:kiaan(?:'s|’s)?\s+(?:status|vaccines?|vaccinations?|schedule|next\s+(?:vaccine|shot|dose))"
+            r"|(?:when|what)\s+is\s+kiaan(?:'s|’s)?\s+next\s+(?:vaccine|vaccination|shot|dose)"
+            r"|kiaan\s+milestones?)\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        keeper_mark = _re.match(
+            r"^\s*kiaan\s+(?:got|had|took|received|has\s+(?:had|got|taken))\s+(?:the\s+|his\s+)?"
+            r"(.{2,60}?)\s*(?:shot|dose|vaccine|vaccination|jab|injection)?\s*(?:today|yesterday|on\s+(\S+))?\s*[.!]*\s*$",
+            raw_text, _re.IGNORECASE)
+        keeper_skip = _re.match(
+            r"^\s*kiaan\s+(?:skipped|skips|is\s+skipping|won'?t\s+(?:get|take|have)|doctor\s+skipped)\s+(?:the\s+)?"
+            r"(.{2,60}?)\s*(?:shot|dose|vaccine|vaccination)?\s*[.!]*\s*$", raw_text, _re.IGNORECASE)
+        if (keeper_status or keeper_mark or keeper_skip) and kernel.viewer_person() == "owner":
+            # Kiaan's keeper (duty #1, 2026-09-03): the schedule Kyraan is
+            # responsible for. Status is a read; recording a dose or a
+            # skip is a health note about the child — confirm-gated.
+            from kyraan.triggers import kiaan_keeper as _keeper
+            _skip_extraction.set(True)
+            if keeper_status:
+                _history_redaction.set("[showed Kiaan's vaccination status]")
+                return _keeper.status_text()
+            m = keeper_mark or keeper_skip
+            words = m.group(1).strip()
+            skipped = bool(keeper_skip)
+            when = None
+            if keeper_mark and "yesterday" in raw_text.lower():
+                from datetime import timedelta as _td
+                when = (local_now() - _td(days=1)).date()
+
+            async def _record(_a: dict) -> str:
+                labels = _keeper.mark_done(words, when=when, skipped=skipped)
+                if not labels:
+                    return (f"I couldn't match \"{words}\" to a dose that's still open — "
+                            "say \"kiaan status\" to see the names I use.")
+                verb = "Noted as skipped" if skipped else "Recorded"
+                return f"{verb}: {'; '.join(labels)}. Say \"kiaan status\" for what's next."
+
+            return await _gated(
+                chat_id, SkillCall("kiaan.record", {"words": words, "skipped": skipped}), _record,
+                describe=(f"About to note that Kiaan {'is SKIPPING' if skipped else 'got'} "
+                          f"\"{words}\"" + (f" on {when.strftime('%d %b')}" if when else "")
+                          + " (his vaccination record)"))
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"

@@ -338,6 +338,30 @@ Cowork (950+ MCP connectors, multi-hour projects, cloud-run schedules).
 
 ---
 
+## 3e. Duties, not commands (2026-09-03)
+
+Owner, after a day of plumbing: *"something is missing… I'm thinking
+of Jarvis; he has lots of things to do."* The diagnosis: Kyraan waits
+for a Telegram message. It initiates only for the morning brief and
+threshold alerts; it owns no area of the owner's life where it is the
+one supposed to notice. Jarvis differs in three ways — he initiates,
+he has responsibilities, he is ambient. The plumbing is done; the
+next builds are DUTIES: an area Kyraan is responsible for, checked on
+a schedule, speaking first, through the same proactive gate (kill
+switch + DND) and delivery truth as reminders.
+
+| # | Duty | Owns | Speaks when | Status |
+|---|---|---|---|---|
+| 1 | **Kiaan's keeper** | vaccination schedule (IAP by age, anchored on the birth-date fact; done = card dates, vaccination-day photos, owner statements), milestones by age | a dose due within 3 weeks (once, then 3 days before); overdue once a fortnight; one milestone question per window; "kiaan status" on demand; "kiaan got / skipped X" confirm-gated | **built 2026-09-03** (`triggers/kiaan_keeper.py`, daily 08:05) |
+| 2 | **House steward** | air/temperature (already), purifier filter life with a reorder nudge, AC energy per month vs last month, nightly "house is settled" check | thresholds crossed; filter < 20%; month-end energy line; 23:00 settle check | proposed |
+| 3 | **Chief of staff** | Slack mentions (drafts exist), 08:00 "your day and what needs a reply", 18:00 "you never answered X", meeting prep the evening before from the people notes | daily at 08:00 / 18:00; the evening before a meeting | proposed |
+| 4 | **Voice in the room** | Alexa as an inbound channel ("Kyraan, when is Kiaan's next vaccine") | on demand | proposed (deferred 2026-09-02) |
+
+Build order: 1 (data already held, emotional value, proves "speaks
+first"), then 3 (daily felt value), then 2, then 4. Each duty is one
+module under `triggers/`, one scheduled job, one state file, one
+status command, and a test that it speaks at most once per fact.
+
 ## 4. Deferred (Explicitly Not v1)
 
 - OCR / Vision input
