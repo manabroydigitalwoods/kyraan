@@ -135,6 +135,16 @@ def start(chat_id: int, task: str) -> dict:
     venv = REPO / ".venv"
     if venv.exists() and not (workdir / ".venv").exists():
         os.symlink(venv, workdir / ".venv")
+        # per-worktree exclude, so the agent's `git status` is clean
+        # (the smoke run flagged the symlink as untracked)
+        try:
+            exclude = Path(_git(["rev-parse", "--git-path", "info/exclude"], workdir).strip())
+            exclude = exclude if exclude.is_absolute() else workdir / exclude
+            exclude.parent.mkdir(parents=True, exist_ok=True)
+            with open(exclude, "a") as fh:
+                fh.write("\n.venv\n")
+        except Exception as exc:
+            log_event("code_task_exclude_failed", error=str(exc)[:100])
     job = {"id": job_id, "chat_id": chat_id, "task": task, "branch": branch,
            "dir": str(workdir), "status": "running",
            "started": datetime.now(timezone.utc).isoformat(), "finished": "",
