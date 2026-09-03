@@ -988,6 +988,33 @@ def _wire_goals(job_queue: JobQueue, bot) -> None:
     goals.init(schedule_fn=schedule_fn, run_fn=run_fn, send_fn=send_fn)
 
 
+def _wire_voice_echo(job_queue: JobQueue, bot) -> None:
+    """Voice in the room (duty #4, 2026-09-03): poll the Echo's last
+    utterance; "Alexa, Kyraan …" runs the owner's pipeline and is spoken
+    back. Skips itself without Home Assistant or an allowlisted Echo."""
+    import os as _os
+
+    from kyraan.channels import voice_echo
+    if not (_os.environ.get("HASS_URL") and _os.environ.get("HASS_TOKEN")):
+        return
+    if not voice_echo.enabled() or not voice_echo.devices():
+        return
+
+    async def _send(chat_id: int, text: str) -> bool:
+        await bot.send_message(chat_id=chat_id, text=_plain(text))
+        orchestrator.record_proactive(chat_id, text)
+        return True
+
+    async def _poll(context: ContextTypes.DEFAULT_TYPE) -> None:
+        async with _lock_for(_owner_id()):
+            await voice_echo.tick(_owner_id(), _send)
+
+    job_queue.run_repeating(_poll, interval=voice_echo.poll_seconds(), first=5,
+                            name="voice_echo", job_kwargs=_ALWAYS_FIRE)
+    logger.info("Voice in the room: listening on %s every %ss",
+                ", ".join(voice_echo.devices()), voice_echo.poll_seconds())
+
+
 def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
     """Mention watch (2026-09-02): draft + confirm, never post. Skips
     itself entirely when Slack isn't mounted or the token is absent."""
@@ -1543,6 +1570,7 @@ def run() -> None:
     _wire_goals(app.job_queue, app.bot)
     _wire_slack_watch(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
+    _wire_voice_echo(app.job_queue, app.bot)
 
     # Files OUT (2026-08-28): the loop's files.send delivers through here.
     from kyraan.channels import file_send as _file_send
