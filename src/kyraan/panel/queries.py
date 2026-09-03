@@ -939,6 +939,10 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             "subject": fact["subject"], "kind": fact["kind"],
             "active": fact["active"], "importance": fact["importance"],
             "created": fact["created"],
+            # short = forgotten 14 days after it was learned; the brain
+            # draws it hollow (owner, 2026-09-04: "show the short-term
+            # memories in the brain?" — they were there, indistinguishable).
+            "term": fact.get("term") or "long",
         })
 
     # memory_map drops the raw vectors; re-read them for the mesh.

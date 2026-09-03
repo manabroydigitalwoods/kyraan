@@ -1292,3 +1292,16 @@ def test_documents_join_the_synapse_mesh_by_their_chunk_embeddings(monkeypatch, 
     # the mesh never invents an endpoint
     ids = {n["id"] for n in graph["nodes"]}
     assert not [e for e in graph["edges"] if e["a"] not in ids or e["b"] not in ids]
+
+
+def test_every_memory_neuron_says_its_term(monkeypatch, tmp_path, seeded_logs):
+    """Short-term facts were in the brain but indistinguishable: the map
+    knew the term and the brain dropped it. Every memory node carries
+    `term`, and it is only ever 'short' or 'long'."""
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+    graph = queries.brain_graph(fresh=True)
+    memories = [n for n in graph["nodes"] if n["type"] == "memory"]
+    assert memories
+    assert all(n.get("term") in ("short", "long") for n in memories)

@@ -1250,6 +1250,7 @@ const EDGE_STYLE = {
   wikilink:    { alpha: 0.7,  width: 1.4, rest: 85,  key: "--accent" },
 };
 const CORE = "k:kyraan";
+const SHORT_TERM_DAYS = 14;        // memory/engine._SHORT_TERM_DAYS
 
 const brain = {
   nodes: [], edges: [], byId: new Map(),
@@ -2293,6 +2294,13 @@ function drawGraph(canvas, view, opts) {
       ctx.lineTo(p.x, p.y + radius);
       ctx.lineTo(p.x - radius, p.y);
       ctx.closePath();
+    } else if (node.type === "memory" && node.term === "short") {
+      // Hollow: a short-term fact is held, not kept — it fades in 14
+      // days. Same colour, same size, no fill: the shape says "will go".
+      ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = panel;
+      ctx.beginPath(); ctx.arc(p.x, p.y, radius * 0.55, 0, Math.PI * 2);
     } else {
       ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     }
@@ -2686,6 +2694,18 @@ function renderSelection() {
     kvRow(list, "subject", node.subject);
     kvRow(list, "kind", node.kind);
     kvRow(list, "importance", node.importance);
+    // A short-term fact is forgotten 14 days after it was learned
+    // (memory/engine._SHORT_TERM_DAYS); say when.
+    if (node.term === "short") {
+      const born = Date.parse(node.created || "");
+      const gone = isFinite(born) ? new Date(born + SHORT_TERM_DAYS * 86400000) : null;
+      const left = gone ? Math.ceil((gone - Date.now()) / 86400000) : null;
+      kvRow(list, "term", "short — forgotten " + (gone ? gone.toISOString().slice(0, 10)
+        + (left !== null ? ` (${left <= 0 ? "due" : left + "d left"})` : "") : "after 14 days"),
+        left !== null && left <= 3);
+    } else {
+      kvRow(list, "term", node.term || "long");
+    }
     kvRow(list, "state", node.active ? "active" : "superseded", !node.active);
     kvRow(list, "created", (node.created || "").slice(0, 10));
   } else if (node.type === "skill") {
