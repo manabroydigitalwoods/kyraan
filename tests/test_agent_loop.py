@@ -55,7 +55,7 @@ async def test_plain_conversation_replies_without_tools(scripted_model, monkeypa
     scripted_model(['{"action": "reply", "text": "Hello Arun! How can I help?"}'])
 
     reply = await agent_loop.run(90, "hello")
-    assert reply == "Hello Arun! How can I help?"
+    assert reply == "Hello Arun!"        # the voice filter drops the servant question (2026-09-04)
     assert dispatched == []
 
 
@@ -325,6 +325,7 @@ async def test_cheap_tier_loop_takes_over_when_frontier_is_down(monkeypatch):
     a different system."""
     from kyraan.agents import orchestrator as _orch
     monkeypatch.setattr(_orch, "tier_chain", lambda: ("frontier", "cheap"))   # no standby in this scenario
+    monkeypatch.setattr(_orch, "_is_greeting", lambda t: False)              # greetings are deterministic now
     tiers_tried = []
 
     async def tiered(chat_id, raw_text, tier="frontier"):

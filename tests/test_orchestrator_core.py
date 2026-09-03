@@ -244,8 +244,13 @@ async def test_short_messages_skip_extraction_entirely(loop_reply, monkeypatch):
     called = []
     monkeypatch.setattr(orchestrator.extraction, "propose_from_message",
                         lambda *a, **k: called.append(1))
+    from kyraan.triggers import chief_of_staff as _cos
+
+    async def nothing_waiting(chat_id): return []
+    monkeypatch.setattr(_cos, "needs_reply_lines", nothing_waiting)
     reply = await orchestrator.handle_message(950_042, "hey")
-    assert reply.startswith("Hi!") and called == []
+    # a greeting is deterministic now (2026-09-04): time of day + a glance
+    assert reply.split(".")[0] in ("Morning", "Afternoon", "Evening", "Late one") and called == []
 
 
 async def test_statement_matching_a_saved_fact_says_already(loop_reply, monkeypatch):

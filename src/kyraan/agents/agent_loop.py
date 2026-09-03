@@ -527,6 +527,9 @@ def voice(reply: str) -> str:
     t = re.sub(r"[ \t]{2,}", " ", t)
     t = re.sub(r"!{2,}", "!", t)
     t = re.sub(r"\s+([,.;:!?])", r"\1", t)
+    # a servant's closing question is dropped when there is content before it
+    t = re.sub(r"\s*(?:what (?:do you want|would you like|can i do)[^.?!]*\?|how can i help[^.?!]*\?|"
+               r"anything else[^.?!]*\?|let me know[^.?!]*[.!])\s*$", "", t, flags=re.I) or t
     t = re.sub(r"(?m)^[ \t]+$", "", t).strip()
     if t and t[0].islower():
         t = t[0].upper() + t[1:]

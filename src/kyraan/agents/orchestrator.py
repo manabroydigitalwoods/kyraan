@@ -7,6 +7,8 @@ passed the full HARD eval twice consecutively.
 import contextvars
 import contextvars as _contextvars
 import json
+
+from kyraan.control_plane.dnd import local_now
 import re
 import time
 from collections import defaultdict, deque
@@ -509,6 +511,41 @@ def tier_chain() -> tuple:
     except Exception:
         tiers = {"frontier": {}, "cheap": {}}
     return tuple(t for t in ("frontier", "standby", "cheap") if t in tiers)
+
+
+async def _greeting_reply(chat_id: int) -> str:
+    """Time of day, then what is next or what is waiting — one line."""
+    from datetime import timedelta as _td
+    now = local_now()
+    hour = now.hour
+    hello = ("Morning." if 5 <= hour < 12 else "Afternoon." if hour < 17
+             else "Evening." if hour < 22 else "Late one.")
+    glance = ""
+    try:
+        end = now.replace(hour=23, minute=59, second=0, microsecond=0)
+        events = await kernel.run_tool(kernel.ToolCall(
+            "calendar.list_events", {"start": now.isoformat(), "end": end.isoformat()}), meta=True)
+        nxt = next((e for e in (events or []) if not e.get("all_day")), None)
+        if nxt:
+            from datetime import datetime as _dt
+            try:
+                at = _dt.fromisoformat(str(nxt["start"])).strftime("%I:%M %p").lstrip("0")
+            except ValueError:
+                at = str(nxt["start"])[11:16]
+            glance = f"Next: {nxt['title']} at {at}."
+    except Exception:
+        pass
+    try:
+        from kyraan.triggers import chief_of_staff as _cos_g
+        waiting = await _cos_g.needs_reply_lines(chat_id)
+        if waiting:
+            glance = (glance + " " if glance else "") + (
+                f"{len(waiting)} thing{'s' if len(waiting) != 1 else ''} waiting — say \"what's open\".")
+    except Exception:
+        pass
+    if not glance:
+        glance = "Nothing waiting."
+    return f"{hello} {glance}"
 
 
 _last_processing: dict = {}
@@ -1177,6 +1214,13 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             from kyraan.triggers import duties as _duties
             _skip_extraction.set(True)
             return _duties.status_text()
+        if _is_greeting(raw_text) and kernel.viewer_person() == "owner":
+            # "hello" got "Hello, Maan. What do you want done?" (live
+            # 2026-09-04 21:11) — the persona overshooting from eager into
+            # servant. A greeting is answered with the time of day and ONE
+            # useful glance, deterministically, no model.
+            _skip_extraction.set(True)
+            return await _greeting_reply(chat_id)
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"
