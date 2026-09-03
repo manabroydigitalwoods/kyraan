@@ -398,7 +398,14 @@ def build(host: str = "127.0.0.1", port: int = DEFAULT_PORT,
 
 def serve(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> None:
     token, generated = resolve_token()
-    server = build(host, port, token)
+    try:
+        server = build(host, port, token)
+    except OSError as exc:
+        if exc.errno in (48, 98):          # EADDRINUSE on macOS / Linux
+            raise SystemExit(
+                f"port {port} is already taken — another panel is probably running. "
+                f"Stop it (lsof -nP -iTCP:{port} -sTCP:LISTEN) or pick --port.") from None
+        raise
     shown = host if ":" not in host else f"[{host}]"
     # flush=True: redirected to a file, stdout is block-buffered and the
     # URL — the only place the token is ever shown — sits invisible in a
