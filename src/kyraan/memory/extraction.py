@@ -294,6 +294,24 @@ async def propose_from_message(raw_text: str, context: str = "", insist: bool = 
                 "flags": flags,
                 "supersedes": fact.get("supersedes") or None,
             }
+            # Precision (2026-09-04): the same fact in other words replaces
+            # its predecessor on approval; a near one is shown beside it.
+            try:
+                from kyraan.memory import engine as _engine
+                near = _engine.similar_active(str(fact.get("content", "")),
+                                              subject=str(meta.get("subject") or ""))
+                if near:
+                    best, _fid, old_text = near[0]
+                    verdict = _engine.similarity_verdict(best)
+                    if verdict == "replace" and not meta.get("supersedes"):
+                        meta["supersedes"] = old_text
+                        meta["similarity"] = best
+                    elif verdict == "similar":
+                        meta["similar_to"] = old_text
+                        meta["similarity"] = best
+                    log_event("extraction_similarity", best=best, verdict=verdict)
+            except Exception as exc:
+                log_event("extraction_similarity_failed", error=str(exc)[:80])
             try:
                 written = store.propose_fact(_normalize_path(fact["path"]),
                                              fact["content"], source=args["text"],

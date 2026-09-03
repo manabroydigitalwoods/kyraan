@@ -718,3 +718,54 @@ def memory_context(message: str = "") -> str:
     if _kernel.viewer_person() != "owner":
         return "(no facts stored yet)"  # P3.5c: the raw dump is owner-only
     return store.load_all_facts() or "(no facts stored yet)"
+
+
+# ---------------------------------------------------------------------
+# Similarity against the ACTIVE store (2026-09-04, owner: "do we check
+# similarly? do we precisely extract?"). Word overlap catches restated
+# facts with the same words; embeddings catch the same fact in other
+# words. An audit of 39 active facts found one contradiction living
+# beside its predecessor at cosine 0.76 — "every 5 minutes" vs "every
+# hour" — that word rules never joined.
+SIM_REPLACE = 0.85     # the same fact, reworded: the new one supersedes
+SIM_SIMILAR = 0.72     # worth showing the owner side by side
+
+
+def _active_with_vectors(subject: str = "") -> list:
+    """[(id, subject, content, vector)] for active facts that carry an
+    embedding, from the PG mirror."""
+    try:
+        import json as _j
+        from kyraan.store import pg as _pg
+        with _pg.connection() as conn:
+            rows = conn.execute(
+                """SELECT legacy_id, subject, content, embedding::text FROM fact
+                   WHERE active AND embedding IS NOT NULL""").fetchall()
+        return [(r[0], r[1], r[2], _j.loads(r[3])) for r in rows if r[3]]
+    except Exception:
+        return []
+
+
+def similar_active(content: str, subject: str = "", limit: int = 2) -> list:
+    """[(similarity, id, content)] best first, above SIM_SIMILAR."""
+    try:
+        from kyraan.store import embed as _embed
+        import math
+        vec = _embed.embed([content])[0]
+    except Exception:
+        return []
+    norm = math.sqrt(sum(x * x for x in vec)) or 1.0
+    out = []
+    for fid, subj, text, other in _active_with_vectors(subject):
+        if subject and subj and subj != subject:
+            continue
+        on = math.sqrt(sum(x * x for x in other)) or 1.0
+        sim = sum(a * b for a, b in zip(vec, other)) / (norm * on)
+        if sim >= SIM_SIMILAR:
+            out.append((round(sim, 3), fid, text))
+    out.sort(reverse=True)
+    return out[:limit]
+
+
+def similarity_verdict(best: float) -> str:
+    return "replace" if best >= SIM_REPLACE else "similar" if best >= SIM_SIMILAR else ""

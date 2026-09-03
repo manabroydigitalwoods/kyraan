@@ -133,6 +133,24 @@ _pending_reviews: dict = {}
 # and then wondered why the list was empty).
 _dropped_ask_note: dict = {}
 
+def _proposal_hint(path) -> str:
+    """" — replaces: …" / " — similar to: …" from the proposal's meta, so
+    the owner sees what an approval does to the store (2026-09-04)."""
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        text = _P(path).read_text()
+        line = next((ln for ln in text.splitlines() if ln.startswith("meta:")), "")
+        meta = _j.loads(line.split("meta:", 1)[1].strip()) if line else {}
+    except Exception:
+        return ""
+    if meta.get("supersedes"):
+        return f"\n   ↳ replaces: {str(meta['supersedes'])[:90]}"
+    if meta.get("similar_to"):
+        return f"\n   ↳ similar to (kept): {str(meta['similar_to'])[:90]}"
+    return ""
+
+
 async def _review_memory(chat_id: int, text: str) -> str:
     # A queue command states no facts — running extraction on "yes save
     # it" appended a bogus couldn't-distill warning under the review list
@@ -150,8 +168,10 @@ async def _review_memory(chat_id: int, text: str) -> str:
                     "already saved. To hear what I know, just ask — e.g. "
                     "\"what do you know about Aarav?\"")
         _pending_reviews[chat_id] = (proposals, time.monotonic())
-        lines = [f"{i + 1}. {fact}  ({target})"
-                 for i, (_, target, fact) in enumerate(proposals)]
+        lines = []
+        for i, (path, target, fact) in enumerate(proposals):
+            hint = _proposal_hint(path)
+            lines.append(f"{i + 1}. {fact}  ({target}){hint}")
         return ("Facts awaiting your review:\n" + "\n".join(lines) +
                 "\n\nReply \"approve all\", \"approve 1,3\", \"reject 2\", or a mix "
                 "(\"approve 1 reject 2\"). Anything else leaves them pending.")
