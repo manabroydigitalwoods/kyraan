@@ -2610,6 +2610,7 @@ VERIFICATION_CLASS = {
     "calendar.delete_event": "read_after_write",
     "home.turn_on": "read_after_write",
     "home.turn_off": "read_after_write",
+    "home.purifier": "read_after_write",
     "email.mark_read": "read_after_write",
     "email.archive": "read_after_write",
     "email.draft": "read_after_write",
@@ -2704,6 +2705,9 @@ UNDO_MAP = {
     "faces.remember": _undo_faces_remember,
     "home.turn_on": _undo_home_switch,
     "home.turn_off": _undo_home_switch,
+    "home.purifier": lambda a, r, p: (
+        ("home.purifier", {k: p[k] for k in ("mode", "timer", "index") if p.get(k)})
+        if p and not (isinstance(r, dict) and r.get("changed") is False) else None),
     # P3.1d completed (2026-08-28): the destroys' inverses re-create
     # from the record capture_prior observed before the write.
     "calendar.delete_event": lambda a, r, p: (
@@ -2742,6 +2746,14 @@ async def capture_prior(chat_id: int, tool: str, args: dict) -> dict | None:
             return {**state, "_tool": tool} if isinstance(state, dict) else None
         except Exception:
             return None  # unobserved prior ⇒ the write logs as not undoable
+    if tool == "home.purifier":
+        try:
+            import asyncio as _aio
+            from kyraan.tools import home_assistant as _ha
+            cur = await _aio.to_thread(_ha.purifier_state)
+            return {k: cur.get(k) for k in ("mode", "timer", "index")}
+        except Exception:
+            return None
     # Undo matrix completion (2026-08-28) — the P3.1d deferrals: each
     # inverse needs the record observed BEFORE the destroy.
     if tool == "calendar.delete_event":
@@ -2839,6 +2851,38 @@ def _register_home_switches() -> None:
         "params": '{"entity": "switch.ac"}',
         "about": "Switch a plug OFF. Only when the user asked. Confirm is automatic.",
         "run": off,
+    }
+
+    async def purifier(chat_id, args, raw_text):
+        wanted = {k: str(args.get(k, "") or "").strip() for k in ("mode", "timer", "index")}
+        if not any(wanted.values()):
+            raise kernel.ToolFailed("say what to set on the purifier: mode "
+                                    "(auto/turbo/medium/sleep), timer (1h..12h or off) "
+                                    "or index (pm25/allergen/gas)")
+        # no-op guard: already set that way → say so, never a confirm ask
+        try:
+            import asyncio as _aio
+            from kyraan.tools import home_assistant as _ha
+            cur = await _aio.to_thread(_ha.purifier_state)
+            same = all(not v or str(cur.get(k) or "").lower() == v.lower().replace("pm2.5", "pm25")
+                       for k, v in wanted.items())
+            if same:
+                return {"changed": False, **{k: cur.get(k) for k in ("mode", "timer", "index")},
+                        "note": "already set that way — say so, don't ask to confirm a no-op"}
+        except Exception:
+            pass
+        result = await kernel.run_tool(kernel.ToolCall(
+            "home.purifier", {k: v for k, v in wanted.items() if v}))
+        return result if isinstance(result, dict) else {"ok": result}
+
+    TOOLS["home.purifier"] = {
+        "params": '{"mode": "<auto|turbo|medium|sleep, optional>", "timer": "<1h..12h|off, optional>", '
+                  '"index": "<pm25|indoor_allergen_index|gas_level, optional>"}',
+        "about": ("Set the air purifier's MODE, auto-off TIMER and/or displayed INDEX "
+                  "(\"purifier on sleep mode\", \"turbo for 2 hours\", \"show allergen index\"). "
+                  "Any subset. On/off is home.turn_on/off with fan.air_purifier. "
+                  "Confirm is automatic."),
+        "run": purifier,
     }
 
 
@@ -2982,6 +3026,9 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
         name = str(args.get("entity", "")).split(".")[-1].replace("_", " ")
         name = name.upper() if len(name) <= 3 else name
         return f"About to turn the {name} {'ON' if tool.endswith('on') else 'OFF'}"
+    if tool == "home.purifier":
+        parts = [f"{k} → {args[k]}" for k in ("mode", "timer", "index") if args.get(k)]
+        return "About to set the air purifier: " + ", ".join(parts)
     if tool == "faces.remember":
         return (f'About to store a FACE TEMPLATE for "{args.get("name")}" from '
                 "the photo just sent — biometric data, kept ONLY on this "
@@ -3083,6 +3130,13 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
     if tool == "memory.forget" and isinstance(outcome, dict):
         gone = outcome.get("forgotten") or []
         return "Forgotten: " + "; ".join(gone) if gone else "Nothing matched — nothing forgotten."
+    if tool == "home.purifier" and isinstance(outcome, dict):
+        got = ", ".join(f"{k} {outcome.get(k)}" for k in ("mode", "timer", "index")
+                        if k in (outcome.get("requested") or {}))
+        if outcome.get("converged") is False:
+            return (f"I sent it, but the purifier hasn't confirmed yet (reads {got}) — "
+                    "check it in a moment.")
+        return f"Done — air purifier: {got}."
     if tool in ("home.turn_on", "home.turn_off"):
         wanted = "on" if tool.endswith("on") else "off"
         if isinstance(outcome, dict) and outcome.get("converged") is False:

@@ -272,6 +272,13 @@ tool_servers:
       - sensor.air_purifier_nanoprotect_filter
       - sensor.air_purifier_pre_filter
       - switch.air_purifier_child_lock
+      # purifier modes & settings (owner 2026-09-03: "do we have air
+      # purifier mode change? add") — HA exposes these on the Philips
+      - select.air_purifier_preferred_index   # pm25 | indoor_allergen_index | gas_level
+      - select.air_purifier_timer             # Off | 1h .. 12h
+      - sensor.air_purifier_time_remaining
+      - switch.air_purifier_beep
+      - light.air_purifier_display_backlight
       # Alexa media devices (2026-09-02)
       - media_player.manab_s_firetvstick
       - media_player.manab_s_echo_dot
@@ -279,6 +286,10 @@ tool_servers:
       - switch.ac
       - fan.air_purifier                  # purifier on/off (confirm-gated)
       - switch.air_purifier_child_lock    # Kiaan-proofing (confirm-gated)
+      - switch.air_purifier_beep          # button sounds (confirm-gated)
+      - light.air_purifier_display_backlight  # panel light at night (confirm-gated)
+      - select.air_purifier_preferred_index   # via home.purifier
+      - select.air_purifier_timer             # via home.purifier
       - media_player.manab_s_firetvstick  # wake/sleep the Fire TV
     # Alexa announcements (governance 2026-09-02): allowlisted speakers
     # for home.announce — the notify.alexa_media_<target> services.
@@ -586,6 +597,20 @@ tools:
     failure:
       retries: 0
       timeout_s: 12
+      on_failure: surface
+  home.purifier:
+    description: Set the Philips air purifier's mode (auto|turbo|medium|sleep), its auto-off timer (Off|1h..12h) and/or the index it displays (pm25|indoor_allergen_index|gas_level). Any subset; read back after setting.
+    server: home_assistant
+    permission: confirm
+    side_effects: write
+    params:
+      mode: {type: string}
+      timer: {type: string}
+      index: {type: string}
+    returns: "{entity, mode, timer, index, converged}"
+    failure:
+      retries: 0
+      timeout_s: 15
       on_failure: surface
   home.turn_off:
     description: Switch an allowlisted smart plug OFF (v1 - the bedroom AC).

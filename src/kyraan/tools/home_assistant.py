@@ -81,10 +81,11 @@ def _switch(entity: str, turn_on: bool) -> dict:
             f"entity {entity!r} is not write-allowlisted — switchable "
             "entities are EXACTLY: " + (", ".join(writes) or "(none)"))
     domain = entity.split(".")[0]
-    if domain not in ("switch", "fan", "media_player"):
+    if domain not in ("switch", "fan", "media_player", "light"):
         # fan joined 2026-09-02 (the Philips purifier); media_player the
-        # same day (the Fire TV) — identical turn_on/turn_off services.
-        raise ToolError(f"only switch/fan/media_player entities are "
+        # same day (the Fire TV); light 2026-09-03 (the purifier's display
+        # backlight) — identical turn_on/turn_off services.
+        raise ToolError(f"only switch/fan/media_player/light entities are "
                         f"switchable; {entity!r} is a {domain}")
     _api(f"/api/services/{domain}/turn_{'on' if turn_on else 'off'}", {"entity_id": entity})
     # Read back — report what the device actually did, never assume. HA
@@ -226,6 +227,90 @@ def _alexa_play_title(title: str, app: str) -> dict:
             "relay that it was requested, not confirmed playing"}
 
 
+PURIFIER_FAN = "fan.air_purifier"
+PURIFIER_INDEX = "select.air_purifier_preferred_index"
+PURIFIER_TIMER = "select.air_purifier_timer"
+
+
+def _raw(entity: str) -> dict:
+    """An allowlisted entity's FULL HA record — _get_state trims the
+    attributes, and the purifier's modes/options live there."""
+    reads, writes = _allowlists()
+    if entity not in reads and entity not in writes:
+        raise ToolError(f"entity {entity!r} is not in Kyraan's allowlist (tool_servers.home_assistant)")
+    return _api(f"/api/states/{entity}")
+
+
+def purifier_state() -> dict:
+    """Mode, timer and index as the device reports them (plus what it
+    offers) — the read the write is checked against."""
+    fan = _raw(PURIFIER_FAN)
+    attrs = fan.get("attributes") or {}
+    out = {"entity": PURIFIER_FAN, "power": fan.get("state"),
+           "mode": attrs.get("preset_mode"), "modes": list(attrs.get("preset_modes") or [])}
+    for key, entity in (("timer", PURIFIER_TIMER), ("index", PURIFIER_INDEX)):
+        try:
+            st = _raw(entity)
+            out[key] = st.get("state")
+            out[f"{key}_options"] = list((st.get("attributes") or {}).get("options") or [])
+        except Exception:
+            out[key], out[f"{key}_options"] = None, []
+    return out
+
+
+def _purifier(mode: str = "", timer: str = "", index: str = "") -> dict:
+    """Set any subset of mode / timer / index on the Philips purifier
+    (owner 2026-09-03). Values are validated against what the device
+    OFFERS right now (HA's preset_modes / select options), not a list
+    we hard-code; the result is read back until it converges."""
+    _, writes = _allowlists()
+    if PURIFIER_FAN not in writes:
+        raise ToolError("the air purifier is not write-allowlisted")
+    current = purifier_state()
+    wanted = {}
+    if mode:
+        m = mode.strip().lower()
+        if m not in current["modes"]:
+            raise ToolError(f"mode must be one of {', '.join(current['modes'])} — not {mode!r}")
+        wanted["mode"] = m
+    if timer:
+        t = timer.strip().lower().replace(" ", "")
+        options = {o.lower(): o for o in current.get("timer_options") or []}
+        if t in ("0", "none", "cancel"):
+            t = "off"
+        if t not in options:
+            raise ToolError(f"timer must be one of {', '.join(options.values())} — not {timer!r}")
+        wanted["timer"] = options[t]
+    if index:
+        i = index.strip().lower().replace(" ", "_").replace("pm2.5", "pm25")
+        options = {o.lower(): o for o in current.get("index_options") or []}
+        if i not in options:
+            raise ToolError(f"index must be one of {', '.join(options.values())} — not {index!r}")
+        wanted["index"] = options[i]
+    if not wanted:
+        raise ToolError("say what to set: mode (auto/turbo/medium/sleep), timer (1h..12h/off) or index")
+    if "mode" in wanted and wanted["mode"] != current["mode"]:
+        if current["power"] != "on":
+            _api("/api/services/fan/turn_on", {"entity_id": PURIFIER_FAN})
+        _api("/api/services/fan/set_preset_mode",
+             {"entity_id": PURIFIER_FAN, "preset_mode": wanted["mode"]})
+    if "timer" in wanted and wanted["timer"] != current["timer"]:
+        _api("/api/services/select/select_option",
+             {"entity_id": PURIFIER_TIMER, "option": wanted["timer"]})
+    if "index" in wanted and wanted["index"] != current["index"]:
+        _api("/api/services/select/select_option",
+             {"entity_id": PURIFIER_INDEX, "option": wanted["index"]})
+    state = current
+    for _ in range(10):
+        state = purifier_state()
+        if all(state.get(k) == v for k, v in wanted.items()):
+            return {**{k: state.get(k) for k in ("entity", "power", "mode", "timer", "index")},
+                    "requested": wanted, "converged": True}
+        time.sleep(0.6)
+    return {**{k: state.get(k) for k in ("entity", "power", "mode", "timer", "index")},
+            "requested": wanted, "converged": False}
+
+
 async def call(tool_name: str, args: dict) -> object:
     if tool_name == "home.media":
         return await asyncio.to_thread(_media_transport, str(args["action"]),
@@ -242,6 +327,10 @@ async def call(tool_name: str, args: dict) -> object:
                                        str(args.get("target", "") or ""))
     if tool_name == "home.get_state":
         return await asyncio.to_thread(_get_state, args["entity"])
+    if tool_name == "home.purifier":
+        return await asyncio.to_thread(_purifier, str(args.get("mode", "") or ""),
+                                       str(args.get("timer", "") or ""),
+                                       str(args.get("index", "") or ""))
     if tool_name == "home.turn_on":
         return await asyncio.to_thread(_switch, args["entity"], True)
     if tool_name == "home.turn_off":
