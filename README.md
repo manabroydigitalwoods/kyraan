@@ -151,7 +151,22 @@ green, or P1 blue, switched from the header and remembered per browser.
 ```bash
 python scripts/panel.py                      # http://127.0.0.1:8765
 KYRAAN_PANEL_TOKEN=... python scripts/panel.py   # a URL that survives restarts
+python scripts/panel.py --lan                # also answer on this Wi-Fi (see below)
 ```
+
+The banner prints the URL with the token in it; open that once and the
+token becomes a cookie for that browser (each browser needs the link once —
+a second browser without it gets 401). Set `KYRAAN_PANEL_TOKEN` in `.env`
+or the environment to keep the same link across restarts; unset, a fresh
+token is minted every start.
+
+From a phone: over Tailscale nothing changes — open the same URL against
+the Mac's Tailscale name. Without a VPN, `--lan` binds every interface and
+prints `on this network: http://192.168.x.x:8765/?token=…`; open that on
+the phone. The Host allowlist widens only to the machine's own names and
+addresses (a rebinding attempt still gets 421), but the token crosses the
+Wi-Fi in clear, so treat `--lan` as a trusted-network convenience, not a
+deployment. Never forward the port.
 
 `scripts/chat.py` (CLI) and `scripts/tui.py` (full-screen Textual
 dashboard) exercise the real orchestrator without Telegram. The TUI shows
