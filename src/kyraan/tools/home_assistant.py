@@ -131,8 +131,10 @@ def _announce(message: str, target: str = "") -> dict:
         if chosen is None:
             raise ToolError(f"unknown speaker {target!r} — configured: "
                             + ", ".join(targets))
+    # "tts" speaks at once; "announce" prefixes a chime and is routed like
+    # a broadcast — slower to start (voice replies, 2026-09-04)
     _api(f"/api/services/notify/alexa_media_{chosen}",
-         {"message": message, "data": {"type": "announce"}})
+         {"message": message, "data": {"type": "tts"}})
     return {"announced": True, "on": chosen, "message": message}
 
 

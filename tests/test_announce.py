@@ -16,7 +16,7 @@ def test_announce_targets_are_an_allowlist(monkeypatch):
     out = ha._announce("Dinner is ready")
     assert out["on"] == "manab_s_echo_dot"          # first = default
     assert calls[0][0] == "/api/services/notify/alexa_media_manab_s_echo_dot"
-    assert calls[0][1]["data"] == {"type": "announce"}
+    assert calls[0][1]["data"] == {"type": "tts"}   # speaks at once, no chime (2026-09-04)
     out = ha._announce("Hello all", target="everywhere")
     assert out["on"] == "everywhere"
     with pytest.raises(ha.ToolError, match="unknown speaker"):

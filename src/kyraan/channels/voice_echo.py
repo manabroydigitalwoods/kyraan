@@ -57,7 +57,22 @@ def devices() -> list:
 
 
 def poll_seconds() -> int:
-    return max(2, int(_cfg().get("poll_seconds", 3)))
+    return max(1, int(_cfg().get("poll_seconds", 2)))   # one HA read is ~70 ms
+
+
+_TRANSCRIPT_FIXES = [
+    (re.compile(r"\ba\.\s*c\.?\b", re.I), "AC"),                  # "turn on the a. c."
+    (re.compile(r"\bk(?:i|ee)y?a{1,2}n(?:'s)?\b", re.I),        # kian, kiyan, keeyan — not "keen"
+     lambda m: "kiaan" + ("'s" if m.group(0).endswith("'s") else "")),
+]
+
+
+def normalise(text: str) -> str:
+    """Alexa's transcript spellings of our words (live 2026-09-04:
+    "kiyan's next vaccination", "the a. c.")."""
+    for pat, rep in _TRANSCRIPT_FIXES:
+        text = pat.sub(rep, text)
+    return text
 
 
 # Name-free (owner 2026-09-04: "instead of saying kyraan can we direct
@@ -156,7 +171,11 @@ async def tick(owner_chat: int, send_fn) -> int:
             # of the name can be added to WAKE
             log_event("voice_echo_ignored", device=entity, heard=summary[:40])
             continue
-        log_event("voice_echo_heard", device=entity, chars=len(text))
+        text = normalise(text)
+        # lag = how long Alexa + HA took to hand us the transcript — the
+        # part of the delay that is not ours
+        log_event("voice_echo_heard", device=entity, chars=len(text),
+                  lag_ms=int(time.time() * 1000 - ts))
         handled += 1
         await handle(owner_chat, entity, text, send_fn)
     return handled

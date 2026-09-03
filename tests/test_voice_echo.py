@@ -67,3 +67,9 @@ def test_handle_speaks_and_mirrors(monkeypatch):
     asyncio.run(ve.handle(1, "media_player.manab_s_echo_dot", "what's open", send))
     assert spoken[0]["target"] == "manab_s_echo_dot" and spoken[0]["message"] == "Nothing open — all done."
     assert mirrored[0].startswith("🎙 You said: what's open")
+
+
+def test_transcript_spellings_are_normalised():
+    assert ve.normalise("when is kiyan's next vaccination") == "when is kiaan's next vaccination"
+    assert ve.normalise("turn on the a. c.") == "turn on the AC."
+    assert ve.normalise("i am keen on it") == "i am keen on it"
