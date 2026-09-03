@@ -937,6 +937,32 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 chat_id, SkillCall("faces.forget", {"name": wanted}), _forget_face,
                 describe=f'About to DELETE the stored face template for "{wanted}"')
 
+        meds_q = _re.match(
+            r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
+            r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"
+            r"(medications?|medicines?|meds|supplements?|prescriptions?|vitamins?)\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
+        if meds_q and kernel.viewer_person() == "owner":
+            # Whose medicines (live 2026-09-03, three times: "what are my
+            # medications?" listed Kiaan's drops and missed the owner's
+            # lozenges). Deterministic: the store knows who each capture
+            # is about; the answer is that person's, nobody else's.
+            from kyraan.store import documents as _docs_m
+            from kyraan.store import persons as _persons_m
+            who_raw = meds_q.group(1).strip()
+            person = ("owner" if who_raw.lower() == "my"
+                      else _persons_m.resolve(_re.sub(r"(?:'s|’s|s')$", "", who_raw)))
+            if person:
+                items = _docs_m.medications_for(chat_id, person)
+                _skip_extraction.set(True)
+                label = "your" if person == "owner" else f"{who_raw.rstrip(chr(39)+'’s').strip()}'s"
+                if not items:
+                    return (f"Nothing saved yet as {label} medicines or supplements — "
+                            "send a photo of the strip or bottle and I'll file it.")
+                lines = [f'• {i["caption"]} — {i["detail"]} ({i["kind"]}, {i["date"]})'
+                         if i["detail"] and i["detail"].lower() != i["caption"].lower()
+                         else f'• {i["caption"]} ({i["kind"]}, {i["date"]})' for i in items]
+                return f"Saved as {label} medicines and supplements:\n" + "\n".join(lines)
         saved_q = _re.match(
             r"^\s*(?:did|have|had)\s+(?:you|u)\s+(?:save|store|keep|index|link)(?:d|ed)?\s+"
             r"(?:it|that|this|them|(?:the|my|this|that)\s+(?:photo|image|picture|pic|doc|document|file|pdf|screenshot|card))"

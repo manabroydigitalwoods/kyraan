@@ -648,3 +648,48 @@ def test_local_only_notes_are_tagged_locally(monkeypatch, tmp_path):
     except Exception:
         pass
     assert seen.get("exposure") == "local_only"
+
+
+@pytest.mark.pg
+def test_medications_are_one_persons_own(monkeypatch):
+    """Live 2026-09-03 (three times): "what are my medications?" listed
+    Kiaan's drops and missed the owner's lozenges."""
+    from tests.test_store_promises import _ensure_test_db, _test_dsn
+    from kyraan.store import pg
+    if not pg.available():
+        pytest.skip("local Postgres container unreachable")
+    _ensure_test_db()
+    monkeypatch.setenv("KYRAAN_PG_DSN", _test_dsn())
+    pg.reset_pool_for_tests()
+    from kyraan.store import documents
+    monkeypatch.setattr(documents, "_allowed_exposures", lambda: ("cloud_ok",))
+    with pg.connection() as conn:
+        conn.execute("DELETE FROM document WHERE chat_id = 4247")
+        conn.execute("""INSERT INTO document (id, chat_id, kind, caption, text, subject_persons, entities) VALUES
+          (gen_random_uuid(), 4247, 'moment', 'my medicine', '[photo, 03 Sep 2026] Wellbeing Nutrition throat relief lozenges — sugar free', ARRAY['owner'], ARRAY['#medical']),
+          (gen_random_uuid(), 4247, 'moment', 'my supplement', '[photo, 02 Sep 2026] Fish oil supplement bottle (Carbamide Forte) Omega-3', ARRAY['owner'], ARRAY['#supplement']),
+          (gen_random_uuid(), 4247, 'photo', 'Fourts B Drops (Kiaan supplement)', 'Fours B Drops Zinc Vitamin C 30 ml', ARRAY['kiaan'], ARRAY['#supplement']),
+          (gen_random_uuid(), 4247, 'moment', 'vaccination day', '[photo, 02 Sep 2026] Family selfie indoors at the clinic', ARRAY['owner','kiaan'], ARRAY['#medical'])""")
+        conn.commit()
+    mine = documents.medications_for(4247, "owner")
+    assert [m["caption"] for m in mine] == ["my medicine", "my supplement"]     # no Kiaan, no selfie
+    assert mine[0]["detail"].startswith("Wellbeing Nutrition")
+    assert [m["caption"] for m in documents.medications_for(4247, "kiaan")] == ["Fourts B Drops (Kiaan supplement)"]
+    pg.reset_pool_for_tests()
+
+
+def test_my_medications_rail_is_deterministic(monkeypatch):
+    import asyncio
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    from kyraan.store import documents, persons
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    monkeypatch.setattr(persons, "resolve", lambda n: {"kiaan": "kiaan"}.get(n.lower()))
+    seen = []
+    monkeypatch.setattr(documents, "medications_for", lambda chat_id, person: seen.append(person) or
+                        [{"caption": "my medicine", "detail": "Wellbeing lozenges", "date": "2026-09-03", "kind": "medicine"}])
+    out = asyncio.run(orchestrator.handle_message(1, "what are my medications?"))
+    assert out.startswith("Saved as your medicines and supplements:") and "Wellbeing" in out
+    out = asyncio.run(orchestrator.handle_message(1, "kiaan’s medicines"))
+    assert out.startswith("Saved as kiaan's medicines")
+    assert seen == ["owner", "kiaan"]

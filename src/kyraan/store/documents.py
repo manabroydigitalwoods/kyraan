@@ -263,6 +263,43 @@ def link_captures(doc_id: str, other_ids: list) -> int:
     return len(other_ids)
 
 
+_MEDS_WORDS = re.compile(
+    r"\b(?:medicine|medication|lozenge|tablet|capsule|syrup|drops?|ointment|gel|"
+    r"supplement|omega|vitamin|prescription|dose|\d+\s?(?:mg|ml))\b", re.IGNORECASE)
+
+
+def medications_for(chat_id: int, person: str) -> list:
+    """The saved medicines and supplements of ONE person (owner
+    2026-09-03: "what are my medications?" listed Kiaan's drops three
+    times and missed the owner's own lozenges). A capture counts when it
+    is about that person and is filed #medical/#supplement with
+    medicine words in it — a vaccination-day selfie is #medical but not
+    a medicine. Exposure-gated like every read."""
+    with pg.connection() as conn:
+        rows = conn.execute(
+            """SELECT caption, text, entities, created_at::date
+               FROM document
+               WHERE chat_id = %s AND suppressed_by = '{}'
+                     AND exposure = ANY(%s)
+                     AND %s = ANY(subject_persons)
+                     AND (entities && ARRAY['#medical', '#supplement']::text[]
+                          OR text ~* 'medicine|supplement|prescription|tablet|capsule')
+               ORDER BY created_at DESC""",
+            (chat_id, list(_allowed_exposures()), person)).fetchall()
+    out = []
+    for caption, text, ents, day in rows:
+        body = re.sub(r"^\[photo, [^\]]*\]\s*", "", str(text or ""))
+        if not (_MEDS_WORDS.search(body) or _MEDS_WORDS.search(caption or "")
+                or "#supplement" in (ents or [])):
+            continue
+        first = next((ln.strip() for ln in body.splitlines() if len(ln.strip()) > 8), "")
+        first = re.split(r"[—•]|\. ", first)[0].strip()[:110]
+        out.append({"caption": caption or "(untitled)", "detail": first,
+                    "date": day.isoformat(),
+                    "kind": "supplement" if "#supplement" in (ents or []) else "medicine"})
+    return out
+
+
 def claim_latest_moment(chat_id: int, phrase: str, max_age_min: int = 20):
     """The owner captioning the photo JUST sent as theirs ("this is my
     medicine", live 2026-09-03: acknowledged twice, nothing stored
