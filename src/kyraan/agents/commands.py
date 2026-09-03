@@ -34,7 +34,7 @@ COMMANDS = [
     {"phrase": "private mode on",
      "what": "keep every turn on this Mac until 'private mode off'",
      "words": "private secret local mode offline confidential"},
-    {"phrase": "undo",
+    {"phrase": "undo", "suggest": False,
      "what": "reverse the last action (reminder, event, switch, face)",
      "words": "undo revert reverse rollback last action"},
     {"phrase": "forget the face <name>",
@@ -46,16 +46,16 @@ COMMANDS = [
     {"phrase": "create a person for <name>",
      "what": "add someone to the person registry (links an enrolled face of that name)",
      "words": "create add register person contact people registry face"},
-    {"phrase": "what are my medications",
+    {"phrase": "what are my medications", "suggest": False,
      "what": "list your saved medicines and supplements (or Kiaan's)",
      "words": "medicines medications meds supplements prescription tablets"},
     {"phrase": "list learned rules",
      "what": "show the behaviour rules Kyraan learned from corrections",
      "words": "list learned rules lessons corrections behaviour"},
-    {"phrase": "list tasks",
+    {"phrase": "list tasks", "suggest": False,
      "what": "show scheduled tasks",
      "words": "list tasks scheduled schedule jobs"},
-    {"phrase": "list reminders",
+    {"phrase": "list reminders", "suggest": False,
      "what": "show pending reminders",
      "words": "list reminders pending upcoming"},
 ]
@@ -67,8 +67,20 @@ _SYNONYMS = {
     "medications": "medicines", "photos": "photo", "faces": "face", "rules": "rule",
     "tasks": "task", "reminders": "reminder", "dedup": "dedupe", "deduplicate": "dedupe",
 }
-_STOP = frozenset("i me my the a an to of for how do can you please want that this it is "
-                  "was forget forgot how's whats what's kyraan".split())
+_STOP = frozenset("i me my the a an to of for how do can could you please want that this it is "
+                  "was forget forgot how's whats what's kyraan there anything something any "
+                  "way able possible option command tool feature there's are we does have "
+                  "list show get give tell check".split())   # generic verbs never score
+_CAPABILITY_Q = re.compile(
+    r"^\s*(?:is\s+there|do\s+we\s+have|do\s+you\s+have|can\s+you|could\s+you|"
+    r"how\s+(?:do|can|to)|what'?s\s+the\s+(?:command|way)|any\s+way|anything\s+that)\b",
+    re.IGNORECASE)
+
+
+def is_capability_question(text: str) -> bool:
+    """"is there anything that can index obsidian notes?" — a question
+    about whether a command exists, answered with the command."""
+    return bool(_CAPABILITY_Q.match(str(text or "")))
 
 
 def _words(text: str) -> set:
@@ -80,7 +92,7 @@ def _words(text: str) -> set:
     return out
 
 
-def suggest(text: str, min_score: float = 0.5) -> list:
+def suggest(text: str, min_score: float = 0.6) -> list:
     """[(phrase, what, score)] best first — overlap between the message's
     content words and a command's phrase+words, scored against the
     MESSAGE (a two-word message fully covered scores 1.0)."""
@@ -89,6 +101,8 @@ def suggest(text: str, min_score: float = 0.5) -> list:
         return []
     out = []
     for cmd in COMMANDS:
+        if not cmd.get("suggest", True):
+            continue      # covered by a tool: the model answers the natural ask
         core = _words(cmd["phrase"])
         theirs = core | _words(cmd["words"])
         hit = len(mine & theirs)

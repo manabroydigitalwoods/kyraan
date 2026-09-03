@@ -1211,13 +1211,23 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # the command instead of a model round that asks what they meant
         # ("index memory" / "index note" -> "reindex vault"). Only when
         # the match is strong and the phrase has no free slot to fill.
-        if kernel.viewer_person() == "owner" and len(raw_text.split()) <= 7:
+        is_cap_q = _commands.is_capability_question(raw_text)
+        # a plain question ("any reminders?") is for the model — eval
+        # reminder.list caught the over-reach 2026-09-03
+        plain_question = raw_text.strip().endswith("?") and not is_cap_q
+        if kernel.viewer_person() == "owner" and not _secret_turn.get() and not plain_question and (
+                len(raw_text.split()) <= 7 or (is_cap_q and len(raw_text.split()) <= 16)):
             found = _commands.suggest(raw_text, min_score=0.6)
             if found and "<" not in found[0][0] and found[0][0].lower() != raw_text.strip().lower():
                 phrase, what, _score = found[0]
                 _pending_suggestion[chat_id] = (phrase, time.monotonic())
                 _skip_extraction.set(True)
                 log_event("command_suggested", chat_id=chat_id, phrase=phrase, text=raw_text[:80])
+                if is_cap_q:
+                    # "is there anything that can index obsidian notes?" —
+                    # yes, and here is the phrase (owner 2026-09-03)
+                    return (f'Yes — say "{phrase}": {what}. Reply "yes" to run it now, '
+                            'or "help" for all the exact commands.')
                 return (f'Did you mean "{phrase}" — {what}? Reply "yes" to run it, '
                         'or "help" for all the exact commands.')
         from kyraan.agents import agent_loop
