@@ -1248,7 +1248,10 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
         entry["templates"] += 1
     for entry in seen_faces.values():
         nodes.append(entry)
-        target = _person_node(entry["id"][2:])
+        # the DISPLAY name is what becomes a person's alias ("Akansha
+        # (employee)" -> akansha, owner 2026-09-03); the slug is the
+        # fallback for faces enrolled under a plain registry name
+        target = _person_node(entry["label"]) or _person_node(entry["id"][2:])
         if target:
             edges.append({"a": entry["id"], "b": target, "kind": "recognises",
                           "weight": 0.8})

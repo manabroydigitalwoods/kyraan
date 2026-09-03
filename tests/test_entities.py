@@ -86,3 +86,12 @@ def test_clean_splits_glued_tags_and_keeps_one_hub():
     assert entities.clean(["Acme #gadget"], "Acme thing") == ["Acme", "#gadget"]
     # invention and generic words never pass
     assert entities.clean(["Made Up", "Address"], "Address line") == []
+
+
+def test_a_face_links_to_the_person_through_its_display_name(monkeypatch):
+    """Owner 2026-09-03: the person was created from the face and the
+    brain still showed the face unlinked — resolution used the file slug
+    ("akansha-employee"), not the display name that became the alias."""
+    from kyraan.panel import queries
+    src = open(queries.__file__).read()
+    assert '_person_node(entry["label"]) or _person_node(entry["id"][2:])' in src
