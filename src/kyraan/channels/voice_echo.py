@@ -60,13 +60,38 @@ def poll_seconds() -> int:
     return max(2, int(_cfg().get("poll_seconds", 3)))
 
 
+# Name-free (owner 2026-09-04: "instead of saying kyraan can we direct
+# alexa house status?"): Kyraan's OWN exact commands are things Alexa
+# cannot do, so they are for Kyraan even without the name. Anything
+# else still needs the name — otherwise Kyraan would answer over
+# Alexa's "play music" and "set a timer".
+NAME_FREE = re.compile(
+    r"^\s*(?:(?:house|home)\s+(?:status|report|check)|how(?:'s|\s+is)\s+the\s+house|"
+    r"what'?s\s+(?:still\s+)?open|what\s+needs\s+a\s+reply|what\s+did\s+i\s+miss|"
+    r"kiaan(?:'s)?\s+(?:status|vaccines?|vaccinations?|milestones?)|"
+    r"(?:when|what)\s+is\s+kiaan(?:'s)?\s+next\s+(?:vaccine|vaccination|shot|dose)|"
+    r"purifier\s+(?:sleep|auto|turbo|medium)\s+mode|(?:what\s+are\s+)?my\s+(?:medications?|medicines?|meds)|"
+    r"health\s+report|review\s+memory|code\s+status)\s*[?!.]*\s*$", re.IGNORECASE)
+
+
 def parse_wake(summary: str) -> str | None:
-    """The request after Kyraan's name, or None when it wasn't for us."""
-    m = WAKE.match(str(summary or ""))
-    if not m:
-        return None
-    text = m.group(1).strip()
-    return text or None
+    """The request after Kyraan's name — or a name-free exact command."""
+    summary = str(summary or "")
+    m = WAKE.match(summary)
+    if m:
+        text = m.group(1).strip()
+        return text or None
+    if _cfg().get("name_free", True):
+        if NAME_FREE.match(summary):
+            return summary.strip().rstrip("?!.")
+        try:
+            from kyraan.agents import commands
+            hits = commands.suggest(summary, min_score=1.0)
+            if hits and "<" not in hits[0][0] and len(commands._words(summary)) >= 2:
+                return summary.strip().rstrip("?!.")
+        except Exception:
+            pass
+    return None
 
 
 def for_speech(reply: str) -> str:
