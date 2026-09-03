@@ -1047,6 +1047,27 @@ def _wire_voice_echo(job_queue: JobQueue, bot) -> None:
                 ", ".join(voice_echo.devices()), voice_echo.poll_seconds())
 
 
+def _wire_whereabouts(job_queue: JobQueue, bot) -> None:
+    """The phone's own tracker (HA person entity) every minute — silent
+    until the companion app reports a position."""
+    import os as _os
+    if not (_os.environ.get("HASS_URL") and _os.environ.get("HASS_TOKEN")):
+        return
+    from kyraan.triggers import whereabouts as _where
+
+    async def _send(chat_id: int, text: str) -> bool:
+        await bot.send_message(chat_id=chat_id, text=_plain(text))
+        orchestrator.record_proactive(chat_id, text)
+        return True
+
+    async def _poll(context: ContextTypes.DEFAULT_TYPE) -> None:
+        async with _lock_for(_owner_id()):
+            await _where.poll_person(_owner_id(), _send)
+
+    job_queue.run_repeating(_poll, interval=60, first=20, name="whereabouts_person",
+                            job_kwargs=_ALWAYS_FIRE)
+
+
 def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
     """Mention watch (2026-09-02): draft + confirm, never post. Skips
     itself entirely when Slack isn't mounted or the token is absent."""
@@ -1603,6 +1624,7 @@ def run() -> None:
     _wire_slack_watch(app.job_queue, app.bot)
     _wire_brief(app.job_queue, app.bot)
     _wire_voice_echo(app.job_queue, app.bot)
+    _wire_whereabouts(app.job_queue, app.bot)
 
     # Files OUT (2026-08-28): the loop's files.send delivers through here.
     from kyraan.channels import file_send as _file_send

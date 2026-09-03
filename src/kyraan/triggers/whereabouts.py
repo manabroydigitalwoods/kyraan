@@ -217,3 +217,30 @@ async def announce(chat_id: int, lines: list, send_fn) -> int:
             sent += 1
             log_event("whereabouts_sent", chat_id=chat_id, what=kind)
     return sent
+
+
+PERSON_ENTITY = "person.manab_roy"
+_person_seen: dict = {}
+
+
+async def poll_person(chat_id: int, send_fn) -> int:
+    """Home Assistant's person entity — the companion app's tracker once
+    the app is installed (2026-09-04: the entity exists, no tracker yet,
+    so this stays silent). A new coordinate is a fix like a Telegram pin."""
+    try:
+        import asyncio
+        from kyraan.tools import home_assistant as ha
+        raw = await asyncio.to_thread(ha._raw, PERSON_ENTITY)
+    except Exception:
+        return 0
+    attrs = raw.get("attributes") or {}
+    lat, lon = attrs.get("latitude"), attrs.get("longitude")
+    if lat is None or lon is None:
+        return 0
+    stamp = str(raw.get("last_updated") or "")
+    if _person_seen.get("stamp") == stamp:
+        return 0
+    _person_seen["stamp"] = stamp
+    lines = observe(float(lat), float(lon))
+    log_event("whereabouts_person_fix", source="home_assistant")
+    return await announce(chat_id, lines, send_fn)

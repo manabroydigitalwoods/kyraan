@@ -285,6 +285,8 @@ tool_servers:
       - sensor.air_purifier_time_remaining
       - switch.air_purifier_beep
       - light.air_purifier_display_backlight
+      # the owner's phone via the HA companion app (2026-09-04; whereabouts)
+      - person.manab_roy
       # Alexa media devices (2026-09-02)
       - media_player.manab_s_firetvstick
       - media_player.manab_s_echo_dot

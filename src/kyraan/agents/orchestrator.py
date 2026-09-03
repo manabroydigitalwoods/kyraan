@@ -749,8 +749,12 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                       if role == "assistant"][-3:]
             # "...? 🙂" ended with an emoji and the guard swallowed
             # "today" (live 2026-09-02): a question mark followed only by
-            # non-word characters still ends a question.
-            if not any(_re.search(r"\?[\W_]*$", t) for t in recent):
+            # non-word characters still ends a question. A bare small
+            # number after an ENUMERATED list ("1) … 2) … 3) …") is the
+            # owner picking one (review item, 2026-09-04).
+            enumerated = any(_re.search(r"(?m)^\s*(?:\d[.)]|[•\-])\s+\S", t) for t in recent)
+            picks = _re.fullmatch(r"\s*\d{1,2}\s*[.)]?\s*", raw_text) is not None
+            if not any(_re.search(r"\?[\W_]*$", t) for t in recent) and not (enumerated and picks):
                 _skip_extraction.set(True)
                 return "Go on — I'm listening…"
         pending = _pending_confirmations.pop(chat_id, None)
@@ -1157,6 +1161,11 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                         f"\"remember this place as {name}\".")
             return (f"Saved \"{name}\" as a place ({saved['lat']:.4f}, {saved['lon']:.4f}). "
                     "When you arrive there with live location on, I'll mention what I hold about it.")
+        duties_q = _re.match(r"^\s*(?:duties|duty)\s*(?:status|list|report)?\s*[?!.]*\s*$", raw_text, _re.IGNORECASE)
+        if duties_q and kernel.viewer_person() == "owner":
+            from kyraan.triggers import duties as _duties
+            _skip_extraction.set(True)
+            return _duties.status_text()
         meds_q = _re.match(
             r"^\s*(?:what\s+(?:are|r)\s+|list\s+|show\s+(?:me\s+)?|tell\s+me\s+)?(?:all\s+)?"
             r"(my|[a-z][a-z .'-]{1,30}?(?:'s|’s|s'))\s+(?:current\s+|saved\s+)?"
