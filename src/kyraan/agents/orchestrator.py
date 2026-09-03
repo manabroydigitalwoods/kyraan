@@ -501,6 +501,7 @@ async def handle_message(chat_id: int, raw_text: str) -> str:
 
 
 _last_processing: dict = {}
+_pending_suggestion: dict = {}   # chat_id -> (phrase, monotonic) — "did you mean"
 _background_tasks: set = set()
 
 
@@ -861,7 +862,23 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # decides — chaining reads, composing its own replies, hitting the
         # same kernel gates for every tool. The classifier path below is
         # its fallback: degraded mode (cloud down) or any loop failure.
+        from kyraan.agents import commands as _commands
+        if _re.match(r"^\s*(?:help|commands?|what can i say|what can you do|list commands)\s*[?!.]*\s*$",
+                     raw_text, _re.IGNORECASE):
+            _skip_extraction.set(True)
+            _history_redaction.set("[listed the exact commands]")
+            return _commands.help_text()
         word = raw_text.strip().lower().rstrip(".!")
+        pending_sugg = _pending_suggestion.get(chat_id)
+        if (word in _CONFIRM_WORDS and pending_sugg
+                and time.monotonic() - pending_sugg[1] < 300
+                and chat_id not in _pending_confirmations):
+            # "Did you mean 'reindex vault'?" -> "yes": run that phrase
+            _pending_suggestion.pop(chat_id, None)
+            log_event("command_suggestion_taken", chat_id=chat_id, phrase=pending_sugg[0])
+            return await _dispatch(chat_id, pending_sugg[0])
+        if word in _DENY_WORDS and pending_sugg:
+            _pending_suggestion.pop(chat_id, None)
         if word in _CONFIRM_WORDS or word in _DENY_WORDS:
             # Scan the last few assistant turns, not just the newest: a
             # proactive (temp alert, reminder) landing between the ask
@@ -1098,7 +1115,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             _skip_extraction.set(True)
             return _describe_last_turn(chat_id)
         vault_m = _re.match(
-            r"^\s*(re-?index|index|force\s+index)\s+(?:my\s+)?(?:vault|notes|obsidian)\s*[?!.]?\s*$",
+            r"^\s*(re-?index|index|force\s+index)\s+(?:my\s+|the\s+)?(?:vault|notes?|obsidian(?:\s+notes?)?)\s*[?!.]?\s*$",
             raw_text, _re.IGNORECASE)
         if vault_m and kernel.viewer_person() == "owner":
             # Deterministic, owner-only: a vault sync on demand (nightly
@@ -1189,6 +1206,20 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         # not a different system. Both tiers failing is an OUTAGE and is
         # reported as one; the legacy classifier was retired 2026-08-27
         # after two consecutive all-green degraded eval runs (P3.7a).
+        # "Did you mean ...?" (owner 2026-09-03): a short message that
+        # matched no rail but sits close to an exact command is offered
+        # the command instead of a model round that asks what they meant
+        # ("index memory" / "index note" -> "reindex vault"). Only when
+        # the match is strong and the phrase has no free slot to fill.
+        if kernel.viewer_person() == "owner" and len(raw_text.split()) <= 7:
+            found = _commands.suggest(raw_text, min_score=0.6)
+            if found and "<" not in found[0][0] and found[0][0].lower() != raw_text.strip().lower():
+                phrase, what, _score = found[0]
+                _pending_suggestion[chat_id] = (phrase, time.monotonic())
+                _skip_extraction.set(True)
+                log_event("command_suggested", chat_id=chat_id, phrase=phrase, text=raw_text[:80])
+                return (f'Did you mean "{phrase}" — {what}? Reply "yes" to run it, '
+                        'or "help" for all the exact commands.')
         from kyraan.agents import agent_loop
         secret = _secret_turn.get()
         if secret:
