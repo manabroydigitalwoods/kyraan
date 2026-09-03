@@ -194,3 +194,16 @@ fire late rather than never (sleep-proof since 2026-08-30).
 - Every write tool is confirm-gated and has an undo mapping.
 - Non-owner tool reach is frozen in tests; changing it requires editing both
   config and test.
+
+## Running services (2026-09-03)
+
+| launchd label | what | restart on deploy |
+|---|---|---|
+| `ai.kyraan` | the bot (`python -m kyraan.main`) | `launchctl kickstart -k gui/$(id -u)/ai.kyraan` |
+| `ai.kyraan.panel` | the web panel (`scripts/panel.py --lan`, port 8765, log `logs/panel.log`) | `launchctl kickstart -k gui/$(id -u)/ai.kyraan.panel` |
+| `ai.kyraan.watchdog`, `ai.kyraan.backup` | scheduled | — |
+
+The panel is its own long-running process and loads code at start: a
+deploy that restarts only the bot leaves the panel serving stale code
+(seen 2026-09-03 — a graph fix "not working" twice). Never start the
+panel by hand any more; it would fight the service for the port.
