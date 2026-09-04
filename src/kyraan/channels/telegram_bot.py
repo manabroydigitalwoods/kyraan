@@ -22,6 +22,31 @@ from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import get_logger, log_event
 from kyraan.triggers import briefs, scheduler
 
+def _uploader(update) -> str:
+    """The registry person who sent a file: the owner, or the household
+    member whose chat this is (documents get a who-sent-it link)."""
+    try:
+        from kyraan.store import persons
+        if update.effective_user is not None and update.effective_user.id == _owner_id():
+            return "owner"
+        return persons.person_id_any_stage(update.effective_chat.id) or ""
+    except Exception:
+        return ""
+
+
+async def _save_notes(doc_id) -> str:
+    """The saver engine's receipt tail: links made, and privacy."""
+    import asyncio as _aio
+    note = ""
+    try:
+        from kyraan.store import documents as _d
+        links = await _aio.to_thread(_d.enrich, doc_id)
+        note = _d.receipt_line(links)
+    except Exception as exc:
+        logger.warning("document enrich failed: %s", exc)
+    return note + _private_note(doc_id)
+
+
 def _private_note(doc_id) -> str:
     """Tax papers, statements, medical files stay local-only: the owner
     should know the cloud never sees them and the local model answers."""
@@ -822,9 +847,10 @@ async def _on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     doc_id = await _aio.to_thread(
         lambda: documents.ingest(
             chat_id, "file", text, (update.message.caption or "")[:120],
-            document.file_name or "", original=(data, ext.lstrip("."))))
+            document.file_name or "", original=(data, ext.lstrip(".")),
+            uploaded_by=_uploader(update)))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
-             f"({len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
+             f"({len(text):,} chars) — ask me about it anytime." + await _save_notes(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that file.")
     await update.message.reply_text(reply, do_quote=True)
@@ -892,10 +918,11 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     doc_id = await _aio.to_thread(
         lambda: documents.ingest(
             chat_id, "pdf", text, (update.message.caption or "")[:120],
-            document.file_name or "", original=(data, "pdf")))
+            document.file_name or "", original=(data, "pdf"),
+            uploaded_by=_uploader(update)))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
              f"({len(reader.pages)} page{'s' if len(reader.pages) != 1 else ''}, "
-             f"{len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
+             f"{len(text):,} chars) — ask me about it anytime." + await _save_notes(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that PDF.")
     orchestrator.record_exchange(

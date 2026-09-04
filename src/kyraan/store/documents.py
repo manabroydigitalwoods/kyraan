@@ -391,7 +391,8 @@ def original_file(chat_id: int, doc_id: str):
 
 def ingest(chat_id: int, kind: str, text: str, caption: str = "",
            filename: str = "", subjects=None,
-           original: tuple | None = None, entities=None) -> str | None:
+           original: tuple | None = None, entities=None,
+           uploaded_by: str = "") -> str | None:
     """Store one captured document. Returns the doc id, or None when the
     text is too thin to be a document. Idempotent: the same text in the
     same chat is one document (re-sending a card doesn't duplicate).
@@ -466,9 +467,12 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
         conn.execute(
             """INSERT INTO document (id, chat_id, kind, caption, filename,
                                      text, flags, subject_persons,
-                                     file_path, file_sha256, entities, exposure)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                     file_path, file_sha256, entities, exposure,
+                                     uploaded_by)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (id) DO UPDATE SET
+                   uploaded_by = CASE WHEN document.uploaded_by = '' THEN EXCLUDED.uploaded_by
+                                      ELSE document.uploaded_by END,
                    caption = CASE WHEN %s THEN EXCLUDED.caption
                                   ELSE document.caption END,
                    flags = EXCLUDED.flags,
@@ -489,7 +493,7 @@ def ingest(chat_id: int, kind: str, text: str, caption: str = "",
             (doc_id, chat_id, kind, caption[:300], filename[:200], text,
              flags, subjects, file_path, file_hash,
              [str(e).strip()[:60] for e in (entities or []) if str(e).strip()][:12],
-             exposure, explicit_caption))
+             exposure, str(uploaded_by or "")[:40], explicit_caption))
         conn.execute("DELETE FROM document_chunk WHERE document_id = %s",
                      (doc_id,))
         for seq, (chunk, vector) in enumerate(zip(_chunks(text), vectors)):
@@ -613,6 +617,122 @@ def relate(doc_id: str) -> list:
                           words=sorted(hit), inherited=inherited)
         conn.commit()
     return newly
+
+
+def people_in_text(text: str) -> list:
+    """Registry people named in a document's text — full names and
+    aliases of two or more letters beyond the owner (a tax return names
+    the father; a policy names the family). Aliases shorter than four
+    letters must appear as whole words."""
+    low = " " + re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()) + " "
+    found = []
+    for name, pid in _name_map().items():
+        if pid == "owner" or pid in found or len(name) < 3:
+            continue
+        if f" {name} " in low:
+            found.append(pid)
+    return valid_subjects(found)
+
+
+def _shared_entities(mine: list, theirs: list) -> tuple:
+    """(shared non-tag entities, shared #tags) — case-insensitive."""
+    a = {str(e).strip().lower() for e in (mine or []) if str(e).strip()}
+    b = {str(e).strip().lower() for e in (theirs or []) if str(e).strip()}
+    both = a & b
+    return (sorted(x for x in both if not x.startswith("#")),
+            sorted(x for x in both if x.startswith("#")))
+
+
+def links_for(entities_mine: list, entities_theirs: list) -> bool:
+    """Two documents belong together when they share two named things,
+    or one named thing under the same #category (the PAN on a challan
+    and on the return; the same vendor on two #invoice PDFs)."""
+    named, tags = _shared_entities(entities_mine, entities_theirs)
+    return len(named) >= 2 or (len(named) >= 1 and len(tags) >= 1)
+
+
+def enrich(doc_id: str) -> dict:
+    """The saver engine's second pass (owner 2026-09-04: "after read
+    those doc kyraan should auto link if find something connectable"):
+    people named in the text become subjects; documents sharing named
+    entities become related, both ways; captures still get relate().
+    Returns what was linked, for the receipt."""
+    out = {"people": [], "related": [], "tags": [], "uploaded_by": ""}
+    with pg.connection() as conn:
+        me = conn.execute(
+            """SELECT chat_id, kind, text, subject_persons, entities, related, uploaded_by
+               FROM document WHERE id = %s""", (doc_id,)).fetchone()
+        if me is None:
+            return out
+        chat_id, kind, text, subjects, ents, related, uploaded_by = me
+        out["uploaded_by"] = uploaded_by or ""
+        out["tags"] = [e for e in (ents or []) if str(e).startswith("#")]
+        people = [p for p in people_in_text(text) if p not in (subjects or [])]
+        if people:
+            conn.execute(
+                """UPDATE document SET subject_persons = (SELECT coalesce(array_agg(DISTINCT p), '{}')
+                   FROM unnest(subject_persons || %s::text[]) p) WHERE id = %s""", (people, doc_id))
+        out["people"] = list(subjects or []) + people
+        named_mine = [e for e in (ents or []) if not str(e).startswith("#")]
+        if named_mine:
+            others = conn.execute(
+                """SELECT id, coalesce(nullif(caption, ''), filename, '(untitled)'), entities
+                   FROM document WHERE chat_id = %s AND id <> %s AND suppressed_by = '{}'
+                         AND cardinality(entities) > 0 ORDER BY created_at DESC LIMIT 300""",
+                (chat_id, doc_id)).fetchall()
+            for oid, ocap, oents in others:
+                if not links_for(ents, oents):
+                    continue
+                for a, b in ((doc_id, oid), (oid, doc_id)):
+                    conn.execute(
+                        """UPDATE document SET related = (SELECT coalesce(array_agg(DISTINCT r), '{}')
+                           FROM unnest(related || %s::uuid[]) r) WHERE id = %s""", ([str(b)], a))
+                if str(oid) not in [str(r) for r in (related or [])]:
+                    out["related"].append(ocap)
+        conn.commit()
+    if out["related"] or people:
+        log_event("document_enriched", doc=str(doc_id)[:8], people=people,
+                  related=len(out["related"]))
+    try:
+        if kind in ("photo", "moment", "note"):
+            relate(doc_id)
+    except Exception:
+        pass
+    return out
+
+
+def receipt_line(links: dict) -> str:
+    """One line for the save receipt: who, whom, what, and its kin."""
+    bits = []
+    who = links.get("uploaded_by")
+    if who:
+        bits.append("from you" if who == "owner" else f"from {who.replace('_', ' ')}")
+    people = [p for p in links.get("people") or [] if p != "owner"]
+    if people:
+        bits.append("about " + ", ".join(p.replace("_", " ").title() for p in people))
+    if links.get("tags"):
+        bits.append(" ".join(links["tags"][:3]))
+    if links.get("related"):
+        bits.append("related: " + "; ".join(str(c)[:40] for c in links["related"][:3]))
+    return ("\n🔗 " + " · ".join(bits)) if bits else ""
+
+
+def repair_suppression() -> int:
+    """Lift every fact-sweep mark from documents that were never
+    sweepable, then re-sweep captures under the strict rule."""
+    with pg.connection() as conn:
+        n = conn.execute(
+            "UPDATE document SET suppressed_by = '{}' WHERE suppressed_by <> '{}' AND NOT (kind = ANY(%s))",
+            (list(SWEEPABLE_KINDS),)).rowcount
+        conn.execute("UPDATE document SET suppressed_by = '{}' WHERE kind = ANY(%s)", (list(SWEEPABLE_KINDS),))
+        conn.commit()
+    try:
+        from kyraan.memory import engine
+        engine.resweep_forgotten()
+    except Exception as exc:
+        log_event("document_resweep_failed", error=str(exc)[:100])
+    log_event("document_suppression_repaired", restored=n)
+    return n
 
 
 def _allowed_exposures() -> tuple:
@@ -933,20 +1053,37 @@ def delete_documents(chat_id: int, doc_ids: list) -> list:
     return captions
 
 
+SWEEPABLE_KINDS = ("photo", "moment")
+
+
+def sweep_hit(fact_content: str, text: str) -> bool:
+    """Does a forgotten fact hide this capture? Its DISTINCTIVE words must
+    recur — all of them when the fact has three or fewer, else three and
+    most of them. Live 2026-09-04: the old any-two-words rule let
+    "Father's name is Biren Roy" and "User goes by the name Ruma" hide 11
+    of 35 documents, three tax PDFs among them, through "name" + "roy"."""
+    words = _content_words(fact_content) | set(re.findall(r"\b[a-z]{3,}\b", fact_content.lower())) & set(_name_map())
+    if not words:
+        return False
+    hit = words & (_content_words(text) | set(re.findall(r"\b[a-z]{3,}\b", str(text or "").lower())))
+    if len(words) <= 3:
+        return hit == words
+    return len(hit) >= 3 and len(hit) >= 0.6 * len(words)
+
+
 def suppress_for_fact(fact_id: str, fact_content: str) -> int:
-    """The forget cascade, extended to documents (same overlap>=2 rule
-    as episodes): a forgotten fact's documents stop being served."""
-    from kyraan.memory.engine import _words
-    words = _words(fact_content)
-    need = 2 if len(words) >= 2 else 1
+    """The forget cascade for CAPTURES (photos, moments — things Kyraan
+    was told in passing). Files, PDFs and notes the owner deliberately
+    saved are never swept by a fact: the owner deletes those by name."""
     swept = 0
     with pg.connection() as conn:
         rows = conn.execute(
-            "SELECT id, text, suppressed_by FROM document").fetchall()
+            "SELECT id, text, suppressed_by FROM document WHERE kind = ANY(%s)",
+            (list(SWEEPABLE_KINDS),)).fetchall()
         for doc_id, text, suppressed in rows:
             if fact_id in [str(u) for u in (suppressed or [])]:
                 continue
-            if len(words & _words(text)) >= need:
+            if sweep_hit(fact_content, text):
                 conn.execute(
                     """UPDATE document
                        SET suppressed_by = suppressed_by || %s::uuid

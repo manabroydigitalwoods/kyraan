@@ -1141,7 +1141,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                     # NULL. IS NOT NULL called every note dead, including
                     # the current one.
                     "       coalesce(d.suppressed_by, '{}') <> '{}', "
-                    "       d.related "
+                    "       d.related, d.uploaded_by "
                     "FROM document d ORDER BY d.created_at DESC")
                 documents = cur.fetchall()
                 cur.execute("SELECT slug, name, created_at FROM face_template "
@@ -1239,6 +1239,7 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
         (doc_id, kind, caption, filename, subjects, created, chunks,
          source_path, entities, event_date, suppressed, *rest) = row
         related = rest[0] if rest else []     # older fixtures carry no column
+        uploaded_by = rest[1] if len(rest) > 1 else ""
         is_note = kind == "note"
         node_id = f"d:{doc_id}"
         node = {
@@ -1282,6 +1283,11 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             if target:
                 edges.append({"a": node_id, "b": target, "kind": "about",
                               "weight": 0.6})
+        if uploaded_by and uploaded_by not in (subjects or []):
+            target = _person_node(uploaded_by)   # who sent it (2026-09-04)
+            if target:
+                edges.append({"a": target, "b": node_id, "kind": "uploaded",
+                              "weight": 0.5})
         # A capture and the note it illustrates (documents.relate, owner
         # 2026-09-03): the milestone note and the milestone photo are one
         # story, drawn once (each row carries the other's id).
