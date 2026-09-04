@@ -2227,8 +2227,13 @@ const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spin
 // under a finger (negative). Up and down, a drag tilts the CAMERA: drag
 // down and you look down onto the top (positive). Mouse and touch share
 // both.
-const YAW_GAIN = -0.0022;        // radians per pixel of sideways drag
-const PITCH_GAIN = 0.0022;       // radians per pixel of vertical drag
+const YAW_GAIN = -0.0022;        // radians per pixel of sideways drag, at the fit scale
+const PITCH_GAIN = 0.0022;       // radians per pixel of vertical drag, at the fit scale
+/* Zoomed in, the same turn sweeps far more screen (owner, 2026-09-05:
+   "full zoomed, the movement feels very fast"). The turn per pixel
+   shrinks with the zoom so what is under the finger moves at about the
+   same speed whatever the scale: full at 1× and below, a third at 3×. */
+function turnGain() { return 1 / Math.max(1, brain.view.scale); }
 const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
 const HOME_CAM = { yaw: -0.7, pitch: 0.3 };     // three-quarter: a globe of regions
@@ -3676,7 +3681,8 @@ function wireMemory() {
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
     if (brain.orbit) {
       brain.camTouched = true;
-      const dyaw = (point.x - brain.orbit.x) * YAW_GAIN, dpitch = (point.y - brain.orbit.y) * PITCH_GAIN;
+      const g = turnGain();
+      const dyaw = (point.x - brain.orbit.x) * YAW_GAIN * g, dpitch = (point.y - brain.orbit.y) * PITCH_GAIN * g;
       brainCam.yaw += dyaw;
       brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dpitch));
       noteFling(dyaw, dpitch, 0, 0);
@@ -3816,9 +3822,10 @@ function wireMemory() {
         noteFling(0, 0, dx, dy);
       } else {
         brain.camTouched = true;
-        brainCam.yaw += dx * YAW_GAIN;
-        brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * PITCH_GAIN));
-        noteFling(dx * YAW_GAIN, dy * PITCH_GAIN, 0, 0);
+        const g = turnGain();
+        brainCam.yaw += dx * YAW_GAIN * g;
+        brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * PITCH_GAIN * g));
+        noteFling(dx * YAW_GAIN * g, dy * PITCH_GAIN * g, 0, 0);
       }
       touchState.last = p;
     } else if (t.length >= 2) {
