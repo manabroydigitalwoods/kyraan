@@ -158,3 +158,32 @@ def test_a_message_judged_unrelated_by_the_model_falls_through(monkeypatch):
     secrets._last_private_doc[3] = {"doc": doc, "qa": [], "at": __import__("time").time()}
     out = asyncio.run(orchestrator.handle_message(3, "nice weather today"))
     assert not out.startswith("🔒")   # the model, not a keyword, decided this was a topic switch
+
+
+def test_by_name_matches_a_shared_word_stem(monkeypatch):
+    # Live 2026-09-04: "find out the itr acknowledged" found nothing,
+    # though the saved document's own caption reads "Acknowledgement" —
+    # a different suffix on the same root, so the old exact-substring
+    # check missed it.
+    from kyraan.store import documents as d
+    calls = []
+
+    class FakeCursor:
+        def execute(self, sql, params):
+            calls.append(params)
+            self._hit = "acknow" in params[-1].lower() or "acknow" in params[-2].lower()
+        def fetchone(self):
+            return ("doc-1",) if self._hit else None
+
+    class FakeConn:
+        def execute(self, sql, params):
+            calls.append(params)
+            stem = params[-1].strip("%").lower()
+            return type("R", (), {"fetchone": lambda self: ("doc-1",) if stem in "itr-3 acknowledgement ay 2026-27".replace(" ", "").lower() or stem in "acknowledgement" else None})()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(d.pg, "connection", lambda: FakeConn())
+    got = d.by_name(1, "find out the itr acknowledged", exposures=("cloud_ok",))
+    assert got == "doc-1"
+    assert any("%acknow%" in p for p in calls[-1] if isinstance(p, str))

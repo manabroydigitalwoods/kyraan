@@ -918,12 +918,19 @@ def by_name(chat_id: int, query: str, exposures=None) -> str | None:
         return None
     with pg.connection() as conn:
         for w in words:
+            # A 6-char STEM, not the whole word (live 2026-09-04: "find
+            # out the itr acknowledged" matched nothing — the document's
+            # own caption reads "Acknowledgement", and "acknowledged" is
+            # not a substring of it even though they share a root. ILIKE
+            # on the stem is a superset of the old exact-substring check,
+            # so this can only find MORE, never less).
+            stem = w[:6] if len(w) > 6 else w
             row = conn.execute(
                 """SELECT id FROM document
                    WHERE chat_id = %s AND suppressed_by = '{}' AND exposure = ANY(%s)
                          AND (filename ILIKE %s OR caption ILIKE %s)
                    ORDER BY created_at DESC LIMIT 1""",
-                (chat_id, list(exposures or _allowed_exposures()), f"%{w}%", f"%{w}%")).fetchone()
+                (chat_id, list(exposures or _allowed_exposures()), f"%{stem}%", f"%{stem}%")).fetchone()
             if row:
                 return str(row[0])
     return None
