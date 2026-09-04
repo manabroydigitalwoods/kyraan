@@ -34,17 +34,21 @@ def _uploader(update) -> str:
         return ""
 
 
-async def _save_notes(doc_id) -> str:
-    """The saver engine's receipt tail: links made, and privacy."""
+async def _enrich_and_tell(update, doc_id) -> None:
+    """The saver engine's second pass runs after the receipt (the local
+    model takes seconds): what the document is, whom it concerns, its
+    kin — sent as a follow-up when there is something to say."""
     import asyncio as _aio
-    note = ""
+    if not doc_id:
+        return
     try:
         from kyraan.store import documents as _d
         links = await _aio.to_thread(_d.enrich, doc_id)
-        note = _d.receipt_line(links)
+        note = _d.receipt_line(links).strip()
+        if note:
+            await update.message.reply_text(note, do_quote=True)
     except Exception as exc:
         logger.warning("document enrich failed: %s", exc)
-    return note + _private_note(doc_id)
 
 
 def _private_note(doc_id) -> str:
@@ -850,10 +854,11 @@ async def _on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             document.file_name or "", original=(data, ext.lstrip(".")),
             uploaded_by=_uploader(update)))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
-             f"({len(text):,} chars) — ask me about it anytime." + await _save_notes(doc_id)
+             f"({len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that file.")
     await update.message.reply_text(reply, do_quote=True)
+    asyncio.create_task(_enrich_and_tell(update, doc_id))
     orchestrator.record_exchange(
         chat_id, f"[sent a file: {document.file_name}]", reply)
 
@@ -922,12 +927,13 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             uploaded_by=_uploader(update)))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
              f"({len(reader.pages)} page{'s' if len(reader.pages) != 1 else ''}, "
-             f"{len(text):,} chars) — ask me about it anytime." + await _save_notes(doc_id)
+             f"{len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that PDF.")
     orchestrator.record_exchange(
         chat_id, f"[sent a PDF: {document.file_name}]", reply)
     await update.message.reply_text(reply, do_quote=True)
+    asyncio.create_task(_enrich_and_tell(update, doc_id))
 
 
 async def _on_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

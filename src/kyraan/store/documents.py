@@ -619,19 +619,46 @@ def relate(doc_id: str) -> list:
     return newly
 
 
-def people_in_text(text: str) -> list:
-    """Registry people named in a document's text — full names and
-    aliases of two or more letters beyond the owner (a tax return names
-    the father; a policy names the family). Aliases shorter than four
-    letters must appear as whole words."""
-    low = " " + re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()) + " "
-    found = []
-    for name, pid in _name_map().items():
-        if pid == "owner" or pid in found or len(name) < 3:
+_RELATION_LABELS = ("father", "mother", "spouse", "husband", "wife", "nominee", "guardian",
+                    "son", "daughter", "brother", "sister", "witness", "employer", "care of", "c/o",
+                    "referred by", "introducer", "emergency contact", "next of kin")
+
+
+def people_roles(text: str) -> dict:
+    """WHO a document is about versus who it merely names (owner
+    2026-09-04: the tax computation was linked to his father because
+    "Father's Name Ganak Roy" matched the registry — a mention, not a
+    subject). A registry name whose preceding label is a relation
+    (father's name, nominee, spouse…) is a mention with that role; any
+    other match is a subject. The owner counts as a subject here (the
+    caller decides how to store him). Returns
+    {"subjects": [pid…], "mentions": [(pid, role)…]}."""
+    raw = str(text or "")
+    low = re.sub(r"[^a-z0-9]+", " ", raw.lower())
+    padded = " " + low + " "
+    subjects, mentions, seen = [], [], set()
+    for name, pid in sorted(_name_map().items(), key=lambda kv: -len(kv[0])):
+        if pid in seen or len(name) < 3 or f" {name} " not in padded:
             continue
-        if f" {name} " in low:
-            found.append(pid)
-    return valid_subjects(found)
+        roles = set()
+        for m in re.finditer(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", low):
+            before = low[max(0, m.start() - 40):m.start()]
+            for label in _RELATION_LABELS:
+                if label in before:
+                    word = label.split()[0] if label != "care of" else "care of"
+                    roles.add("spouse" if word in ("husband", "wife") else word)
+        seen.add(pid)
+        if roles and low.count(f" {name} ") <= 2:
+            mentions.append((pid, sorted(roles)[0]))
+        else:
+            subjects.append(pid)
+    return {"subjects": subjects, "mentions": mentions}
+
+
+def people_in_text(text: str) -> list:
+    """Registry people a document is ABOUT (never the owner: his files
+    are his by default — see people_roles for who is merely named)."""
+    return valid_subjects([p for p in people_roles(text)["subjects"] if p != "owner"])
 
 
 def _shared_entities(mine: list, theirs: list) -> tuple:
@@ -648,6 +675,8 @@ def links_for(entities_mine: list, entities_theirs: list) -> bool:
     or one named thing under the same #category (the PAN on a challan
     and on the return; the same vendor on two #invoice PDFs)."""
     named, tags = _shared_entities(entities_mine, entities_theirs)
+    if any(n.startswith("id:") for n in named):        # the same PAN, policy, PNR
+        return True
     return len(named) >= 2 or (len(named) >= 1 and len(tags) >= 1)
 
 
@@ -657,7 +686,7 @@ def enrich(doc_id: str) -> dict:
     people named in the text become subjects; documents sharing named
     entities become related, both ways; captures still get relate().
     Returns what was linked, for the receipt."""
-    out = {"people": [], "related": [], "tags": [], "uploaded_by": ""}
+    out = {"people": [], "related": [], "tags": [], "uploaded_by": "", "mentions": [], "about_owner": False}
     with pg.connection() as conn:
         me = conn.execute(
             """SELECT chat_id, kind, text, subject_persons, entities, related, uploaded_by
@@ -667,12 +696,49 @@ def enrich(doc_id: str) -> dict:
         chat_id, kind, text, subjects, ents, related, uploaded_by = me
         out["uploaded_by"] = uploaded_by or ""
         out["tags"] = [e for e in (ents or []) if str(e).startswith("#")]
-        people = [p for p in people_in_text(text) if p not in (subjects or [])]
-        if people:
+        roles = people_roles(text)
+        # the local model's reading, when it has one, overrides the label
+        # rules for people and adds kind, ids, issuer, dates, a title
+        reading = None
+        if kind in ("pdf", "file", "text", "docx", "photo"):
+            try:
+                from kyraan.store import doc_understanding
+                fn_cap = conn.execute("SELECT filename, caption FROM document WHERE id = %s", (doc_id,)).fetchone()
+                reading = doc_understanding.understand(text, fn_cap[0] or "", fn_cap[1] or "")
+            except Exception as exc:
+                log_event("doc_understand_error", error=str(exc)[:100])
+        if reading and (reading["subjects"] or reading["mentions"]):
+            roles = {"subjects": reading["subjects"], "mentions": reading["mentions"]}
+        if reading:
+            extra = ([f"id:{i}" for i in reading["ids"]]
+                     + ([reading["issuer"]] if reading["issuer"] else [])
+                     + ([f"#{reading['kind']}"] if reading["kind"] and not any(str(e).startswith("#") for e in (ents or [])) else []))
+            extra = [e for e in extra if e not in (ents or [])]
+            if extra or reading["date"] or reading["title"]:
+                conn.execute(
+                    """UPDATE document SET entities = entities || %s::text[],
+                           event_date = coalesce(event_date, %s),
+                           caption = CASE WHEN caption = '' THEN %s ELSE caption END
+                       WHERE id = %s""",
+                    (extra, reading["date"], reading["title"][:300], doc_id))
+                ents = list(ents or []) + extra
+            out["reading"] = reading
+        out["about_owner"] = "owner" in roles["subjects"]
+        people = [p for p in valid_subjects([s for s in roles["subjects"] if s != "owner"])
+                  if p not in (subjects or [])]
+        # a mention is never a subject: a father named on a return does
+        # not own the return (owner 2026-09-04)
+        mentioned = [p for p, _ in roles["mentions"]]
+        keep = [p for p in (subjects or []) if p not in mentioned]
+        mention_ents = [f"mentions:{p}:{role}" for p, role in roles["mentions"]
+                        if f"mentions:{p}:{role}" not in (ents or [])]
+        if people or mention_ents or keep != list(subjects or []):
             conn.execute(
-                """UPDATE document SET subject_persons = (SELECT coalesce(array_agg(DISTINCT p), '{}')
-                   FROM unnest(subject_persons || %s::text[]) p) WHERE id = %s""", (people, doc_id))
-        out["people"] = list(subjects or []) + people
+                """UPDATE document SET subject_persons = %s::text[],
+                                       entities = entities || %s::text[] WHERE id = %s""",
+                (keep + [p for p in people if p not in keep], mention_ents, doc_id))
+        out["people"] = keep + [p for p in people if p not in keep]
+        out["mentions"] = roles["mentions"]
         named_mine = [e for e in (ents or []) if not str(e).startswith("#")]
         if named_mine:
             others = conn.execute(
@@ -708,13 +774,25 @@ def receipt_line(links: dict) -> str:
     if who:
         bits.append("from you" if who == "owner" else f"from {who.replace('_', ' ')}")
     people = [p for p in links.get("people") or [] if p != "owner"]
+    if links.get("about_owner"):
+        people = ["you"] + people
     if people:
-        bits.append("about " + ", ".join(p.replace("_", " ").title() for p in people))
+        bits.append("about " + ", ".join(p if p == "you" else p.replace("_", " ").title() for p in people))
+    if links.get("mentions"):
+        bits.append("mentions " + ", ".join(f"{p.replace('_', ' ').title()} ({role})"
+                                            for p, role in links["mentions"][:3]))
     if links.get("tags"):
         bits.append(" ".join(links["tags"][:3]))
     if links.get("related"):
         bits.append("related: " + "; ".join(str(c)[:40] for c in links["related"][:3]))
-    return ("\n🔗 " + " · ".join(bits)) if bits else ""
+    reading = links.get("reading") or {}
+    head = ""
+    if reading.get("title") or reading.get("summary"):
+        head = "\n📎 " + (reading.get("title") or "") + (
+            (" — " + reading["summary"]) if reading.get("summary") else "")
+        if reading.get("amounts"):
+            head += " (" + "; ".join(reading["amounts"]) + ")"
+    return head + (("\n🔗 " + " · ".join(bits)) if bits else "")
 
 
 def repair_suppression() -> int:

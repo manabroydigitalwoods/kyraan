@@ -1283,6 +1283,13 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             if target:
                 edges.append({"a": node_id, "b": target, "kind": "about",
                               "weight": 0.6})
+        for ent in (entities or []):
+            if str(ent).startswith("mentions:"):        # named, not about (2026-09-04)
+                parts = str(ent).split(":")
+                target = _person_node(parts[1]) if len(parts) > 1 else None
+                if target:
+                    edges.append({"a": node_id, "b": target, "kind": "mentions",
+                                  "weight": 0.3, "role": parts[2] if len(parts) > 2 else ""})
         if uploaded_by and uploaded_by not in (subjects or []):
             target = _person_node(uploaded_by)   # who sent it (2026-09-04)
             if target:
