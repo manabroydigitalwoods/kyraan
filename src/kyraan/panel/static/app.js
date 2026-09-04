@@ -1215,6 +1215,9 @@ const LOBES = {
   note:     { anchor: [0.00, 0.42, -0.66], label: "notes" },       // low, other flank  (8)
   contact:  { anchor: [0.56, 0.68, 0.00], label: "contacts" },     // bottom, front    (11)
   tag:      { anchor: [-0.56, 0.68, 0.00], label: "tags" },        // bottom, back      (6)
+  // The two spare vertices, for the lobes that fill as the duties run.
+  place:    { anchor: [0.00, -0.42, 0.66], label: "places" },      // upper, one flank
+  care:     { anchor: [0.00, -0.42, -0.66], label: "care" },       // upper, other flank
 };
 
 /* A node's own anchor: the lobe's point, or its own place on the lobe's
@@ -1264,6 +1267,8 @@ const EDGE_STYLE = {
   fires:       { alpha: 0.3,  width: 1.0, rest: 170, key: "--warn" },
   received:    { alpha: 0.07, width: 0.7, rest: 230, key: "--dim" },
   talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
+  at:          { alpha: 0.8,  width: 1.6, rest: 120, key: "--ok" },      // the owner is inside this place now
+  mentions:    { alpha: 0.3,  width: 0.9, rest: 140, key: "--dim" },     // a document names the place
   // A capture and the note it illustrates (server: document.related).
   illustrates: { alpha: 0.6,  width: 1.3, rest: 90,  key: "--ok" },
   // Two notes joined by an Obsidian [[wikilink]] — the owner's own edge.
@@ -1278,7 +1283,7 @@ const brain = {
   since: 0,                 // ms; 0 = the whole brain, else only what was learned inside
   showType: { core: true, memory: true, person: true, episode: true, face: true,
               document: true, task: true, skill: true, contact: true,
-              note: true, tag: true },
+              note: true, tag: true, place: true, care: true },
   showEdge: Object.fromEntries(Object.keys(EDGE_STYLE).map((k) => [k, true])),
   view: { x: 0, y: 0, scale: 1 },
   pan: null, orbit: null, nodeDrag: null, band: null,
@@ -1981,6 +1986,8 @@ function nodeColour(node, alpha) {
 
 function nodeRadius(node) {
   if (node.type === "core") return 12;
+  if (node.type === "place") return 6.5;
+  if (node.type === "care") return node.status === "done" ? 4.2 : 5.2;
   if (node.dayNode) return 4 + Math.log2((node.members || []).length + 1) * 2.2;
   if (node.type === "person") return 7.5;
   if (node.type === "task") return 6.5;
@@ -3037,6 +3044,15 @@ function renderSelection() {
     kvRow(list, "talks with", `${by.talks || 0}`);
     kvRow(list, "will fire", `${by.fires || 0} scheduled`);
     kvRow(list, "received", `${by.received || 0} files and notes`);
+  } else if (node.type === "place") {
+    kvRow(list, "radius", node.radius_km ? node.radius_km + " km" : "—");
+    kvRow(list, "remembered", (node.created || "").slice(0, 10) || "—");
+    kvRow(list, "owner", node.inside ? "inside now" : "not there", false);
+    kvRow(list, "last visit", (node.last_visit || "").slice(0, 16).replace("T", " ") || "—");
+  } else if (node.type === "care") {
+    kvRow(list, "dose", node.status, node.status === "overdue");
+    if (node.done_on) kvRow(list, "given", node.done_on + (node.source ? " · " + node.source : ""));
+    if (node.due) kvRow(list, "due", node.due, node.status === "overdue");
   } else if (node.type === "task" && node.task_type === "code") {
     kvRow(list, "task", "coding job");
     kvRow(list, "status", node.status, node.status === "failed");
@@ -3767,6 +3783,7 @@ function wireMemory() {
   const since = $("mem-since");
   if (since) since.addEventListener("change", (e) => { setSince(Number(e.target.value)); syncUrl(false); });
   for (const [id, type] of [["show-memory", "memory"], ["show-person", "person"],
+                            ["show-place", "place"], ["show-care", "care"],
                             ["show-episode", "episode"], ["show-document", "document"],
                             ["show-face", "face"], ["show-contact", "contact"],
                             ["show-note", "note"], ["show-tag", "tag"],
@@ -4498,7 +4515,7 @@ for (const id of ["stream-q", "stream-anomalies", "stream-live", "turns-sort",
                   // Added with the recall/docs/faces lobes — but not here, so
                   // hiding any of the three changed the view and never the
                   // URL. Found by toggling one inside the new picker.
-                  "show-episode", "show-document", "show-face", "show-contact",
+                  "show-episode", "show-document", "show-face", "show-contact", "show-place", "show-care",
                   "show-note", "show-tag", "edge-synapse",
                   "edge-relation", "edge-coactivation", "edge-structure",
                   "actions-days"]) {
