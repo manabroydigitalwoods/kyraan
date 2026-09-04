@@ -2304,7 +2304,28 @@ function advanceCamera() {
   // after the pointer has been away for a while — otherwise every view
   // you arranged drifted off the moment you let go.
   if (performance.now() - brain.lastTouch < IDLE_BEFORE_SPIN_MS) return;
+  // Nothing drifts while something is selected: you chose a neuron to
+  // look at, and the idle turn was carrying it away.
+  if (brain.selection.size) return;
   brainCam.yaw += SPIN_RATE;
+}
+
+/* The selection lock. With a neuron selected, orbiting turns the brain
+   AROUND it and zooming zooms INTO it: after any camera or scale change
+   the view shifts so the neuron stays where it was on screen. A pan (or
+   a fit) moves it deliberately, so those re-base the lock instead. */
+function holdSelection(canvas) {
+  const id = brain.selection.size ? [...brain.selection][0] : null;
+  const node = id && brain.byId.get(id);
+  if (!node || node.hidden) { brain.lock = null; brain.camTouched = brain.zoomTouched = brain.panTouched = false; return; }
+  let cur = toScreen(canvas, node, brain.view);
+  if (brain.lock && brain.lock.id === id && (brain.camTouched || brain.zoomTouched) && !brain.panTouched) {
+    brain.view.x += (brain.lock.x - cur.x) / brain.view.scale;
+    brain.view.y += (brain.lock.y - cur.y) / brain.view.scale;
+    cur = toScreen(canvas, node, brain.view);
+  }
+  brain.lock = { id, x: cur.x, y: cur.y };
+  brain.camTouched = brain.zoomTouched = brain.panTouched = false;
 }
 
 function canvasPoint(canvas, event) {
@@ -2795,6 +2816,7 @@ function drawBrain() {
   if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
   advanceCamera();
+  holdSelection(canvas);
   drawGraph(canvas, brain.view, {});
   brain.raf = requestAnimationFrame(drawBrain);
 }
@@ -2863,6 +2885,7 @@ function nodesInBand(canvas) {
    offset K the view must shift by K*(1/s1 - 1/s0). Used by the wheel,
    Cmd-drag, and the +/- keys (about the centre). */
 function zoomAbout(canvas, about, targetScale) {
+  brain.zoomTouched = true;
   const s0 = brain.view.scale;
   const s1 = Math.max(0.35, Math.min(6, targetScale));
   const kx = about.x - canvas.width / 2, ky = about.y - canvas.height / 2;
@@ -2908,6 +2931,7 @@ function fitWhenSettled(delay = 1400) {
 function focusOn(canvas, nodes, view) {
   view = view || brain.view;
   if (!nodes.length) return;
+  brain.panTouched = true;                 // a fit re-bases the selection lock
   const size = Math.min(canvas.width, canvas.height) * 0.42;
   const ratio = window.devicePixelRatio || 1;
   // Camera space, not world space: what has to fit is what is on screen
@@ -3530,6 +3554,7 @@ function wireMemory() {
   wireSidePanel();
 
   canvas.addEventListener("mousedown", (event) => {
+    brain.pressAt = canvasPoint(canvas, event);   // so a click that ends a drag is not a click
     const point = canvasPoint(canvas, event);
     if (brain.keys.zoom || event.metaKey || event.ctrlKey) {
       // Cmd/Ctrl-drag: up zooms in, down zooms out, about where you
@@ -3597,6 +3622,7 @@ function wireMemory() {
     }
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
     if (brain.orbit) {
+      brain.camTouched = true;
       brainCam.yaw += (point.x - brain.orbit.x) * YAW_GAIN;
       brainCam.pitch = Math.max(-1.3, Math.min(1.3,
         brainCam.pitch + (point.y - brain.orbit.y) * PITCH_GAIN));
@@ -3605,6 +3631,7 @@ function wireMemory() {
       return;
     }
     if (brain.pan) {
+      brain.panTouched = true;
       brain.view.x += (point.x - brain.pan.x) / brain.view.scale;
       brain.view.y += (point.y - brain.pan.y) / brain.view.scale;
       brain.pan = point;
@@ -3634,6 +3661,16 @@ function wireMemory() {
   });
 
   canvas.addEventListener("click", (event) => {
+    // The browser fires click after mousedown+mouseup on the same element
+    // even when the mouse travelled across the canvas in between — an
+    // orbit ended on empty space and cleared the selection every time
+    // (owner, 2026-09-04). A press that moved is a drag, not a click.
+    if (brain.pressAt) {
+      const now = canvasPoint(canvas, event);
+      const moved = Math.hypot(now.x - brain.pressAt.x, now.y - brain.pressAt.y);
+      brain.pressAt = null;
+      if (moved > 4 * (window.devicePixelRatio || 1)) return;
+    }
     const hit = nodeAt(canvas, event);
     if (!hit) {
       const lobe = captionAt(canvas, event);
@@ -3687,6 +3724,11 @@ function wireMemory() {
   const tp = (t) => canvasPoint(canvas, { clientX: t.clientX, clientY: t.clientY });
   canvas.addEventListener("touchstart", (event) => {
     touchState.angle = null;
+    // A fresh touch (no finger was down) starts a clean gesture; a second
+    // finger joining marks the whole thing a gesture, so the last finger
+    // lifting at the end of a pinch is never read as a tap on nothing.
+    if (touchState.mode === null) touchState.gestured = false;
+    if (event.touches.length >= 2) touchState.gestured = true;
     event.preventDefault();
     brain.lastTouch = performance.now();
     const t = event.touches;
@@ -3707,11 +3749,15 @@ function wireMemory() {
     brain.lastTouch = performance.now();
     const t = event.touches;
     if (touchState.mode === "one" && t.length === 1) {
+      if (touchState.start && Math.hypot(tp(t[0]).x - touchState.start.x, tp(t[0]).y - touchState.start.y)
+          > 8 * (window.devicePixelRatio || 1)) touchState.gestured = true;
       const p = tp(t[0]);
       const dx = p.x - touchState.last.x, dy = p.y - touchState.last.y;
       if (brain.dragMode === "pan") {
+        brain.panTouched = true;
         brain.view.x += dx / brain.view.scale; brain.view.y += dy / brain.view.scale;
       } else {
+        brain.camTouched = true;
         brainCam.yaw += dx * YAW_GAIN;
         brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * PITCH_GAIN));
       }
@@ -3723,6 +3769,7 @@ function wireMemory() {
       const angle = Math.atan2(b.y - a.y, b.x - a.x);
       if (touchState.mode === "two" && touchState.dist > 0) {
         zoomAbout(canvas, mid, brain.view.scale * (dist / touchState.dist));
+        brain.panTouched = true;
         brain.view.x += (mid.x - touchState.mid.x) / brain.view.scale;
         brain.view.y += (mid.y - touchState.mid.y) / brain.view.scale;
         // Twist: the two fingers' angle turns the brain about the
@@ -3740,7 +3787,7 @@ function wireMemory() {
   }, { passive: false });
   canvas.addEventListener("touchend", (event) => {
     event.preventDefault();
-    if (touchState.mode === "one" && touchState.start && touchState.last
+    if (touchState.mode === "one" && !touchState.gestured && touchState.start && touchState.last
         && Math.hypot(touchState.last.x - touchState.start.x,
                       touchState.last.y - touchState.start.y) < 8 * (window.devicePixelRatio || 1)) {
       // A tap: select what is under the finger, like a click. Two taps
