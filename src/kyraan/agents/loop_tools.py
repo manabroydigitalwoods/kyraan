@@ -3387,3 +3387,119 @@ async def _tools_describe(chat_id: int, args: dict, raw_text: str):
 
 
 TOOLS["tools.describe"]["run"] = _tools_describe
+
+
+# ---------------------------------------------------------------------
+# Direct renderings (token audit 2026-09-04): a plain listing ask —
+# "my reminders", "list tasks", "is the AC on" — needs no second model
+# call to turn a list into words. The executor renders the reply; the
+# loop returns it as a __direct_reply__ (history keeps the text, it is
+# the owner's own data). Anything with a question in it beyond the
+# listing ("am I free tomorrow?") still goes to the model.
+import re as _re_direct
+
+_SIMPLE_ASK = _re_direct.compile(
+    r"^\s*(?:(?:can\s+you\s+|please\s+|pls\s+)?(?:show|list|give)(?:\s+me)?\s+(?:my\s+|the\s+|all\s+)*"
+    r"|(?:what\s+are\s+|what'?s\s+)?(?:my\s+|the\s+)?)"
+    r"(?:reminders?|tasks?|scheduled\s+tasks?|watch\s+rules?|rules?|events?|calendar|schedule|"
+    r"(?:upcoming|today'?s?|tomorrow'?s?)\s+(?:events?|calendar|schedule))"
+    r"(?:\s+(?:today|tomorrow|this\s+week|for\s+today|for\s+tomorrow))?\s*[?.!]*\s*$",
+    _re_direct.IGNORECASE)
+_STATE_ASK = _re_direct.compile(
+    r"^\s*(?:is|are)\s+(?:the\s+)?([a-z][a-z ]{1,30}?)\s+(?:on|off|running)\s*[?.!]*\s*$", _re_direct.IGNORECASE)
+
+
+def _fmt_when(iso: str) -> str:
+    try:
+        from datetime import datetime
+        dt = datetime.fromisoformat(str(iso))
+        return dt.strftime("%a %-d %b, %-I:%M %p").replace(":00 ", " ")
+    except Exception:
+        return str(iso)[:16]
+
+
+def _render_reminders(result, raw_text):
+    if not isinstance(result, list):
+        return None
+    if not result:
+        return "No reminders set."
+    lines = []
+    for r in result[:12]:
+        if isinstance(r, dict):
+            lines.append(f"• {r.get('text') or r.get('title') or '?'} — {r.get('when') or _fmt_when(r.get('at') or r.get('due') or '')}"
+                         + (f" ({r['repeats']})" if r.get("repeats") else ""))
+        else:
+            lines.append(f"• {r}")
+    return "Your reminders:\n" + "\n".join(lines) + (f"\n…and {len(result) - 12} more" if len(result) > 12 else "")
+
+
+def _render_tasks(result, raw_text):
+    if not isinstance(result, list):
+        return None
+    if not result:
+        return "No scheduled tasks."
+    lines = [f"• {t.get('instruction', '')[:90]} — {t.get('when', '')}" + (f" ({t['repeats']})" if t.get("repeats") else "")
+             for t in result[:12] if isinstance(t, dict)]
+    return "Scheduled tasks:\n" + "\n".join(lines)
+
+
+def _render_rules(result, raw_text):
+    if isinstance(result, dict):
+        return "No watch rules set." if not result.get("rules") else None
+    if not isinstance(result, list):
+        return None
+    return "Standing rules:\n" + "\n".join(f"• {r}" for r in result[:12])
+
+
+def _render_events(result, raw_text):
+    if not isinstance(result, list):
+        return None
+    if not result:
+        return "Nothing on the calendar in that window."
+    lines = []
+    for e in result[:12]:
+        if not isinstance(e, dict):
+            continue
+        when = "all day " + str(e.get("start", ""))[:10] if e.get("all_day") else _fmt_when(e.get("start", ""))
+        lines.append(f"• {when} — {e.get('title', '?')}" + (f" @ {e['location']}" if e.get("location") else ""))
+    return "Calendar:\n" + "\n".join(lines)
+
+
+def _render_state(result, raw_text):
+    if not isinstance(result, dict) or "state" not in result:
+        return None
+    m = _STATE_ASK.match(raw_text or "")
+    if not m:
+        return None
+    name = result.get("name") or str(result.get("entity", "")).split(".")[-1].replace("_", " ")
+    state = str(result.get("state", "")).lower()
+    unit = result.get("unit") or ""
+    since = f" (since {result['last_changed']})" if result.get("last_changed") else ""
+    if state in ("on", "off"):
+        return f"{name} is {state.upper()}{since}."
+    return f"{name}: {result.get('state')}{unit}{since}."
+
+
+DIRECT_RENDER = {
+    "reminders.list": _render_reminders,
+    "tasks.list": _render_tasks,
+    "rules.list": _render_rules,
+    "calendar.list_events": _render_events,
+    "home.get_state": _render_state,
+}
+
+
+def direct_render(tool: str, result, raw_text: str) -> str | None:
+    """The reply text when this tool's result answers the ask by itself,
+    else None (the model writes the reply)."""
+    fn = DIRECT_RENDER.get(tool)
+    if not fn:
+        return None
+    if tool == "home.get_state":
+        return fn(result, raw_text)
+    if not _SIMPLE_ASK.match(raw_text or ""):
+        return None
+    try:
+        return fn(result, raw_text)
+    except Exception:
+        return None

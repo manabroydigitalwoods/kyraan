@@ -506,7 +506,13 @@ _secret_turn: _contextvars.ContextVar = _contextvars.ContextVar("secret_turn", d
 _user_redaction: _contextvars.ContextVar = _contextvars.ContextVar("user_redaction", default=None)
 
 
+last_owner_turn_at: float = 0.0   # for the prompt-cache keep-warm (2026-09-04)
+
+
 async def handle_message(chat_id: int, raw_text: str) -> str:
+    global last_owner_turn_at
+    if kernel.viewer_stage() == "owner":
+        last_owner_turn_at = time.time()
     from kyraan.control_plane.logging_setup import (
         log_trace, new_turn, start_anomaly_capture)
     new_turn()  # correlates every event/trace of this flow under one id

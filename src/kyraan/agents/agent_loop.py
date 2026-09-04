@@ -441,6 +441,40 @@ def tool_spec(name: str) -> str:
     return f"- {name} {spec['params']}\n    {about}"
 
 
+def build_system(read_only: bool = False, stage: str = "owner", tier: str = "frontier",
+                 secret: bool = False) -> str:
+    """The cache-stable system prefix, ONE builder for the live turn and
+    the keep-warm ping (triggers/cache_warm) — byte-identical prefixes
+    are what the provider's cache matches on."""
+    system = _AGENT_SYSTEM.format(
+        capabilities=capability_brief(),
+        tools=_tools_block(read_only=read_only, stage=stage),
+    ) + _persona_block()
+    if read_only:
+        system += ("\n\nSCHEDULED RUN: you are executing a scheduled task, "
+                   "not chatting. Only READ tools exist here — any action "
+                   "needing a write must be suggested for the owner to do "
+                   "live. Reply with the task's RESULT, concise, no greeting.")
+    if secret:
+        from kyraan.agents.secrets import SYSTEM_ADDENDUM
+        system += SYSTEM_ADDENDUM
+    elif tier == "cheap":
+        # Degraded-mode self-awareness, carried over from the classifier
+        # era's live lesson: the local backup model must keep replies
+        # short and admit reduced quality instead of spiraling.
+        system += ("\n\nIMPORTANT: you are running as the smaller LOCAL "
+                   "backup model because the main model is unreachable. "
+                   "Keep replies short and factual. If the user says you "
+                   "seem confused or repetitive, say honestly that the "
+                   "main model is temporarily unavailable.")
+    return system
+
+
+def warm_system() -> str:
+    """The owner's live-turn prefix, for the keep-warm ping."""
+    return build_system(read_only=False, stage="owner", tier="frontier", secret=False)
+
+
 def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
     from kyraan.tools import gmail as _gmail
     from kyraan.tools import routes as _routes
@@ -704,28 +738,8 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
 
     from kyraan.control_plane.logging_setup import stage as _stage
     with _stage("prompt_build"):
-        system = _AGENT_SYSTEM.format(
-            capabilities=capability_brief(),
-            tools=_tools_block(read_only=read_only,
-                               stage=kernel.viewer_stage()),
-        ) + _persona_block()
-    if read_only:
-        system += ("\n\nSCHEDULED RUN: you are executing a scheduled task, "
-                   "not chatting. Only READ tools exist here — any action "
-                   "needing a write must be suggested for the owner to do "
-                   "live. Reply with the task's RESULT, concise, no greeting.")
-    if secret:
-        from kyraan.agents.secrets import SYSTEM_ADDENDUM
-        system += SYSTEM_ADDENDUM
-    elif tier == "cheap":
-        # Degraded-mode self-awareness, carried over from the classifier
-        # era's live lesson: the local backup model must keep replies
-        # short and admit reduced quality instead of spiraling.
-        system += ("\n\nIMPORTANT: you are running as the smaller LOCAL "
-                   "backup model because the main model is unreachable. "
-                   "Keep replies short and factual. If the user says you "
-                   "seem confused or repetitive, say honestly that the "
-                   "main model is temporarily unavailable.")
+        system = build_system(read_only=read_only, stage=kernel.viewer_stage(),
+                              tier=tier, secret=secret)
     # Dynamic context lives AFTER the cache-stable system prefix. History
     # keeps its recent entries at full clip; older ones tighten — recency
     # carries the follow-up context, so nothing useful is dropped.
@@ -1070,6 +1084,14 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             prior = (await loop_tools.capture_prior(chat_id, tool, args)
                      if tool in _PRIOR_AT_DISPATCH else None)
             result = await TOOLS[tool]["run"](chat_id, args, raw_text)
+            if (not executed_tool and not (isinstance(result, dict) and (result.get("error") or "__direct_reply__" in result))):
+                # A plain listing ask is answered by the executor's own
+                # rendering — no second model call (token audit 2026-09-04)
+                from kyraan.agents.loop_tools import direct_render
+                rendered = direct_render(tool, result, raw_text)
+                if rendered:
+                    result = {"__direct_reply__": rendered, "__history__": rendered}
+                    log_event("agent_direct_reply", tool=tool, chat_id=chat_id)
             await loop_tools.record_action(chat_id, tool, args, result, prior)
         except kernel.ConfirmationRequired:
             # The standard confirm flow, verbatim: stash the EXACT call;

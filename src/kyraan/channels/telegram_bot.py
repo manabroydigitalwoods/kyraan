@@ -1113,6 +1113,18 @@ def _wire_whereabouts(job_queue: JobQueue, bot) -> None:
                             job_kwargs=_ALWAYS_FIRE)
 
 
+def _wire_cache_warm(job_queue: JobQueue) -> None:
+    """A 1-token touch of the live prompt prefix every four minutes
+    while the owner is chatting, so the provider's cache stays warm."""
+    from kyraan.triggers import cache_warm as _warm
+
+    async def _tick(context: ContextTypes.DEFAULT_TYPE) -> None:
+        await _warm.tick()
+
+    job_queue.run_repeating(_tick, interval=_warm.INTERVAL_S, first=90, name="cache_warm",
+                            job_kwargs=_ALWAYS_FIRE)
+
+
 def _wire_slack_watch(job_queue: JobQueue, bot) -> None:
     """Mention watch (2026-09-02): draft + confirm, never post. Skips
     itself entirely when Slack isn't mounted or the token is absent."""
@@ -1670,6 +1682,7 @@ def run() -> None:
     _wire_brief(app.job_queue, app.bot)
     _wire_voice_echo(app.job_queue, app.bot)
     _wire_whereabouts(app.job_queue, app.bot)
+    _wire_cache_warm(app.job_queue)
 
     # Files OUT (2026-08-28): the loop's files.send delivers through here.
     from kyraan.channels import file_send as _file_send
