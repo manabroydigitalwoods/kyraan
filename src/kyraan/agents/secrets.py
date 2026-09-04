@@ -234,12 +234,37 @@ FOLLOW_UP_S = 20 * 60
 _last_private_doc: dict = {}
 
 
+def _turn_seq(chat_id: int) -> int:
+    try:
+        from kyraan.agents import orchestrator
+        return orchestrator._turn_seq.get(chat_id, 0)
+    except Exception:
+        return 0
+
+
+def _mark_touched(chat_id: int) -> None:
+    """This turn answered via the private-document path — so a LATER
+    turn that answers some other way (any other rail, any other tool)
+    can end the thread even though the time window is still open."""
+    try:
+        from kyraan.agents import orchestrator
+        orchestrator._private_doc_touched[chat_id] = _turn_seq(chat_id)
+    except Exception:
+        pass
+
+
 def recent_private_doc(chat_id: int, now: float | None = None) -> dict | None:
+    """The document a private answer just covered, or None once the
+    conversation has moved on (live 2026-09-04: three unrelated turns
+    about token cost fell inside the 20-minute window and "which will
+    actually cost count?" got routed to the tax PDF instead of the cost
+    thread it plainly continued — see orchestrator.handle_message,
+    which clears this the instant a turn is answered some other way)."""
     import time as _t
     entry = _last_private_doc.get(chat_id)
-    if entry and (now or _t.time()) - entry["at"] <= FOLLOW_UP_S:
-        return entry
-    return None
+    if not entry or (now or _t.time()) - entry["at"] > FOLLOW_UP_S:
+        return None
+    return entry
 
 
 async def local_document_reply(chat_id: int, raw_text: str, doc: dict, follow_up: bool = False) -> str | None:
@@ -271,6 +296,7 @@ async def local_document_reply(chat_id: int, raw_text: str, doc: dict, follow_up
             cur = _last_private_doc.get(chat_id)
             qa = (cur["qa"] if cur and cur.get("doc", {}).get("caption") == doc.get("caption") else [])
             _last_private_doc[chat_id] = {"doc": doc, "qa": (qa + [(raw_text, text)])[-6:], "at": _t.time()}
+            _mark_touched(chat_id)
             return text
     return None
 

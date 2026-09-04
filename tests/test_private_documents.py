@@ -86,3 +86,29 @@ def test_private_lane_follows_the_privacy_flag(monkeypatch):
     assert not router.tier_may_see_private("cheap")
     base["model_tiers"]["cheap"] = {"provider": "ollama", "model": "qwen3:8b"}
     assert router.tier_may_see_private("cheap")                        # a local endpoint always may
+
+
+def test_follow_up_breaks_when_something_else_is_asked_in_between(monkeypatch):
+    from kyraan.agents import orchestrator, secrets
+    from kyraan.control_plane import kernel
+    from kyraan.model_router import router
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    doc = {"caption": "Computation.pdf", "date": "2026-09-04", "text": "Other sources 26,347"}
+    monkeypatch.setattr(documents, "local_only_match", lambda chat_id, q: doc if "computation" in q else None)
+
+    class R:
+        def __init__(self, t): self.text = t
+    answers = iter(["Total income 11,51,350."])
+
+    async def fake_acall(prompt="", system="", tier="", max_tokens=0, **kw):
+        return R(next(answers))
+    monkeypatch.setattr(router, "acall", fake_acall)
+    secrets._last_private_doc.clear()
+    orchestrator._private_doc_touched.pop(1, None)
+    assert asyncio.run(orchestrator.handle_message(1, "explain the computation")).startswith("🔒 Total")
+    assert secrets.recent_private_doc(1) is not None      # the doc turn itself: still reachable
+    # An unrelated turn — answered by some other deterministic rail —
+    # runs in between and must end the thread, even inside the time window.
+    out = asyncio.run(orchestrator.handle_message(1, "hello"))
+    assert not out.startswith("🔒")
+    assert secrets.recent_private_doc(1) is None

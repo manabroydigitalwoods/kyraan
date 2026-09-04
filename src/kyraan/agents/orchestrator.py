@@ -507,12 +507,15 @@ _user_redaction: _contextvars.ContextVar = _contextvars.ContextVar("user_redacti
 
 
 last_owner_turn_at: float = 0.0   # for the prompt-cache keep-warm (2026-09-04)
+_turn_seq: dict = {}   # per-chat turn counter — is THIS turn adjacent to the last one?
+_private_doc_touched: dict = {}   # chat_id -> the turn_seq that answered via the private-document path
 
 
 async def handle_message(chat_id: int, raw_text: str) -> str:
     global last_owner_turn_at
     if kernel.viewer_stage() == "owner":
         last_owner_turn_at = time.time()
+    _turn_seq[chat_id] = _turn_seq.get(chat_id, 0) + 1
     from kyraan.control_plane.logging_setup import (
         log_trace, new_turn, start_anomaly_capture)
     new_turn()  # correlates every event/trace of this flow under one id
@@ -655,6 +658,15 @@ async def _handle_message_traced(chat_id: int, raw_text: str, turn_started: floa
         log_event("secret_turn", chat_id=chat_id,
                   retro=_secrets.retro(raw_text), closed=_secrets.closes(raw_text))
     reply = await _dispatch(chat_id, raw_text)
+    if _turn_seq.get(chat_id) != _private_doc_touched.get(chat_id):
+        # This turn's reply came from somewhere OTHER than the private-
+        # document path (2026-09-04: three unrelated turns about token
+        # cost fell inside the follow-up window and hijacked "which will
+        # actually cost count?" into the tax PDF). Any other reply ends
+        # the thread — the NEXT turn is not a follow-up even though it is
+        # numerically adjacent.
+        from kyraan.agents import secrets as _secrets_doc
+        _secrets_doc._last_private_doc.pop(chat_id, None)
     return await _finish_turn_async(chat_id, raw_text, reply, turn_started,
                                     redaction_token, skip_token, degraded_token,
                                     secret_token, user_red_token, answered_token)
