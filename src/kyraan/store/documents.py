@@ -703,13 +703,69 @@ def relevant_snippet(chat_id: int, message: str) -> str | None:
             + clipped.replace("\n", " ⏎ "))
 
 
+def _name_words(query: str) -> list:
+    return [w for w in re.findall(r"[a-z0-9]{4,}", query.lower())
+            if w not in {"explain", "summarize", "summarise", "about", "what", "does", "this", "that",
+                         "with", "from", "have", "show", "read", "open", "tell", "document", "file",
+                         "saved", "please", "detail", "details"}]
+
+
+def by_name(chat_id: int, query: str, exposures=None) -> str | None:
+    """A document id whose FILENAME or caption carries a word of the ask
+    (live 2026-09-04: "explain the computation" found nothing though
+    Computation.pdf was saved 45 s earlier — chunk search never saw
+    the name). Newest first; exposure-gated unless told otherwise."""
+    words = _name_words(query)
+    if not words:
+        return None
+    with pg.connection() as conn:
+        for w in words:
+            row = conn.execute(
+                """SELECT id FROM document
+                   WHERE chat_id = %s AND suppressed_by = '{}' AND exposure = ANY(%s)
+                         AND (filename ILIKE %s OR caption ILIKE %s)
+                   ORDER BY created_at DESC LIMIT 1""",
+                (chat_id, list(exposures or _allowed_exposures()), f"%{w}%", f"%{w}%")).fetchone()
+            if row:
+                return str(row[0])
+    return None
+
+
+def local_only_match(chat_id: int, query: str, max_chars: int = 6000) -> dict | None:
+    """The private document the ask names — for the local tier ONLY (the
+    caller must never put this in a cloud prompt). None when the ask
+    names no local-only document."""
+    doc_id = by_name(chat_id, query, exposures=("local_only",))
+    if not doc_id:
+        return None
+    with pg.connection() as conn:
+        row = conn.execute(
+            """SELECT coalesce(nullif(caption, ''), filename, '(untitled)'), created_at::date, text
+               FROM document WHERE id = %s""", (doc_id,)).fetchone()
+    if not row:
+        return None
+    caption, day, text = row
+    return {"caption": caption, "date": day.isoformat(),
+            "text": text[:max_chars] + ("…(clipped)" if len(text) > max_chars else "")}
+
+
+def exposure_of(doc_id) -> str:
+    try:
+        with pg.connection() as conn:
+            row = conn.execute("SELECT exposure FROM document WHERE id = %s", (str(doc_id),)).fetchone()
+        return row[0] if row else ""
+    except Exception:
+        return ""
+
+
 def full_text(chat_id: int, query: str, max_chars: int = 6000) -> dict | None:
     """The whole document (clipped), found by the same hybrid search —
     "summarize the PDF" needs more than one 400-char chunk (live
     2026-08-28: a summary ask dead-ended in scope interrogations because
     no tool could read the doc). Exposure-gated like every read."""
     hits = search(chat_id, query, k=1)
-    if not hits:
+    doc_id = hits[0]["doc_id"] if hits else by_name(chat_id, query)
+    if not doc_id:
         return None
     with pg.connection() as conn:
         row = conn.execute(
@@ -718,7 +774,7 @@ def full_text(chat_id: int, query: str, max_chars: int = 6000) -> dict | None:
                FROM document
                WHERE chat_id = %s AND id = %s AND suppressed_by = '{}'
                      AND exposure = ANY(%s)""",
-            (chat_id, hits[0]["doc_id"],
+            (chat_id, doc_id,
              list(_allowed_exposures()))).fetchone()
     if not row:
         return None

@@ -22,6 +22,18 @@ from kyraan.control_plane.dnd import local_now
 from kyraan.control_plane.logging_setup import get_logger, log_event
 from kyraan.triggers import briefs, scheduler
 
+def _private_note(doc_id) -> str:
+    """Tax papers, statements, medical files stay local-only: the owner
+    should know the cloud never sees them and the local model answers."""
+    try:
+        from kyraan.store import documents as _d
+        if doc_id and _d.exposure_of(doc_id) == "local_only":
+            return " 🔒 Kept private: only the local model reads it, never the cloud."
+    except Exception:
+        pass
+    return ""
+
+
 logger = get_logger("telegram_bot")
 
 
@@ -812,7 +824,7 @@ async def _on_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             chat_id, "file", text, (update.message.caption or "")[:120],
             document.file_name or "", original=(data, ext.lstrip("."))))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
-             f"({len(text):,} chars) — ask me about it anytime."
+             f"({len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that file.")
     await update.message.reply_text(reply, do_quote=True)
@@ -883,7 +895,7 @@ async def _on_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             document.file_name or "", original=(data, "pdf")))
     reply = (f'📄 Saved "{document.file_name}" to document memory '
              f"({len(reader.pages)} page{'s' if len(reader.pages) != 1 else ''}, "
-             f"{len(text):,} chars) — ask me about it anytime."
+             f"{len(text):,} chars) — ask me about it anytime." + _private_note(doc_id)
              if doc_id else
              "I couldn't distill any text worth keeping from that PDF.")
     orchestrator.record_exchange(

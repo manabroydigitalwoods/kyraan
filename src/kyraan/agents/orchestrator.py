@@ -1245,8 +1245,14 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 b = _er.create(chat_id, f"PM2.5 below {thr}: purifier {lo_mode}", "sensor.air_purifier_pm2_5",
                                "below", thr, message=f"PM2.5 is back below {thr}", cooldown_minutes=15,
                                action={"tool": "home.purifier", "args": {"mode": lo_mode}})
+                applied = ""
+                try:  # the current reading decides the mode right now, not in 15 minutes
+                    if await _er.tick(send=None):
+                        applied = " Applied now for the current reading."
+                except Exception as exc:
+                    log_event("air_rule_apply_failed", error=str(exc)[:80])
                 return (f"Done. Above {thr} the purifier goes to {hi_mode}, below {thr} back to {lo_mode} — "
-                        f"checked every 15 minutes, and I'll tell you each time it switches. "
+                        f"checked every 15 minutes, and I'll tell you each time it switches.{applied} "
                         f"(\"cancel rule {a.id[:4]}\" or \"{b.id[:4]}\" undoes it.)")
             return await _gated(
                 chat_id, _SC("home.purifier", {"mode": hi_mode}), _make_air_rules,
@@ -1584,6 +1590,27 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     "and I won't send a private message to the cloud. Nothing "
                     "was stored — try again in a moment, or say \"private mode "
                     "off\" if this doesn't need to stay private.")
+        if kernel.viewer_person() == "owner" and _re.search(
+                r"\b(explain|summar|what(?:'s| is| does)|tell me|read|open|details?|amount|total|how much|when|who|where)\b",
+                raw_text, _re.IGNORECASE):
+            # A question that names a PRIVATE document is the local
+            # model's, with the document — never the cloud's (2026-09-04).
+            try:
+                import asyncio as _aio
+                from kyraan.store import documents as _docs
+                doc = await _aio.to_thread(_docs.local_only_match, chat_id, raw_text)
+            except Exception:
+                doc = None
+            if doc:
+                from kyraan.agents import secrets as _secrets_doc
+                _skip_extraction.set(True)
+                _history_redaction.set("[answered about a private document]")
+                _answered_by.set("local")
+                text = await _secrets_doc.local_document_reply(chat_id, raw_text, doc)
+                log_event("private_document_answered", ok=bool(text), doc=doc["caption"][:40])
+                return (f"🔒 {text}" if text else
+                        f"\"{doc['caption']}\" is a private document, so I only read it on the local "
+                        "model — and it gave me nothing just now. Try again in a moment.")
         for tier in tier_chain():
             if tier == "cheap":
                 # P3.7a: the local model now holds BOTH the loop and

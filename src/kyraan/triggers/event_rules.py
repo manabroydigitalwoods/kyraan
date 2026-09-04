@@ -272,7 +272,9 @@ async def tick(send=None) -> int:
                 # Act first — the owner confirmed this at creation. Then
                 # tell them, DND permitting; the act itself is never held.
                 try:
-                    await kernel.run_tool(kernel.ToolCall(rule.action["tool"], dict(rule.action["args"])))
+                    # confirmed=True: the owner confirmed this rule at creation (live
+                    # 2026-09-04: 40 ticks of "requires confirmation", purifier stuck on turbo)
+                    await kernel.run_tool(kernel.ToolCall(rule.action["tool"], dict(rule.action["args"]), confirmed=True))
                 except Exception as exc:
                     log_event("event_rule_action_failed", rule_id=rule.id, error=str(exc)[:120])
                     continue

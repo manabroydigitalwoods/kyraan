@@ -281,3 +281,17 @@ def test_pm25_rule_rail_makes_two_rules_after_one_confirm(monkeypatch):
     rules = event_rules.list_active(7)
     assert sorted((r.op, r.action["args"]["mode"]) for r in rules) == [("above", "turbo"), ("below", "auto")]
     assert all(r.cooldown_minutes == 15 for r in rules)
+
+
+async def test_action_carries_the_standing_confirmation(ticking, monkeypatch):
+    seen = []
+    now = datetime.now(timezone.utc)
+
+    async def fake(call, **kw):
+        seen.append(call)
+        return {"state": "123", "last_changed": now.isoformat()}
+    monkeypatch.setattr(kernel, "run_tool", fake)
+    _rule(entity="sensor.bedroom_temp", op="above", value="90", for_minutes=0,
+          action={"tool": "home.purifier", "args": {"mode": "turbo"}})
+    assert await event_rules.tick() == 1
+    assert any(c.tool_name == "home.purifier" and c.confirmed for c in seen)
