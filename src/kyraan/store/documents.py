@@ -724,6 +724,9 @@ def enrich(doc_id: str) -> dict:
                 ents = list(ents or []) + extra
             out["reading"] = reading
         out["about_owner"] = "owner" in roles["subjects"]
+        if out["about_owner"] and "about:owner" not in (ents or []):
+            conn.execute("UPDATE document SET entities = entities || '{about:owner}'::text[] WHERE id = %s", (doc_id,))
+            ents = list(ents or []) + ["about:owner"]
         people = [p for p in valid_subjects([s for s in roles["subjects"] if s != "owner"])
                   if p not in (subjects or [])]
         # a mention is never a subject: a father named on a return does

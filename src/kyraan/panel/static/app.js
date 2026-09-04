@@ -1268,7 +1268,8 @@ const EDGE_STYLE = {
   received:    { alpha: 0.07, width: 0.7, rest: 230, key: "--dim" },
   talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
   at:          { alpha: 0.8,  width: 1.6, rest: 120, key: "--ok" },      // the owner is inside this place now
-  mentions:    { alpha: 0.3,  width: 0.9, rest: 140, key: "--dim" },     // a document names the place
+  mentions:    { alpha: 0.3,  width: 0.9, rest: 140, key: "--dim" },     // a document names a place or a person
+  uploaded:    { alpha: 0.5,  width: 1.2, rest: 120, key: "--ok" },      // who sent the file (2026-09-04)
   // A capture and the note it illustrates (server: document.related).
   illustrates: { alpha: 0.6,  width: 1.3, rest: 90,  key: "--ok" },
   // Two notes joined by an Obsidian [[wikilink]] — the owner's own edge.
@@ -2511,6 +2512,35 @@ function drawGraph(canvas, view, opts) {
                 opts.nodeScale || 1, strength);
   }
 
+  // A single selection's neighbourhood is READABLE (owner 2026-09-04:
+  // "selected signals and items are not readable"): each wire carries
+  // its kind (and role), each neighbour its name in full text colour.
+  const soleId = brain.selection.size === 1 ? [...brain.selection][0] : null;
+  const nearSel = new Set();
+  if (soleId && opts.labels !== false) {
+    ctx.font = `${10 * ratio}px ui-monospace, monospace`;
+    for (const edge of brain.edges) {
+      if (edge.a !== soleId && edge.b !== soleId) continue;
+      if (!brain.showEdge[edge.kind] || !shown.has(edge.a) || !shown.has(edge.b)) continue;
+      const other = edge.a === soleId ? edge.b : edge.a;
+      nearSel.add(other);
+      const pa = proj.get(edge.a), pb = proj.get(edge.b);
+      if (!pa || !pb) continue;
+      const ec = edgeControl(pa, pb, edge.a, edge.b);
+      const mx = 0.25 * pa.x + 0.5 * ec.x + 0.25 * pb.x;
+      const my = 0.25 * pa.y + 0.5 * ec.y + 0.25 * pb.y;
+      const word = edge.kind === "uploaded" ? (edge.a === soleId ? "uploaded by" : "uploaded")
+                 : edge.kind === "about" ? "about"
+                 : edge.kind + (edge.role ? " · " + edge.role : "");
+      const w = ctx.measureText(word).width + 8 * ratio, h = 14 * ratio;
+      ctx.fillStyle = panel; ctx.globalAlpha = 0.88;
+      ctx.fillRect(mx - w / 2, my - h / 2, w, h);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = edge.kind === "mentions" ? dim : text;
+      ctx.fillText(word, mx - w / 2 + 4 * ratio, my + 3.5 * ratio);
+    }
+  }
+
   // Somas, back to front.
   for (const node of ordered) {
     const p = proj.get(node.id);
@@ -2630,7 +2660,7 @@ function drawGraph(canvas, view, opts) {
     // carry the rest); everything else earns its name by zoom, hover,
     // selection, search or focus. Naming the busiest skills at rest was
     // the last of the standing clutter.
-    const named = view.scale > 2.0 || node.type === "person" || node.dayNode
+    const named = view.scale > 2.0 || node.type === "person" || node.dayNode || nearSel.has(node.id)
       || (selected && (brain.selection.size <= 24 || view.scale > 2.0))
       || (brain.query && brain.matches.has(node.id))
       // A focused neighbourhood is named only while it is small enough
@@ -2649,12 +2679,13 @@ function drawGraph(canvas, view, opts) {
       // this frame is skipped, unless it has been asked for (selected,
       // hovered, searched). The dense skill lobe printed a dozen names
       // on top of each other and none of them could be read.
-      ctx.font = `${9.5 * ratio}px ui-monospace, monospace`;
-      const text_ = node.label.slice(0, 26);
+      const near = nearSel.has(node.id) || selected;
+      ctx.font = `${(near ? 11.5 : 9.5) * ratio}px ui-monospace, monospace`;
+      const text_ = node.label.slice(0, near ? 44 : 26);
       const rect = { x: p.x + radius + 4 * ratio, y: p.y - 6 * ratio,
                      w: ctx.measureText(text_).width, h: 11 * ratio };
       // A selected day yields to collisions: the callout names it already.
-      const wanted = (selected && !node.dayNode) || node === brain.hover
+      const wanted = (selected && !node.dayNode) || node === brain.hover || near
         || (brain.query && brain.matches.has(node.id));
       if (!wanted && backFade(p.z) < 0.5) { brain.labelStats.skipped++; continue; }
       const collides = !wanted && drawnLabels.some((r) =>
@@ -2664,7 +2695,12 @@ function drawGraph(canvas, view, opts) {
       } else {
         drawnLabels.push(rect);
         brain.labelStats.drawn++;
-        ctx.fillStyle = dim;
+        if (near) {                          // a backing plate: readable over the lobe
+          ctx.fillStyle = panel; ctx.globalAlpha = 0.85;
+          ctx.fillRect(rect.x - 3 * ratio, rect.y - 3 * ratio, rect.w + 6 * ratio, rect.h + 5 * ratio);
+          ctx.globalAlpha = 1;
+        }
+        ctx.fillStyle = near ? (selected ? nodeColour(node, 1) : text) : dim;
         ctx.fillText(text_, rect.x, p.y + 3 * ratio);
       }
     }
@@ -3074,7 +3110,10 @@ function renderSelection() {
     for (const { edge, other } of links.slice(0, 10)) {
       const row = el("div", "census-row clickable");
       row.appendChild(el("span", "census-name", other.label));
-      row.appendChild(el("span", "tag", edge.contested ? "contested" : edge.kind));
+      const meaning = edge.contested ? "contested"
+        : edge.kind === "uploaded" ? (edge.a === node.id ? "uploaded by" : "uploaded")
+        : edge.kind + (edge.role ? " · " + edge.role : "");
+      row.appendChild(el("span", "tag", meaning));
       row.addEventListener("click", () => {
         brain.selection = new Set([other.id]);
         renderSelection();

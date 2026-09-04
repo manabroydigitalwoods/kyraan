@@ -1272,7 +1272,8 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             # product, place — plus one #category. Shown on the node,
             # and hub-joined exactly like note tags so two photos of the
             # same brand meet at one neuron.
-            ents = [str(e) for e in (entities or [])]
+            ents = [str(e) for e in (entities or [])
+                    if not str(e).startswith(("mentions:", "about:"))]   # edges, not hubs
             node.update({"tags": [e for e in ents if e.startswith("#")],
                          "entities": [e for e in ents if not e.startswith("#")]})
             for ent in ents:
@@ -1283,6 +1284,10 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
             if target:
                 edges.append({"a": node_id, "b": target, "kind": "about",
                               "weight": 0.6})
+        if any(str(e) == "about:owner" for e in (entities or [])):
+            target = _person_node("owner")               # his own paper: "about you"
+            if target:
+                edges.append({"a": node_id, "b": target, "kind": "about", "weight": 0.6})
         for ent in (entities or []):
             if str(ent).startswith("mentions:"):        # named, not about (2026-09-04)
                 parts = str(ent).split(":")
