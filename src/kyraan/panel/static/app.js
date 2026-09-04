@@ -1198,7 +1198,7 @@ async function loadCost() {
    keeps them, and a groove down the midline (|z| pushed out) splits it
    into two hemispheres — a lobe straddles the fissure like a real one.
    Anchors sit on the shell; canvas y grows DOWNWARD, so "up" is negative. */
-const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.70, groove: 0.12 };
+const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.80, groove: 0.12 };
 const LOBES = {
   core:     { anchor: [0.0, 0.0, 0.00], label: "core" },
   person:   { anchor: [0.00, 0.04, 0.00], ring: 0.36, label: "people" },
@@ -1654,6 +1654,24 @@ function edgeControl(pa, pb, aId, bId) {
     if (centre) {
       return { x: (pa.x + pb.x) / 2 * 0.25 + centre.x * 0.75,
                y: (pa.y + pb.y) / 2 * 0.25 + centre.y * 0.75 };
+    }
+  }
+  // Any other wire runs OVER the cortex, not through it: the 3D midpoint
+  // of its two ends, pushed out to just above the shell, is the curve's
+  // control point — so a synapse between two facts arcs across the
+  // surface like a gyrus instead of cutting a chord through the middle.
+  // Pulses ride the same arc. Needs the current canvas and view, which
+  // the draw pass leaves in brain.frame.
+  const fr = brain.frame;
+  if (fr && aId && bId) {
+    const a = brain.byId.get(aId), b = brain.byId.get(bId);
+    if (a && b && a.type !== "core" && b.type !== "core") {
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, mz = (a.z + b.z) / 2;
+      const r = Math.hypot(mx / CORTEX.a, my / CORTEX.b, mz / CORTEX.c) || 1e-3;
+      const chord = Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+      const lift = Math.min(1.35, 1.0 + chord * 0.35) / r;   // longer wire, higher arc
+      const c = toScreen(fr.canvas, { x: mx * lift, y: my * lift, z: mz * lift }, fr.view);
+      return { x: c.x, y: c.y };
     }
   }
   return { x: (pa.x + pb.x) / 2 - (pb.y - pa.y) * 0.12,
@@ -2233,7 +2251,9 @@ function toScreen(canvas, node, view) {
 
 /* 0 at the front of the volume, 1 at the back — for size and fade. */
 function depthOf(z) {
-  return Math.max(0, Math.min(1, (z + 1.8) / 3.6));
+  // Steeper than the volume alone would need: the far hemisphere must
+  // fall back behind the near one for the mass to read as a solid.
+  return Math.pow(Math.max(0, Math.min(1, (z + 1.8) / 3.6)), 0.7);
 }
 
 /* A drag in the camera plane, expressed in world axes: the inverse of
@@ -2294,6 +2314,7 @@ function drawGraph(canvas, view, opts) {
   const panel = styles.getPropertyValue("--panel").trim() || "#111";
   const nodes = visibleNodes();
   const shown = new Set(nodes.map((n) => n.id));
+  brain.frame = { canvas, view };            // for edgeControl's surface arcs
   updateFocus();
   // Project once per frame. Everything below reads from this map, and the
   // somas are drawn back-to-front so the front of the brain occludes the
@@ -2472,7 +2493,7 @@ function drawGraph(canvas, view, opts) {
     // scatter that happens to be moving.
     const radius = nodeRadius(node) * (opts.nodeScale || 1) * ratio * breath
                  * Math.max(0.6, Math.min(view.scale, 2.4)) * Math.pow(p.p, 0.85);
-    ctx.globalAlpha = 1 - 0.5 * depthOf(p.z);
+    ctx.globalAlpha = 1 - 0.62 * depthOf(p.z);
 
     const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 3.6);
     halo.addColorStop(0, nodeColour(node, selected ? 0.75 : 0.42));
