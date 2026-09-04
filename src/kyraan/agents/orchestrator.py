@@ -540,7 +540,17 @@ def tier_chain() -> tuple:
         tiers = _config.load().get("model_tiers") or {}
     except Exception:
         tiers = {"frontier": {}, "cheap": {}}
-    return tuple(t for t in ("frontier", "standby", "cheap") if t in tiers)
+    out, seen = [], set()
+    for t in ("frontier", "standby", "cheap"):
+        if t not in tiers:
+            continue
+        spec = tiers.get(t) or {}
+        key = (spec.get("provider"), spec.get("model"))    # standby and cheap may be
+        if spec.get("model") and key in seen:               # the same model (2026-09-04)
+            continue
+        seen.add(key)
+        out.append(t)
+    return tuple(out)
 
 
 async def _greeting_reply(chat_id: int) -> str:
@@ -1592,8 +1602,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             if text:
                 return text
             log_event("secret_turn_unanswered", chat_id=chat_id)
-            return ("I couldn't get an answer from the local model just now, "
-                    "and I won't send a private message to the cloud. Nothing "
+            return ("I couldn't get an answer on the private lane just now, "
+                    "and a private message never goes to the main assistant. Nothing "
                     "was stored — try again in a moment, or say \"private mode "
                     "off\" if this doesn't need to stay private.")
         if kernel.viewer_person() == "owner" and ("?" in raw_text or _re.search(
@@ -1627,8 +1637,8 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                 if text:
                     return f"🔒 {text}"
                 if not follow:
-                    return (f"\"{doc['caption']}\" is a private document, so I only read it on the local "
-                            "model — and it gave me nothing just now. Try again in a moment.")
+                    return (f"\"{doc['caption']}\" is a private document, so I only read it on the "
+                            "private lane — and it gave me nothing just now. Try again in a moment.")
                 _skip_extraction.set(False)
                 _history_redaction.set(None)
                 _answered_by.set("cloud")

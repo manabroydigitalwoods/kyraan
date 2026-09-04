@@ -162,7 +162,7 @@ def test_private_turn_without_a_local_answer_refuses_honestly(monkeypatch):
     session._history[58] = []
     secrets.set_private(58, True)
     out = asyncio.run(orchestrator.handle_message(58, "something private"))
-    assert out.startswith("I couldn't get an answer from the local model") and called == []
+    assert out.startswith("I couldn't get an answer on the private lane") and called == []
     secrets.set_private(58, False)
     session._history[58] = []
 

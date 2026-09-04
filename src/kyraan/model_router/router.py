@@ -758,3 +758,21 @@ def worker_tier() -> str:
     except Exception:
         return "frontier"
     return "standby" if "standby" in tiers else "frontier"
+
+
+def tier_may_see_private(tier: str) -> bool:
+    """May THIS tier's prompt carry private material (local-only
+    documents, private-mode turns, pending facts, email bodies)? A local
+    endpoint always; the standby/cheap cloud lane when the owner has
+    switched privacy.private_on_standby on (2026-09-04: the local text
+    models were retired for speed). The frontier lane never."""
+    try:
+        from kyraan.control_plane import config as _config
+        cfg = _config.load()
+        provider = (cfg.get("model_tiers", {}).get(tier) or {}).get("provider", "")
+        if provider and provider_is_local(provider):
+            return True
+        flag = bool((cfg.get("privacy") or {}).get("private_on_standby"))
+        return flag and tier in ("standby", "cheap")
+    except Exception:
+        return False

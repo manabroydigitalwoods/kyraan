@@ -60,7 +60,7 @@ def _probe_components() -> list:
         with urllib.request.urlopen("http://127.0.0.1:11434/api/tags",
                                     timeout=3) as resp:
             names = {m["name"] for m in json.loads(resp.read())["models"]}
-        needed = {"qwen3:8b", "llama3.2:latest", "all-minilm:latest"}
+        needed = {"all-minilm:latest"}   # the text models were retired 2026-09-04
         missing = needed - names
         return not missing, ("all models present" if not missing
                              else f"missing: {', '.join(sorted(missing))}")

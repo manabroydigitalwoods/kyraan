@@ -822,10 +822,7 @@ def _allowed_exposures() -> tuple:
     try:
         from kyraan.agents import agent_loop
         from kyraan.model_router import router
-        tier = agent_loop.current_tier()
-        from kyraan.control_plane import config
-        provider = (config.load().get("model_tiers", {}).get(tier) or {}).get("provider", "")
-        if provider and router.provider_is_local(provider):
+        if router.tier_may_see_private(agent_loop.current_tier()):
             return ("cloud_ok", "local_only")
     except Exception:
         pass

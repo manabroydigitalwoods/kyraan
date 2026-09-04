@@ -106,9 +106,16 @@ model_tiers:
       input_per_million: 0.20
       output_per_million: 1.25
       cached_input_per_million: 0.02
-  cheap:
-    provider: ollama
-    model: qwen3:8b       # benchmarked 2026-08-26 vs llama3.1:8b on the
+  cheap:                    # 2026-09-04, owner: "suppress the local model, it is
+    provider: openai        # very slow and interrupts my daily working life" —
+    model: gpt-5.4-nano     # the 8B/3B local models are retired; nano is the
+    pricing:                # cheap tier too. Embeddings (all-minilm) stay local.
+      input_per_million: 0.20
+      output_per_million: 1.25
+      cached_input_per_million: 0.02
+  # local reserve (retired 2026-09-04; put back by pointing cheap here):
+  #   provider: ollama
+  #   model: qwen3:8b       # benchmarked 2026-08-26 vs llama3.1:8b on the
                           # production prompts + every live failure:
                           # classification 18/18 vs 17/18, burst planning
                           # kept all sub-asks where llama dropped them
@@ -133,6 +140,15 @@ model_tiers:
       output_per_million: 4.50
       cached_input_per_million: 0.075  # mini; the whole reason the agent prompt
                                       # keeps its static prefix stable
+
+# Privacy lane (owner decision 2026-09-04). With no local text model,
+# private material — local-only documents (tax papers, statements),
+# private-mode turns, pending facts, opted-in email bodies — is read by
+# the STANDBY/CHEAP cloud model (nano) instead of going unanswered. It
+# still never enters the main frontier loop or the conversation history.
+# Set to false to go back to "local endpoint or nothing".
+privacy:
+  private_on_standby: true
 
 # Skills known to Phase 1. Add new skills here as they're built —
 # the kernel refuses to run a skill that isn't registered.

@@ -526,8 +526,7 @@ def _pending_block(tier: str) -> str:
     as a boundary. A local tier sees them (nothing leaves the machine);
     a cloud tier gets a placeholder and the review flow still works."""
     from kyraan.model_router import router as _router
-    provider = kernel.config.load()["model_tiers"].get(tier, {}).get("provider", "")
-    if _router.provider_is_local(provider):
+    if _router.tier_may_see_private(tier):
         # reviewer-keyed (multi-user audit 2026-08-27): each viewer's
         # prompt carries only THEIR pending queue. Fail-closed
         # (2026-08-28): an unidentified viewer gets NOTHING — the old

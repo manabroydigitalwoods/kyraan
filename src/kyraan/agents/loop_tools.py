@@ -402,13 +402,11 @@ async def _email_read(chat_id: int, args: dict, raw_text: str):
     explicit opt-in, summarized by the LOCAL model right here, and the
     reply short-circuits — no body, and no summary of one, ever enters a
     cloud prompt or the conversation history."""
-    from kyraan.control_plane import config as _config
-    cheap_provider = _config.load()["model_tiers"].get("cheap", {}).get("provider", "")
-    if not router.provider_is_local(cheap_provider):
+    if not router.tier_may_see_private("cheap"):
         return {"__direct_reply__": (
-            "I can only read email bodies with a LOCAL model, and the cheap "
-            "tier currently points at a cloud provider — not reading them. "
-            "Point the cheap tier back at Ollama to re-enable.")}
+            "I can only read email bodies on the private lane (a local model, "
+            "or the standby model when privacy.private_on_standby is on) — "
+            "not reading them.")}
     messages = await kernel.run_tool(kernel.ToolCall(
         "email.read", {"query": str(args.get("query", "") or ""),
                        "limit": min(int(args.get("limit", 2) or 2), 3)}))
@@ -1607,10 +1605,8 @@ async def _private_document_answer(chat_id: int, query: str, raw_text: str):
     from kyraan.agents import agent_loop, secrets
     from kyraan.model_router import router as _router
     from kyraan.store import documents
-    tier = agent_loop.current_tier()
-    provider = (kernel.config.load().get("model_tiers", {}).get(tier) or {}).get("provider", "")
-    if provider and _router.provider_is_local(provider):
-        return None                      # the local tier already sees everything
+    if _router.tier_may_see_private(agent_loop.current_tier()):
+        return None                      # this lane already sees private documents
     doc = None
     for probe in (query, raw_text):
         try:

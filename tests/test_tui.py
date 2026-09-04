@@ -250,7 +250,7 @@ async def test_tier_command_rejects_an_unknown_provider():
         await pilot.pause()
 
         # unchanged — override was rejected
-        assert config.load()["model_tiers"]["cheap"]["provider"] == "ollama"
+        assert config.load()["model_tiers"]["cheap"]["provider"] == "openai"   # local text models retired 2026-09-04
 
 
 async def test_export_writes_a_transcript_file(monkeypatch, tmp_path):

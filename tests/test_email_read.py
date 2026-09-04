@@ -88,8 +88,9 @@ async def test_executor_keeps_bodies_out_of_cloud_prompts(monkeypatch):
 async def test_executor_refuses_when_cheap_tier_is_cloud(monkeypatch):
     monkeypatch.setenv("KYRAAN_EMAIL_BODIES", "local")
     monkeypatch.setattr(agent_loop.router, "provider_is_local", lambda p: False)
+    monkeypatch.setattr(agent_loop.router, "tier_may_see_private", lambda t: False)   # privacy lane off
     result = await agent_loop._email_read(9, {}, "read my email")
-    assert "LOCAL model" in result["__direct_reply__"]
+    assert "private lane" in result["__direct_reply__"]
 
 
 async def test_unread_executor_delegates_body_questions_when_enabled(monkeypatch):

@@ -57,7 +57,7 @@ def _private_note(doc_id) -> str:
     try:
         from kyraan.store import documents as _d
         if doc_id and _d.exposure_of(doc_id) == "local_only":
-            return " 🔒 Kept private: only the local model reads it, never the cloud."
+            return " 🔒 Private: read only on the private lane, never by the main assistant."
     except Exception:
         pass
     return ""

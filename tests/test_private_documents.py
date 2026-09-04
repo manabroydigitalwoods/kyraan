@@ -67,3 +67,22 @@ def test_tool_answers_locally_when_only_a_private_document_matches(monkeypatch):
     secrets._last_private_doc.clear()
     out = asyncio.run(loop_tools._documents_search(1, {"query": "ITR taxes paid"}, "how much tax did I pay per the ITR?"))
     assert out == {"__direct_reply__": "🔒 You paid 5,000."}
+
+
+def test_private_lane_follows_the_privacy_flag(monkeypatch):
+    from kyraan.control_plane import config
+    from kyraan.model_router import router
+    from kyraan.agents import orchestrator
+    base = {"model_tiers": {"frontier": {"provider": "openai", "model": "gpt-5.4-mini"},
+                            "standby": {"provider": "openai", "model": "gpt-5.4-nano"},
+                            "cheap": {"provider": "openai", "model": "gpt-5.4-nano"}},
+            "privacy": {"private_on_standby": True}}
+    monkeypatch.setattr(config, "load", lambda: base)
+    monkeypatch.setattr(router, "provider_is_local", lambda p: p == "ollama")
+    assert router.tier_may_see_private("cheap") and router.tier_may_see_private("standby")
+    assert not router.tier_may_see_private("frontier")
+    assert orchestrator.tier_chain() == ("frontier", "standby")        # same model listed once
+    base["privacy"]["private_on_standby"] = False
+    assert not router.tier_may_see_private("cheap")
+    base["model_tiers"]["cheap"] = {"provider": "ollama", "model": "qwen3:8b"}
+    assert router.tier_may_see_private("cheap")                        # a local endpoint always may
