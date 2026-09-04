@@ -546,7 +546,7 @@ function mergeGraph(graph) {
     const angle = (i * 137.508) * Math.PI / 180;
     node.x = anchor[0] + Math.cos(angle) * 0.42;
     node.y = anchor[1] + Math.sin(angle) * 0.42;
-    node.z = (anchor[2] || 0) + (i % 2 ? 1 : -1) * (0.25 + Math.abs(Math.sin(i * 0.7)) * 0.2);
+    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * 0.2;
     node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
   });
   const removed = brain.nodes.filter((n) => !seen.has(n.id)).map((n) => n.id);
@@ -1198,19 +1198,23 @@ async function loadCost() {
    keeps them, and a groove down the midline (|z| pushed out) splits it
    into two hemispheres — a lobe straddles the fissure like a real one.
    Anchors sit on the shell; canvas y grows DOWNWARD, so "up" is negative. */
-const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.80, groove: 0.12 };
+const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.80, groove: 0 };
 const LOBES = {
+  // Ten regions on the vertices of an icosahedron (evenly spaced in 3D),
+  // scaled onto the shell — a globe of regions, readable from any angle
+  // (owner, 2026-09-04: "only two sides are used; use 360°"). The two
+  // flat sheets before came from anchoring every lobe on the midline.
   core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
   person:   { anchor: [0.00, 0.04, 0.00], ring: 0.36, label: "people" },
-  skill:    { anchor: [1.00, -0.30, 0.00], label: "skills" },      // frontal, upper (70)
-  task:     { anchor: [0.95, 0.45, 0.00], label: "work" },         // frontal, lower (4)
-  memory:   { anchor: [-0.05, -0.85, 0.00], label: "facts" },      // the crown (52)
-  episode:  { anchor: [0.15, 0.55, 0.00], label: "recall" },       // temporal, low, both sides (215)
-  contact:  { anchor: [0.60, 0.80, 0.00], label: "contacts" },     // the stem, forward (11)
-  document: { anchor: [-0.90, -0.45, 0.00], label: "documents" },  // occipital, upper (25)
-  face:     { anchor: [-1.05, 0.10, 0.00], label: "faces" },       // occipital, centre (5)
-  note:     { anchor: [-0.75, 0.55, 0.00], label: "notes" },       // cerebellum (8)
-  tag:      { anchor: [-0.50, 0.82, 0.00], label: "tags" },        // cerebellum, lower (6)
+  memory:   { anchor: [-0.56, -0.68, 0.00], label: "facts" },      // top, back        (52)
+  task:     { anchor: [0.56, -0.68, 0.00], label: "work" },        // top, front        (4)
+  skill:    { anchor: [0.89, 0.00, 0.41], label: "skills" },       // front, one side  (70)
+  document: { anchor: [-0.89, 0.00, 0.41], label: "documents" },   // back, one side   (25)
+  face:     { anchor: [-0.89, 0.00, -0.41], label: "faces" },      // back, other side  (5)
+  episode:  { anchor: [0.00, 0.42, 0.66], label: "recall" },       // low, one flank  (215)
+  note:     { anchor: [0.00, 0.42, -0.66], label: "notes" },       // low, other flank  (8)
+  contact:  { anchor: [0.56, 0.68, 0.00], label: "contacts" },     // bottom, front    (11)
+  tag:      { anchor: [-0.56, 0.68, 0.00], label: "tags" },        // bottom, back      (6)
 };
 
 /* A node's own anchor: the lobe's point, or its own place on the lobe's
@@ -2081,8 +2085,7 @@ function seedPositions() {
     node.x = anchor[0] + Math.cos(angle) * radius;
     node.y = anchor[1] + Math.sin(angle) * radius;
     // Deterministic depth jitter too, or every lobe starts as a disc.
-    // Dealt to alternate hemispheres, so every lobe straddles the fissure.
-    node.z = (anchor[2] || 0) + (i % 2 ? 1 : -1) * (0.25 + Math.abs(Math.sin(i * 0.7)) * spread);
+    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * spread * 0.6;
     node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
   });
 }
@@ -2192,7 +2195,7 @@ function simulate() {
         const k = want / r;                       // onto the shell: the springs must not win
         node.x *= k; node.y *= k; node.z *= k;
       }
-      if (Math.abs(node.z) < groove) node.z += (node.z < 0 ? -1 : 1) * (groove - Math.abs(node.z)) * 0.5;
+      if (groove && Math.abs(node.z) < groove) node.z += (node.z < 0 ? -1 : 1) * (groove - Math.abs(node.z)) * 0.5;
     }
   }
   brain.alpha = Math.max(0.02, brain.alpha * 0.99);
@@ -2209,7 +2212,7 @@ function reheat(to = 1) { brain.alpha = to; }
 
    No library. A 3D graph is a rotation matrix and a divide; three.js
    would be 600KB of vendored script to do two multiplies. */
-const brainCam = { yaw: -1.25, pitch: 0.22, roll: 0, spin: true };
+const brainCam = { yaw: -0.7, pitch: 0.3, roll: 0, spin: true };
 const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
 // Two gains, opposite signs, both by the owner's hand. Sideways, a drag
 // turns the GRAPH: drag right and the near face goes right, like a globe
@@ -2220,7 +2223,7 @@ const YAW_GAIN = -0.0022;        // radians per pixel of sideways drag
 const PITCH_GAIN = 0.0022;       // radians per pixel of vertical drag
 const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
-const HOME_CAM = { yaw: -1.25, pitch: 0.22 };   // the lateral view: the brain's profile
+const HOME_CAM = { yaw: -0.7, pitch: 0.3 };     // three-quarter: a globe of regions
 
 function rotateToCamera(node) {
   const cy = Math.cos(brainCam.yaw), sy = Math.sin(brainCam.yaw);
