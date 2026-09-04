@@ -245,3 +245,35 @@ async def test_reads_stay_available_after_search(scripted_model, monkeypatch):
 
     reply = await agent_loop.run(91, "any news? and am I free today?")
     assert "calendar is clear" in reply
+
+
+def test_is_hub_url_flags_topic_and_tag_and_latest_pages():
+    from kyraan.tools import web_search
+    assert web_search.is_hub_url("https://www.ndtv.com/topic/mamata-banerjee")
+    assert web_search.is_hub_url("https://example.com/tags/nepal-floods")
+    assert web_search.is_hub_url("https://www.ndtv.com/latest")
+    assert not web_search.is_hub_url("https://en.wikipedia.org/wiki/Chief_Minister_of_West_Bengal")
+    assert not web_search.is_hub_url("https://www.thehindu.com/news/international/nepal-flash-floods-death-toll")
+
+
+def test_search_marks_undated_hub_results(monkeypatch):
+    import json
+    from kyraan.tools import web_search
+
+    payload = json.dumps({"results": [
+        {"title": "Mamata Banerjee", "url": "https://www.ndtv.com/topic/mamata-banerjee", "content": "..."},
+        {"title": "CM of WB - Wikipedia", "url": "https://en.wikipedia.org/wiki/Chief_Minister_of_West_Bengal",
+         "content": "...", "publishedDate": "2026-05-09"},
+    ]}).encode()
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return payload
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: FakeResp())
+    monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
+    out = web_search._search("current CM of West Bengal", 5)
+    assert out["results"][0].get("undated_hub_page") is True
+    assert "published" not in out["results"][0]
+    assert "undated_hub_page" not in out["results"][1] and out["results"][1]["published"] == "2026-05-09"

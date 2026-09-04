@@ -80,14 +80,33 @@ def _search(query: str, count: int) -> dict:
 
     results = []
     for item in data.get("results", [])[:count]:
+        url = str(item.get("url", ""))
         results.append({
             "title": str(item.get("title", "")).strip(),
-            "url": str(item.get("url", "")),
+            "url": url,
             "snippet": str(item.get("content", "") or "").strip(),
             **({"published": str(item.get("publishedDate"))}
                if item.get("publishedDate") else {}),
+            **({"undated_hub_page": True} if not item.get("publishedDate")
+               and is_hub_url(url) else {}),
         })
     return {"query": query, "results": results}
+
+
+import re as _re_hub
+
+_HUB_URL = _re_hub.compile(r"/(topic|topics|tag|tags|category|categories)/|/latest/?$", _re_hub.IGNORECASE)
+
+
+def is_hub_url(url: str) -> bool:
+    """An evergreen index/tag/topic page (owner 2026-09-04: Kyraan cited
+    ndtv.com/topic/mamata-banerjee as proof of who is CURRENTLY the West
+    Bengal CM — a topic page that just collects every story ever tagged
+    with the name, not a dated statement of current fact — and got it
+    wrong, twice, until pushed to search again). Undated + this URL shape
+    is a weak source for a "who currently…" question, never a citation
+    for one on its own."""
+    return bool(_HUB_URL.search(url or ""))
 
 
 # --- web.open (governance round 2026-08-31, plan §3c gate lifted) ----------
