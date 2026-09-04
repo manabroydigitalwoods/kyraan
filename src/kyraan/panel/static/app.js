@@ -2314,6 +2314,57 @@ function advanceCamera() {
    AROUND it and zooming zooms INTO it: after any camera or scale change
    the view shifts so the neuron stays where it was on screen. A pan (or
    a fit) moves it deliberately, so those re-base the lock instead. */
+/* Inertia (owner, 2026-09-05: "touch and swipe, and it keeps turning
+   and slowly stops"). While a drag is down, its velocity is tracked in
+   radians (or canvas px) per millisecond, smoothed. On release inside
+   80ms of the last move, the brain keeps going with that velocity and
+   decays by 0.9955 per ms (about 0.93 per frame — a second-and-a-half
+   glide from a firm flick); a new press stops it dead. The selection
+   lock holds through the coast. */
+const COAST_DECAY = 0.994, COAST_STOP = 0.00002;
+const COAST_MAX_TURN = 0.006, COAST_MAX_PAN = 3;   // rad/ms and px/ms: a firm flick adds ~1 radian
+function noteFling(dyaw, dpitch, dx, dy) {
+  const now = performance.now();
+  const f = brain.fling || (brain.fling = { yaw: 0, pitch: 0, x: 0, y: 0, at: 0 });
+  const dt = Math.max(1, Math.min(100, now - (f.at || now)));
+  f.yaw = 0.5 * f.yaw + 0.5 * (dyaw / dt);
+  f.pitch = 0.5 * f.pitch + 0.5 * (dpitch / dt);
+  f.x = 0.5 * f.x + 0.5 * (dx / dt);
+  f.y = 0.5 * f.y + 0.5 * (dy / dt);
+  f.at = now;
+}
+function releaseFling() {
+  const f = brain.fling;
+  brain.fling = null;
+  if (!f) return;                          // nothing to release: leave any coast alone
+  if (performance.now() - f.at > 80 || REDUCED_MOTION) { brain.coast = null; return; }
+  const cap = (v, m) => Math.max(-m, Math.min(m, v));
+  brain.coast = { yaw: cap(f.yaw, COAST_MAX_TURN), pitch: cap(f.pitch, COAST_MAX_TURN),
+                  x: cap(f.x, COAST_MAX_PAN), y: cap(f.y, COAST_MAX_PAN), at: performance.now() };
+}
+function stopCoast() { brain.coast = null; brain.fling = null; }
+function coastCamera() {
+  const c = brain.coast;
+  if (!c) return;
+  const now = performance.now();
+  const dt = Math.max(0, Math.min(50, now - c.at));
+  c.at = now;
+  if (c.yaw || c.pitch) {
+    brain.camTouched = true;
+    brainCam.yaw += c.yaw * dt;
+    brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + c.pitch * dt));
+  }
+  if (c.x || c.y) {
+    brain.panTouched = true;
+    brain.view.x += c.x * dt / brain.view.scale;
+    brain.view.y += c.y * dt / brain.view.scale;
+  }
+  const k = Math.pow(COAST_DECAY, dt);
+  c.yaw *= k; c.pitch *= k; c.x *= k; c.y *= k;
+  brain.lastTouch = now;
+  if (Math.abs(c.yaw) + Math.abs(c.pitch) < COAST_STOP && Math.abs(c.x) + Math.abs(c.y) < 0.01) brain.coast = null;
+}
+
 function holdSelection(canvas) {
   const id = brain.selection.size ? [...brain.selection][0] : null;
   const node = id && brain.byId.get(id);
@@ -2815,6 +2866,7 @@ function drawBrain() {
   updateCollapse(brain.view.scale);
   if (brain.alpha > 0.02 || brain.nodeDrag) simulate();
   tickSignals();
+  coastCamera();
   advanceCamera();
   holdSelection(canvas);
   drawGraph(canvas, brain.view, {});
@@ -3555,6 +3607,7 @@ function wireMemory() {
 
   canvas.addEventListener("mousedown", (event) => {
     brain.pressAt = canvasPoint(canvas, event);   // so a click that ends a drag is not a click
+    stopCoast();
     const point = canvasPoint(canvas, event);
     if (brain.keys.zoom || event.metaKey || event.ctrlKey) {
       // Cmd/Ctrl-drag: up zooms in, down zooms out, about where you
@@ -3623,9 +3676,10 @@ function wireMemory() {
     if (brain.band) { brain.band.x1 = point.x; brain.band.y1 = point.y; return; }
     if (brain.orbit) {
       brain.camTouched = true;
-      brainCam.yaw += (point.x - brain.orbit.x) * YAW_GAIN;
-      brainCam.pitch = Math.max(-1.3, Math.min(1.3,
-        brainCam.pitch + (point.y - brain.orbit.y) * PITCH_GAIN));
+      const dyaw = (point.x - brain.orbit.x) * YAW_GAIN, dpitch = (point.y - brain.orbit.y) * PITCH_GAIN;
+      brainCam.yaw += dyaw;
+      brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dpitch));
+      noteFling(dyaw, dpitch, 0, 0);
       brain.orbit = point;
       brain.lastTouch = performance.now();
       return;
@@ -3634,6 +3688,7 @@ function wireMemory() {
       brain.panTouched = true;
       brain.view.x += (point.x - brain.pan.x) / brain.view.scale;
       brain.view.y += (point.y - brain.pan.y) / brain.view.scale;
+      noteFling(0, 0, point.x - brain.pan.x, point.y - brain.pan.y);
       brain.pan = point;
       brain.lastTouch = performance.now();
       return;
@@ -3642,6 +3697,7 @@ function wireMemory() {
   });
 
   window.addEventListener("mouseup", () => {
+    if (brain.orbit || brain.pan) releaseFling();
     if (brain.band) {
       const picked = nodesInBand(canvas);
       brain.selection = new Set(picked.map((n) => n.id));
@@ -3724,6 +3780,7 @@ function wireMemory() {
   const tp = (t) => canvasPoint(canvas, { clientX: t.clientX, clientY: t.clientY });
   canvas.addEventListener("touchstart", (event) => {
     touchState.angle = null;
+    stopCoast();
     // A fresh touch (no finger was down) starts a clean gesture; a second
     // finger joining marks the whole thing a gesture, so the last finger
     // lifting at the end of a pinch is never read as a tap on nothing.
@@ -3756,10 +3813,12 @@ function wireMemory() {
       if (brain.dragMode === "pan") {
         brain.panTouched = true;
         brain.view.x += dx / brain.view.scale; brain.view.y += dy / brain.view.scale;
+        noteFling(0, 0, dx, dy);
       } else {
         brain.camTouched = true;
         brainCam.yaw += dx * YAW_GAIN;
         brainCam.pitch = Math.max(-1.3, Math.min(1.3, brainCam.pitch + dy * PITCH_GAIN));
+        noteFling(dx * YAW_GAIN, dy * PITCH_GAIN, 0, 0);
       }
       touchState.last = p;
     } else if (t.length >= 2) {
@@ -3823,7 +3882,7 @@ function wireMemory() {
       renderSelection();
       syncUrl(false);
     }
-    if (event.touches.length === 0) touchState.mode = null;
+    if (event.touches.length === 0) { if (touchState.mode === "one") releaseFling(); touchState.mode = null; }
     else if (event.touches.length === 1) {
       touchState.mode = "one"; touchState.last = tp(event.touches[0]); touchState.start = touchState.last;
     }
