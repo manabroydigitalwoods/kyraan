@@ -2733,7 +2733,7 @@ function drawGraph(canvas, view, opts) {
         const wires = wireCount(node);
         target = node;
         lines = [node.label.slice(0, 44),
-                 `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap zooms in`];
+                 `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap clears`];
       }
     }
     if (target) {
@@ -3651,6 +3651,14 @@ function wireMemory() {
   });
 
   canvas.addEventListener("dblclick", (event) => {
+    // With something selected, a double-click UNSELECTS (owner
+    // 2026-09-04) — the way out of a selection without hunting for
+    // empty space. With nothing selected it zooms into a cluster.
+    if (brain.selection.size) {
+      brain.selection = new Set();
+      renderSelection();
+      return;
+    }
     const hit = nodeAt(canvas, event);
     if (!hit) return;
     if (hit.dayNode) {
