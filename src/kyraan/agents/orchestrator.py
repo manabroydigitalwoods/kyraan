@@ -1221,6 +1221,37 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             r"^\s*(?:remember|save|mark)\s+(?:this\s+)?(?:place|location|spot|here)\s+as\s+(?:the\s+|my\s+)?([a-z][a-z .'-]{1,40}?)\s*[.!]*\s*$",
             raw_text, _re.IGNORECASE)
         forget_place_m = _re.match(r"^\s*forget\s+(?:the\s+)?place\s+(.{2,40}?)\s*[.!]*\s*$", raw_text, _re.IGNORECASE)
+        air_rule = _re.match(
+            r"^\s*(?:when(?:ever)?\s+)?(?:the\s+)?pm\s*2\.?5\s+(?:is\s+|goes\s+)?(?:above|over|more\s+than|crosses)\s+(\d+)\b.*?\b(turbo|auto|sleep|medium)\b"
+            r".*?\b(?:below|under|less\s+than|drops)\b.*?\b(turbo|auto|sleep|medium)\b",
+            raw_text, _re.IGNORECASE | _re.DOTALL)
+        if air_rule and kernel.viewer_person() == "owner":
+            # Live 2026-09-04: "when pm2.5 is above 90 we should switch to
+            # turbo mode and it's below we should switch to auto" was
+            # refused twice ("rules only notify"). Two acting rules, one
+            # confirmation.
+            from kyraan.control_plane.kernel import SkillCall as _SC
+            from kyraan.triggers import event_rules as _er
+            thr, hi_mode, lo_mode = air_rule.group(1), air_rule.group(2).lower(), air_rule.group(3).lower()
+            _skip_extraction.set(True)
+
+            async def _make_air_rules(_a: dict) -> str:
+                for r in _er.list_active(chat_id):
+                    if r.entity == "sensor.air_purifier_pm2_5" and r.action:
+                        _er.cancel(chat_id, r.id)
+                a = _er.create(chat_id, f"PM2.5 above {thr}: purifier {hi_mode}", "sensor.air_purifier_pm2_5",
+                               "above", thr, message=f"PM2.5 is above {thr}", cooldown_minutes=15,
+                               action={"tool": "home.purifier", "args": {"mode": hi_mode}})
+                b = _er.create(chat_id, f"PM2.5 below {thr}: purifier {lo_mode}", "sensor.air_purifier_pm2_5",
+                               "below", thr, message=f"PM2.5 is back below {thr}", cooldown_minutes=15,
+                               action={"tool": "home.purifier", "args": {"mode": lo_mode}})
+                return (f"Done. Above {thr} the purifier goes to {hi_mode}, below {thr} back to {lo_mode} — "
+                        f"checked every 15 minutes, and I'll tell you each time it switches. "
+                        f"(\"cancel rule {a.id[:4]}\" or \"{b.id[:4]}\" undoes it.)")
+            return await _gated(
+                chat_id, _SC("home.purifier", {"mode": hi_mode}), _make_air_rules,
+                describe=f"Set two standing rules: PM2.5 above {thr} → purifier {hi_mode}; "
+                         f"below {thr} → purifier {lo_mode}. I'd switch it myself and tell you each time")
         phone_q = _re.match(
             r"^\s*(?:(?:what\s+(?:can\s+)?you\s+(?:can\s+)?tell\s+me\s+)?about\s+(?:this|my)\s+phone|(?:my\s+)?phone\s+(?:status|battery|info)"
             r"|(?:how\s+much\s+)?(?:battery|charge)\s+(?:on|in|of)\s+my\s+phone|is\s+my\s+phone\s+charging)\s*[?!.]*\s*$",

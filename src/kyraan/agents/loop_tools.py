@@ -898,12 +898,14 @@ async def _rules_create(chat_id: int, args: dict, raw_text: str):
             for_minutes=int(args.get("for_minutes", 0) or 0),
             message=str(args.get("message", "") or ""),
             cooldown_minutes=int(args.get("cooldown_minutes", 0)
-                                 or event_rules.DEFAULT_COOLDOWN_MIN))
+                                 or (15 if args.get("action") else event_rules.DEFAULT_COOLDOWN_MIN)),
+            action=args.get("action") if isinstance(args.get("action"), dict) else None)
     except ValueError as exc:
         raise kernel.ToolFailed(str(exc))
     return {"created": True, "id": rule.id,
             "watching": f"{rule.entity} {rule.op} {rule.value}"
-                        + (f" for {rule.for_minutes}min" if rule.for_minutes else "")}
+                        + (f" for {rule.for_minutes}min" if rule.for_minutes else "")
+                        + (f" → {event_rules.describe_action(rule.action)}" if rule.action else "")}
 
 
 async def _rules_list(chat_id: int, args: dict, raw_text: str):
@@ -913,6 +915,7 @@ async def _rules_list(chat_id: int, args: dict, raw_text: str):
         return {"rules": [], "note": "no watch rules set"}
     return [f'[{r.id}] {r.description} ({r.entity} {r.op} {r.value}'
             + (f" for {r.for_minutes}min" if r.for_minutes else "") + ")"
+            + (f" → {event_rules.describe_action(r.action)}" if r.action else "")
             for r in rules]
 
 
@@ -2197,13 +2200,15 @@ TOOLS = {
         "run": _goals_set_status,
     },
     "rules.create": {
-        "params": '{"description": "<the rule in plain words>", "entity": "<a listed home entity>", "op": "is|above|below", "value": "on|off|<number>", "for_minutes": 0, "message": "<optional custom alert text>"}',
+        "params": '{"description": "<the rule in plain words>", "entity": "<a listed home entity>", "op": "is|above|below", "value": "on|off|<number>", "for_minutes": 0, "message": "<optional custom alert text>", "action": {"tool": "home.purifier|home.turn_on|home.turn_off", "args": {"mode": "turbo"}}}',
         "about": ("Create a WATCH RULE: a standing condition checked every "
-                  "15 minutes that NOTIFIES when true — \"tell me if the AC "
-                  "is on more than 3 hours\" -> entity switch.ac, op is, "
-                  "value on, for_minutes 180. above/below for numeric "
-                  "sensors (temperature, watts). Rules only notify — they "
-                  "never switch anything. Owner confirms creation."),
+                  "15 minutes — \"tell me if the AC is on more than 3 hours\" "
+                  "-> entity switch.ac, op is, value on, for_minutes 180. "
+                  "above/below for numeric sensors. Without `action` it "
+                  "notifies; WITH `action` it acts on each crossing and tells "
+                  "the owner (\"when PM2.5 is above 90 switch the purifier to "
+                  "turbo\" -> action {tool home.purifier, args {mode turbo}}; "
+                  "make a second rule for the way back). Owner confirms creation."),
         "run": _rules_create,
     },
     "rules.list": {
@@ -3145,6 +3150,11 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
     if tool == "rules.create":
         held = (f" for {args.get('for_minutes')} minutes"
                 if int(args.get("for_minutes", 0) or 0) else "")
+        if isinstance(args.get("action"), dict):
+            from kyraan.triggers import event_rules as _er
+            return (f"Set a standing RULE: whenever {args.get('entity')} is {args.get('op')} "
+                    f"{args.get('value')}{held}, I will set {_er.describe_action(args['action'])} "
+                    f"and tell you (\"{args.get('description')}\"). Checked every 15 minutes")
         return (f"Set a standing WATCH RULE: whenever {args.get('entity')} "
                 f"is {args.get('op')} {args.get('value')}{held}, I will "
                 f"message you (\"{args.get('description')}\"). Checked every "

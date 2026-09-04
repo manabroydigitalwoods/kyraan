@@ -51,6 +51,11 @@ class Rule:
     # 27 threshold nagged every cooldown expiry, all night (4 alerts
     # observed live). The cooldown remains as the backstop.
     last_met: bool = False
+    # An ACTION on the crossing (owner 2026-09-04: "when PM2.5 is above
+    # 90 switch to turbo, below switch to auto" — "you can switch").
+    # {"tool": "home.purifier", "args": {"mode": "turbo"}}; the owner
+    # confirms once, at creation, and each firing is announced.
+    action: dict | None = None
 
 
 def _load() -> list:
@@ -72,9 +77,39 @@ def _known_entities() -> set:
                + (server.get("write_entities") or []))
 
 
+ACTION_TOOLS = {"home.purifier": {"mode", "timer", "index"},
+                "home.turn_on": {"entity"}, "home.turn_off": {"entity"}}
+PURIFIER_MODES = {"auto", "turbo", "medium", "sleep"}
+
+
+def _check_action(action) -> dict | None:
+    if not action:
+        return None
+    if not isinstance(action, dict) or action.get("tool") not in ACTION_TOOLS:
+        raise ValueError(f"a rule can only act with {sorted(ACTION_TOOLS)}")
+    args = {k: str(v) for k, v in (action.get("args") or {}).items() if k in ACTION_TOOLS[action["tool"]] and v}
+    if not args:
+        raise ValueError("the action needs arguments (e.g. mode: turbo)")
+    if action["tool"] == "home.purifier" and "mode" in args and args["mode"] not in PURIFIER_MODES:
+        raise ValueError(f"purifier mode must be one of {sorted(PURIFIER_MODES)}")
+    if action["tool"] != "home.purifier" and args.get("entity") not in _known_entities():
+        raise ValueError("the action's entity is not in the Home Assistant allowlist")
+    return {"tool": action["tool"], "args": args}
+
+
+def describe_action(action: dict | None) -> str:
+    if not action:
+        return ""
+    a = action.get("args") or {}
+    if action["tool"] == "home.purifier":
+        return "purifier → " + ", ".join(f"{k} {v}" for k, v in a.items())
+    return f"{str(a.get('entity', '')).split('.')[-1].replace('_', ' ')} {'ON' if action['tool'].endswith('on') else 'OFF'}"
+
+
 def create(chat_id: int, description: str, entity: str, op: str, value: str,
            for_minutes: int = 0, message: str = "",
-           cooldown_minutes: int = DEFAULT_COOLDOWN_MIN) -> Rule:
+           cooldown_minutes: int = DEFAULT_COOLDOWN_MIN, action: dict | None = None) -> Rule:
+    action = _check_action(action)
     if op not in _OPS:
         raise ValueError(f"op must be one of {_OPS}")
     if entity not in _known_entities():
@@ -89,7 +124,8 @@ def create(chat_id: int, description: str, entity: str, op: str, value: str,
     rule = Rule(id=uuid.uuid4().hex[:8], chat_id=chat_id,
                 description=description.strip(), entity=entity, op=op,
                 value=str(value), for_minutes=for_minutes,
-                message=message.strip(), cooldown_minutes=cooldown_minutes)
+                message=message.strip(), cooldown_minutes=cooldown_minutes,
+                action=action)
     with locked(RULES_PATH):
         records = _load()
         records.append(asdict(rule))
@@ -231,12 +267,29 @@ async def tick(send=None) -> int:
                 continue
             if _in_cooldown(rule):
                 continue
+            reading = str(state.get("state"))
+            if rule.action:
+                # Act first — the owner confirmed this at creation. Then
+                # tell them, DND permitting; the act itself is never held.
+                try:
+                    await kernel.run_tool(kernel.ToolCall(rule.action["tool"], dict(rule.action["args"])))
+                except Exception as exc:
+                    log_event("event_rule_action_failed", rule_id=rule.id, error=str(exc)[:120])
+                    continue
+                _mark_fired(rule.id)
+                _mark_met(rule.id, True)
+                fired += 1
+                log_event("event_rule_acted", rule_id=rule.id, entity=rule.entity,
+                          state=reading[:40], action=describe_action(rule.action))
+                if send is not None and kernel.can_send_proactively(chat_id=rule.chat_id):
+                    await send(rule.chat_id, f"{rule.message or rule.description} (now: {reading}) — "
+                                             f"done: {describe_action(rule.action)}.")
+                continue
             if not kernel.can_send_proactively(chat_id=rule.chat_id):
                 log_event("event_rule_held_dnd", rule_id=rule.id)
                 continue
             # The custom message carries the live reading too — the owner
             # got "above 27°C" with the actual 27.7 nowhere in sight.
-            reading = str(state.get("state"))
             text = (f"{rule.message} (now: {reading})" if rule.message
                     else f"👁 Watch rule: {rule.description} — "
                          f"{rule.entity} is {reading}.")

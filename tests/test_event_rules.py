@@ -229,3 +229,55 @@ async def test_engaged_kill_switch_skips_quietly_not_per_rule(ticking, monkeypat
     assert await event_rules.tick() == 0
     assert logged == ["event_rules_skipped_kill_switch"]
     assert "event_rule_error" not in logged
+
+
+# --- rules that act (2026-09-04) -------------------------------------------
+
+async def test_action_rule_acts_then_tells(ticking, monkeypatch):
+    calls = []
+    now = datetime.now(timezone.utc)
+
+    async def fake(call, **kw):
+        calls.append((call.tool_name, dict(call.args)))
+        return {"state": "123", "last_changed": now.isoformat()}
+    monkeypatch.setattr(kernel, "run_tool", fake)
+    _rule(entity="sensor.bedroom_temp", op="above", value="90", for_minutes=0, description="dusty",
+          message="PM2.5 is above 90", action={"tool": "home.purifier", "args": {"mode": "turbo"}})
+    assert await event_rules.tick() == 1
+    assert ("home.purifier", {"mode": "turbo"}) in calls
+    assert ticking[0][1] == "PM2.5 is above 90 (now: 123) — done: purifier → mode turbo."
+    assert await event_rules.tick() == 0                     # edge-triggered: no re-act while it stays true
+    # DND holds the message, never the act
+    calls.clear(); ticking.clear()
+    monkeypatch.setattr(kernel, "can_send_proactively", lambda **kw: False)
+    event_rules._mark_met(event_rules.list_active()[0].id, False)
+    monkeypatch.setattr(event_rules, "_in_cooldown", lambda r, now=None: False)
+    assert await event_rules.tick() == 1 and calls and ticking == []
+
+
+def test_action_validation():
+    with pytest.raises(ValueError):
+        _rule(action={"tool": "home.delete_everything", "args": {}})
+    with pytest.raises(ValueError):
+        _rule(action={"tool": "home.purifier", "args": {"mode": "hurricane"}})
+    r = _rule(action={"tool": "home.turn_off", "args": {"entity": "switch.ac"}})
+    assert event_rules.describe_action(r.action) == "ac OFF"
+
+
+def test_pm25_rule_rail_makes_two_rules_after_one_confirm(monkeypatch):
+    import asyncio
+    from kyraan.agents import orchestrator
+    monkeypatch.setattr(event_rules, "_known_entities", lambda: {"sensor.air_purifier_pm2_5"})
+    monkeypatch.setattr(orchestrator.kernel, "viewer_person", lambda: "owner")
+    asked = {}
+
+    async def fake_gated(chat_id, call, handler, describe="", **kw):
+        asked["d"] = describe
+        return await handler({})
+    monkeypatch.setattr(orchestrator, "_gated", fake_gated)
+    out = asyncio.run(orchestrator.handle_message(
+        7, "when pm2.5 is above 90 we should switch to turbo mode and it’s below we should switch to auto"))
+    assert "above 90 → purifier turbo" in asked["d"] and out.startswith("Done. Above 90 the purifier goes to turbo")
+    rules = event_rules.list_active(7)
+    assert sorted((r.op, r.action["args"]["mode"]) for r in rules) == [("above", "turbo"), ("below", "auto")]
+    assert all(r.cooldown_minutes == 15 for r in rules)
