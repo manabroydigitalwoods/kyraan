@@ -412,7 +412,25 @@ def test_clustering_declines_when_there_is_nothing_to_cluster():
     assert queries._kmeans([[0, 0], [1, 1]], k=1) == [0, 0]
 
 
-def test_review_gate_reports_the_distance_to_stage_two(monkeypatch, tmp_path):
+
+# ------------------------------------------------------------ real Postgres
+# Six tests below read the live store. Under load (the bot, a full-suite
+# run) they timed out and FAILED, which read as a regression when it was
+# the machine. A store that cannot be reached inside two seconds is a
+# skip, with the reason on the line.
+@pytest.fixture
+def real_pg():
+    from kyraan.store import pg
+    try:
+        with pg.connection() as conn, conn.cursor() as cur:
+            cur.execute("SET statement_timeout = 2000")
+            cur.execute("SELECT 1")
+            cur.fetchone()
+    except Exception as exc:                       # OperationalError, timeouts, DNS
+        pytest.skip(f"Postgres not reachable for a live-store test: {exc}")
+    return pg
+
+def test_review_gate_reports_the_distance_to_stage_two(real_pg, monkeypatch, tmp_path):
     """The §6 gate (200 reviewed at >=90% trailing) is what family stage-2
     waits on. The panel states the distance rather than leaving it to be
     counted by hand."""
@@ -431,7 +449,7 @@ def test_review_gate_reports_the_distance_to_stage_two(monkeypatch, tmp_path):
     assert gate["pending_count"] == 0
 
 
-def test_review_gate_is_met_only_when_both_halves_pass(monkeypatch, tmp_path):
+def test_review_gate_is_met_only_when_both_halves_pass(real_pg, monkeypatch, tmp_path):
     from kyraan.memory import review_scaling
     from kyraan.memory import store as memory_store
     monkeypatch.setattr(memory_store, "PENDING_DIR", tmp_path / "pending")
@@ -512,7 +530,7 @@ def test_tool_activity_ignores_test_fixtures_and_pairs_only_same_turn(seeded_log
     assert ("reminders.list", "weather.get") not in pairs
 
 
-def test_every_brain_edge_points_at_a_node_that_exists(monkeypatch, tmp_path, seeded_logs):
+def test_every_brain_edge_points_at_a_node_that_exists(real_pg, monkeypatch, tmp_path, seeded_logs):
     """A dangling edge is drawn from a node to nowhere — the renderer skips
     it silently, so the graph would quietly lose wiring with no error."""
     from kyraan.triggers import goals
@@ -622,7 +640,7 @@ def test_events_and_turns_can_be_narrowed_to_named_tools(seeded_logs):
     assert len(queries.turns(hours=2)["turns"]) == 2
 
 
-def test_orphans_and_dead_capability_are_reported(monkeypatch, tmp_path, seeded_logs):
+def test_orphans_and_dead_capability_are_reported(real_pg, monkeypatch, tmp_path, seeded_logs):
     """An orphan memory has no synapse above the floor; a dead skill is
     registered but never called. Both are findings a list cannot make."""
     from kyraan.triggers import goals
@@ -874,7 +892,7 @@ def test_demo_clusters_are_separable(monkeypatch):
     assert len(clusters) >= 3, clusters
 
 
-def test_the_brain_carries_recall_documents_and_faces(monkeypatch, tmp_path,
+def test_the_brain_carries_recall_documents_and_faces(real_pg, monkeypatch, tmp_path,
                                                       seeded_logs):
     """The brain was showing the SMALLER half of memory: 43 curated facts,
     while the store also holds the episodes, the documents and the face
@@ -1087,7 +1105,7 @@ def test_contacts_degrade_to_nothing_when_postgres_is_down(monkeypatch):
     assert queries.contacts_search("raunak")["contacts"] == []
 
 
-def test_contact_book_search_is_by_name_and_empty_query_returns_nothing(monkeypatch):
+def test_contact_book_search_is_by_name_and_empty_query_returns_nothing(real_pg, monkeypatch):
     from kyraan.store import contacts
     monkeypatch.setattr(contacts, "find", lambda name, limit=5: [
         {"name": "Raunak Roy", "phones": ["+91 1"], "emails": []}] if "rau" in name.lower() else [])
@@ -1305,3 +1323,30 @@ def test_every_memory_neuron_says_its_term(monkeypatch, tmp_path, seeded_logs):
     memories = [n for n in graph["nodes"] if n["type"] == "memory"]
     assert memories
     assert all(n.get("term") in ("short", "long") for n in memories)
+
+
+def test_places_and_care_join_the_brain_when_the_duties_have_data(monkeypatch, tmp_path, seeded_logs):
+    """Two lobes that are empty today (2026-09-04) and fill as the duties
+    run: a remembered place, with `at` to the owner while a visit says
+    they are inside and `mentions` from the document that names it; and
+    Kiaan's doses, done or due, owned by the child. Wired only to nodes
+    that exist."""
+    monkeypatch.setenv("KYRAAN_PANEL_DEMO", "1")
+    from kyraan.triggers import goals
+    monkeypatch.setattr(goals, "GOALS_PATH", tmp_path / "goals.json")
+    monkeypatch.setattr(queries, "_places", lambda: [
+        {"name": "office", "lat": 1.0, "lon": 2.0, "radius_km": 0.3, "since": "2026-09-01T09:00:00+00:00",
+         "inside": True, "at": "2026-09-04T10:00:00+00:00", "mentioned_by": ["nope"]}])
+    monkeypatch.setattr(queries, "_care_doses", lambda: [
+        {"id": "bcg", "label": "BCG", "status": "done", "date": "2025-10-13", "source": "card", "person": "owner"},
+        {"id": "mr1", "label": "Measles-Rubella (MR) — 1st", "status": "overdue", "due": "2026-07-12", "person": "owner"}])
+    graph = queries.brain_graph(fresh=True)
+    by = {n["id"]: n for n in graph["nodes"]}
+    assert by["l:office"]["type"] == "place" and by["l:office"]["inside"] is True
+    assert by["k:bcg"]["status"] == "done" and by["k:mr1"]["overdue"] is True
+    kinds = {(e["a"], e["b"], e["kind"]) for e in graph["edges"]}
+    assert ("l:office", "p:owner", "at") in kinds
+    assert ("k:bcg", "p:owner", "owns") in kinds
+    assert not any(e["a"] == "d:nope" for e in graph["edges"])   # a mention of a missing document is dropped
+    ids = set(by)
+    assert not [e for e in graph["edges"] if e["a"] not in ids or e["b"] not in ids]
