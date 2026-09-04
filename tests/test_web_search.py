@@ -277,3 +277,33 @@ def test_search_marks_undated_hub_results(monkeypatch):
     assert out["results"][0].get("undated_hub_page") is True
     assert "published" not in out["results"][0]
     assert "undated_hub_page" not in out["results"][1] and out["results"][1]["published"] == "2026-05-09"
+
+
+def test_is_authoritative_url_is_a_curated_positive_signal():
+    from kyraan.tools import web_search
+    assert web_search.is_authoritative_url("https://en.wikipedia.org/wiki/Chief_Minister_of_West_Bengal")
+    assert web_search.is_authoritative_url("https://www.reuters.com/world/india/some-story")
+    assert web_search.is_authoritative_url("https://pib.gov.in/PressReleasePage.aspx?PRID=1")
+    assert not web_search.is_authoritative_url("https://some-random-blog.example.com/post")
+    assert not web_search.is_authoritative_url("")
+
+
+def test_search_tags_authoritative_results(monkeypatch):
+    import json
+    from kyraan.tools import web_search
+    payload = json.dumps({"results": [
+        {"title": "Wiki", "url": "https://en.wikipedia.org/wiki/Chief_Minister_of_West_Bengal",
+         "content": "...", "publishedDate": "2026-05-09"},
+        {"title": "Random blog", "url": "https://randomblog.example.com/story", "content": "..."},
+    ]}).encode()
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return payload
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **kw: FakeResp())
+    monkeypatch.setenv("SEARXNG_URL", "http://localhost:8080")
+    out = web_search._search("test", 5)
+    assert out["results"][0]["authoritative"] is True
+    assert "authoritative" not in out["results"][1]

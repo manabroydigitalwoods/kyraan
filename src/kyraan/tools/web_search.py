@@ -89,6 +89,7 @@ def _search(query: str, count: int) -> dict:
                if item.get("publishedDate") else {}),
             **({"undated_hub_page": True} if not item.get("publishedDate")
                and is_hub_url(url) else {}),
+            **({"authoritative": True} if is_authoritative_url(url) else {}),
         })
     return {"query": query, "results": results}
 
@@ -107,6 +108,38 @@ def is_hub_url(url: str) -> bool:
     is a weak source for a "who currently…" question, never a citation
     for one on its own."""
     return bool(_HUB_URL.search(url or ""))
+
+
+# A positive signal, not a blocklist (owner 2026-09-04: "find the best
+# and TRUE information, not just news, from any web search" — a
+# curated exclusion list of "bad" domains would be an opinion Kyraan
+# has no business holding; naming outlets and references with an
+# actual editorial/verification process is defensible and small enough
+# to keep honest). Wire agencies, major mastheads, and primary/official
+# sources — not a ranking of which is "right", only which is worth
+# weighing more than an unknown blog when sources disagree.
+_AUTHORITATIVE_HOSTS = frozenset({
+    "wikipedia.org", "reuters.com", "apnews.com", "bbc.com", "bbc.co.uk",
+    "aljazeera.com", "thehindu.com", "hindustantimes.com", "indianexpress.com",
+    "timesofindia.indiatimes.com", "ndtv.com", "livemint.com", "business-standard.com",
+    "pib.gov.in", "rbi.org.in", "eci.gov.in", "sansad.in", "india.gov.in",
+    "nature.com", "science.org", "who.int", "un.org",
+})
+
+
+def is_authoritative_url(url: str) -> bool:
+    """A wire service, major masthead, or primary/official (.gov, an
+    international body) source — weighed above an unknown domain when
+    results disagree. Still just a snippet, still not a fetched page;
+    this narrows WHICH untrusted snippet to trust more, it does not
+    remove the untrusted-data boundary."""
+    try:
+        import urllib.parse
+        host = urllib.parse.urlsplit(url or "").hostname or ""
+    except Exception:
+        return False
+    host = host.lower().removeprefix("www.")
+    return any(host == h or host.endswith("." + h) for h in _AUTHORITATIVE_HOSTS)
 
 
 # --- web.open (governance round 2026-08-31, plan §3c gate lifted) ----------
