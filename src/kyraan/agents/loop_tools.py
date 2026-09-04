@@ -1195,6 +1195,9 @@ async def _documents_search(chat_id: int, args: dict, raw_text: str):
         raise kernel.ToolFailed(
             f"document memory is unavailable right now ({str(exc)[:100]})")
     if not hits:
+        private = await _private_document_answer(chat_id, query, raw_text)
+        if private:
+            return private
         return {"found": 0, "note": ("no saved document matches — say so "
                                      "honestly, never invent contents")}
     # WHOSE it is rides on every hit (live 2026-09-03: "my medications"
@@ -1592,6 +1595,44 @@ async def _faces_check_photo(chat_id: int, args: dict, raw_text: str):
                      "matching nobody is 'not someone I have saved'")}
 
 
+async def _private_document_answer(chat_id: int, query: str, raw_text: str):
+    """The cloud tier's document tools cannot see a PRIVATE document. When
+    only such a document matches — by name, or as the thread's current
+    document — the LOCAL model answers the owner's ask with it and the
+    reply goes straight to the owner (history keeps a placeholder), so
+    the model is never left saying "no saved document" about a file the
+    owner watched Kyraan save (live 2026-09-04)."""
+    import asyncio as _aio
+
+    from kyraan.agents import agent_loop, secrets
+    from kyraan.model_router import router as _router
+    from kyraan.store import documents
+    tier = agent_loop.current_tier()
+    provider = (kernel.config.load().get("model_tiers", {}).get(tier) or {}).get("provider", "")
+    if provider and _router.provider_is_local(provider):
+        return None                      # the local tier already sees everything
+    doc = None
+    for probe in (query, raw_text):
+        try:
+            doc = await _aio.to_thread(documents.local_only_match, chat_id, probe)
+        except Exception:
+            doc = None
+        if doc:
+            break
+    follow = False
+    if not doc:
+        recent = secrets.recent_private_doc(chat_id)
+        if recent:
+            doc, follow = recent["doc"], True
+    if not doc:
+        return None
+    text = await secrets.local_document_reply(chat_id, raw_text, doc, follow_up=follow)
+    log_event("private_document_answered", ok=bool(text), doc=doc["caption"][:40], via="tool")
+    if not text:
+        return None
+    return {"__direct_reply__": f"🔒 {text}"}
+
+
 async def _documents_read(chat_id: int, args: dict, raw_text: str):
     import asyncio as _aio
 
@@ -1605,6 +1646,9 @@ async def _documents_read(chat_id: int, args: dict, raw_text: str):
         raise kernel.ToolFailed(
             f"document memory is unavailable right now ({str(exc)[:100]})")
     if not doc:
+        private = await _private_document_answer(chat_id, query, raw_text)
+        if private:
+            return private
         return {"found": 0, "note": ("no saved document matches — say so "
                                      "honestly, never invent contents")}
     return (f'[full saved document "{doc["caption"]}", {doc["date"]} — '

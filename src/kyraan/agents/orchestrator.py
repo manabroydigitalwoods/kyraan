@@ -1596,27 +1596,42 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     "and I won't send a private message to the cloud. Nothing "
                     "was stored — try again in a moment, or say \"private mode "
                     "off\" if this doesn't need to stay private.")
-        if kernel.viewer_person() == "owner" and _re.search(
-                r"\b(explain|summar|what(?:'s| is| does)|tell me|read|open|details?|amount|total|how much|when|who|where)\b",
-                raw_text, _re.IGNORECASE):
+        if kernel.viewer_person() == "owner" and ("?" in raw_text or _re.search(
+                r"\b(explain|summar|what|which|how|tell me|read|open|details?|amount|total|when|who|where|why)\b",
+                raw_text, _re.IGNORECASE)):
             # A question that names a PRIVATE document is the local
             # model's, with the document — never the cloud's (2026-09-04).
+            from kyraan.agents import secrets as _secrets_doc
             try:
                 import asyncio as _aio
                 from kyraan.store import documents as _docs
                 doc = await _aio.to_thread(_docs.local_only_match, chat_id, raw_text)
             except Exception:
                 doc = None
+            follow = None
+            if not doc:
+                # a question minutes after a private document was explained
+                # is most likely about it — the local model decides, and
+                # hands back anything that is not (NOT_ABOUT_DOCUMENT)
+                follow = _secrets_doc.recent_private_doc(chat_id)
+                if follow and ("?" in raw_text or _re.match(r"^\s*(what|which|how|when|who|where|why|and|also|tell|show|list|explain)\b", raw_text, _re.IGNORECASE)):
+                    doc = follow["doc"]
+                else:
+                    follow = None
             if doc:
-                from kyraan.agents import secrets as _secrets_doc
                 _skip_extraction.set(True)
                 _history_redaction.set("[answered about a private document]")
                 _answered_by.set("local")
-                text = await _secrets_doc.local_document_reply(chat_id, raw_text, doc)
-                log_event("private_document_answered", ok=bool(text), doc=doc["caption"][:40])
-                return (f"🔒 {text}" if text else
-                        f"\"{doc['caption']}\" is a private document, so I only read it on the local "
-                        "model — and it gave me nothing just now. Try again in a moment.")
+                text = await _secrets_doc.local_document_reply(chat_id, raw_text, doc, follow_up=bool(follow))
+                log_event("private_document_answered", ok=bool(text), doc=doc["caption"][:40], follow_up=bool(follow))
+                if text:
+                    return f"🔒 {text}"
+                if not follow:
+                    return (f"\"{doc['caption']}\" is a private document, so I only read it on the local "
+                            "model — and it gave me nothing just now. Try again in a moment.")
+                _skip_extraction.set(False)
+                _history_redaction.set(None)
+                _answered_by.set("cloud")
         for tier in tier_chain():
             if tier == "cheap":
                 # P3.7a: the local model now holds BOTH the loop and
