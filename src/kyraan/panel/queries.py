@@ -758,6 +758,42 @@ def _as_vector(value):
     return list(value)
 
 
+def _synapses_pg(table: str, id_col: str, ids: list, floor: float = _SYNAPSE_FLOOR) -> list | None:
+    """The mesh, computed where the vectors live (2026-09-04). The numpy
+    version below builds an n×n similarity matrix in Python — 200MB at
+    5k rows, 5GB at 25k. pgvector answers "the k nearest to each row"
+    with an index-backed lateral join and the matrix never exists.
+    Same rule: top-k per row, floor, each pair once. None when the
+    store cannot answer, so the caller falls back to numpy."""
+    if len(ids) < 2:
+        return []
+    from kyraan.store import pg
+    try:
+        with pg.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT a.{id_col}, b.{id_col}, 1 - (a.embedding <=> b.embedding) AS sim "
+                f"FROM {table} a "
+                f"JOIN LATERAL (SELECT {id_col}, embedding FROM {table} "
+                f"              WHERE {id_col} <> a.{id_col} AND embedding IS NOT NULL "
+                f"                AND {id_col} = ANY(%s) "
+                f"              ORDER BY embedding <=> a.embedding LIMIT %s) b ON true "
+                f"WHERE a.embedding IS NOT NULL AND a.{id_col} = ANY(%s)",
+                (list(ids), _SYNAPSES_PER_FACT, list(ids)))
+            rows = cur.fetchall()
+    except Exception:
+        return None
+    seen, edges = set(), []
+    for a, b, sim in rows:
+        if sim is None or float(sim) < floor:
+            continue
+        key = tuple(sorted((str(a), str(b))))
+        if key in seen:
+            continue
+        seen.add(key)
+        edges.append({"a": str(a), "b": str(b), "weight": round(float(sim), 4)})
+    return edges
+
+
 def _synapses(ids: list, vectors: list, floor: float = _SYNAPSE_FLOOR) -> list:
     """Top-k cosine neighbours per fact — the memory mesh.
 
@@ -797,6 +833,60 @@ def _synapses(ids: list, vectors: list, floor: float = _SYNAPSE_FLOOR) -> list:
 # Which tool family manages which kind of task. Not a guess about
 # content — the task TYPE determines the tools that operate on it, which
 # is what wires the skill lobe to the task lobe.
+def _places() -> list:
+    """Remembered places with their current visit state and the documents
+    that name them. The trigger module is imported for its state readers
+    only; it talks to nothing at import."""
+    try:
+        from kyraan.triggers import whereabouts
+        state = whereabouts._load()
+    except Exception:
+        return []
+    out = []
+    visits = state.get("visits") or {}
+    for name, place in (state.get("places") or {}).items():
+        visit = visits.get(name) or {}
+        entry = dict(place, name=name, inside=bool(visit.get("inside")), at=str(visit.get("at") or ""),
+                     mentioned_by=[])
+        try:
+            from kyraan.store import pg
+            with pg.connection() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id FROM document WHERE coalesce(suppressed_by, '{}') = '{}' "
+                    "AND (caption ILIKE %s OR text ILIKE %s OR %s = ANY(entities)) LIMIT 20",
+                    (f"%{name}%", f"%{name}%", name))
+                entry["mentioned_by"] = [str(r[0]) for r in cur.fetchall()]
+        except Exception:
+            pass
+        out.append(entry)
+    return out
+
+
+def _care_doses() -> list:
+    """Kiaan's vaccination doses as the keeper sees them: done with a date
+    and source, or upcoming with a due date and a status."""
+    try:
+        from kyraan.triggers import kiaan_keeper as keeper
+        born = keeper.birth_date()
+        if born is None:
+            return []
+        done = keeper.done_map()
+        today = keeper.local_now().date()
+        upcoming = keeper.upcoming(born, done, today)
+    except Exception:
+        return []
+    labels = {row[0]: row[1] for row in keeper.SCHEDULE}
+    out = []
+    for sid, rec in done.items():
+        out.append({"id": sid, "label": labels.get(sid, sid), "status": "done",
+                    "date": str(rec.get("date", "")), "source": str(rec.get("source", "")),
+                    "person": keeper.PERSON})
+    for sid, label, due, status in upcoming:
+        out.append({"id": sid, "label": label, "status": status, "due": due.isoformat(),
+                    "person": keeper.PERSON})
+    return out
+
+
 def _code_jobs() -> list:
     """The coding-task ledger (tools/code_agent.JOBS_PATH), read, never
     imported: the tool module talks to the outside world at import."""
@@ -971,7 +1061,8 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                 vector = None
         vectors.append(list(vector) if vector is not None else None)
 
-    for edge in _synapses(fact_ids, vectors, floor=synapse_floor):
+    fact_mesh = None if demo.enabled() else _synapses_pg("fact", "legacy_id", fact_ids, synapse_floor)
+    for edge in (fact_mesh if fact_mesh is not None else _synapses(fact_ids, vectors, floor=synapse_floor)):
         edges.append({"a": f"m:{edge['a']}", "b": f"m:{edge['b']}",
                       "kind": "synapse", "weight": edge["weight"]})
 
@@ -1106,7 +1197,9 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
                 edges.append({"a": node_id, "b": f"m:{ref}", "kind": "recalls",
                               "weight": 0.9})
 
-    for edge in _synapses(episode_ids, episode_vectors, floor=synapse_floor):
+    episode_mesh = None if _demo.enabled() else _synapses_pg("episode", "id", episode_ids, synapse_floor)
+    for edge in (episode_mesh if episode_mesh is not None
+                 else _synapses(episode_ids, episode_vectors, floor=synapse_floor)):
         edges.append({"a": f"e:{edge['a']}", "b": f"e:{edge['b']}",
                       "kind": "synapse", "weight": edge["weight"]})
 
@@ -1338,6 +1431,41 @@ def brain_graph(synapse_floor: float = _SYNAPSE_FLOOR, fresh: bool = False) -> d
         owner = by_chat.get(str(job.get("chat_id", "")))
         if owner and f"p:{owner}" in {n["id"] for n in nodes}:
             edges.append({"a": node_id, "b": f"p:{owner}", "kind": "owns", "weight": 0.4})
+
+    # --- places (whereabouts) ----------------------------------------------
+    # A place the owner told Kyraan to remember ("remember this as the
+    # office"): a neuron with its radius and since-when; `at` to the owner
+    # while a visit says they are inside it; `mentions` from any document
+    # or note that names it. Empty until the owner remembers a place.
+    for place in _places():
+        pid = f"l:{place['name']}"
+        nodes.append({
+            "id": pid, "type": "place", "lobe": "places", "label": place["name"],
+            "group": "place", "radius_km": place.get("radius_km"),
+            "created": place.get("since", ""), "inside": place.get("inside", False),
+            "last_visit": place.get("at", ""),
+        })
+        if place.get("inside") and "p:owner" in {n["id"] for n in nodes}:
+            edges.append({"a": pid, "b": "p:owner", "kind": "at", "weight": 0.6})
+        for doc_id in place.get("mentioned_by", []):
+            if f"d:{doc_id}" in {n["id"] for n in nodes}:
+                edges.append({"a": f"d:{doc_id}", "b": pid, "kind": "mentions", "weight": 0.5})
+
+    # --- care (Kiaan's keeper) ---------------------------------------------
+    # The vaccination schedule the keeper owns: one neuron per dose, done
+    # (dated, with its source: the card, a photo, the owner's word) or
+    # due / due-soon / overdue / later from his birth date. Owned by the
+    # child. Nothing until the keeper knows the birth date.
+    for dose in _care_doses():
+        did = f"k:{dose['id']}"
+        nodes.append({
+            "id": did, "type": "care", "lobe": "care", "label": dose["label"],
+            "group": dose["status"], "status": dose["status"], "due": dose.get("due", ""),
+            "done_on": dose.get("date", ""), "source": dose.get("source", ""),
+            "overdue": dose["status"] == "overdue", "created": dose.get("date") or dose.get("due", ""),
+        })
+        if f"p:{dose['person']}" in {n["id"] for n in nodes}:
+            edges.append({"a": did, "b": f"p:{dose['person']}", "kind": "owns", "weight": 0.5})
 
     # --- skill lobe -------------------------------------------------------
     usage, pairs = _tool_activity()
