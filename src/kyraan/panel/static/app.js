@@ -1200,17 +1200,17 @@ async function loadCost() {
    Anchors sit on the shell; canvas y grows DOWNWARD, so "up" is negative. */
 const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.80, groove: 0.12 };
 const LOBES = {
-  core:     { anchor: [0.0, 0.0, 0.00], label: "core" },
+  core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
   person:   { anchor: [0.00, 0.04, 0.00], ring: 0.36, label: "people" },
-  skill:    { anchor: [0.86, -0.37, 0.00], label: "skills" },      // frontal, upper
-  task:     { anchor: [0.90, 0.29, 0.00], label: "work" },         // frontal, lower
-  memory:   { anchor: [-0.08, -0.74, 0.00], label: "facts" },      // parietal, the crown
-  episode:  { anchor: [0.16, 0.25, 0.00], label: "recall" },      // temporal, both sides
-  document: { anchor: [-0.94, -0.20, 0.00], label: "documents" },  // occipital
-  face:     { anchor: [-0.66, 0.20, 0.00], label: "faces" },     // occipital, lower
-  note:     { anchor: [-0.61, 0.61, 0.00], label: "notes" },      // cerebellum
-  tag:      { anchor: [-0.78, 0.53, 0.00], label: "tags" },      // cerebellum, lower
-  contact:  { anchor: [0.12, 0.78, 0.00], label: "contacts" },   // the stem
+  skill:    { anchor: [1.00, -0.30, 0.00], label: "skills" },      // frontal, upper (70)
+  task:     { anchor: [0.95, 0.45, 0.00], label: "work" },         // frontal, lower (4)
+  memory:   { anchor: [-0.05, -0.85, 0.00], label: "facts" },      // the crown (52)
+  episode:  { anchor: [0.15, 0.55, 0.00], label: "recall" },       // temporal, low, both sides (215)
+  contact:  { anchor: [0.60, 0.80, 0.00], label: "contacts" },     // the stem, forward (11)
+  document: { anchor: [-0.90, -0.45, 0.00], label: "documents" },  // occipital, upper (25)
+  face:     { anchor: [-1.05, 0.10, 0.00], label: "faces" },       // occipital, centre (5)
+  note:     { anchor: [-0.75, 0.55, 0.00], label: "notes" },       // cerebellum (8)
+  tag:      { anchor: [-0.50, 0.82, 0.00], label: "tags" },        // cerebellum, lower (6)
 };
 
 /* A node's own anchor: the lobe's point, or its own place on the lobe's
@@ -2105,7 +2105,11 @@ function simulate() {
       let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
       let d2 = dx * dx + dy * dy + dz * dz;
       if (d2 < 1e-6) { dx = (i - j) * 1e-3; dy = 1e-3; dz = 1e-3; d2 = 1e-6; }
-      const force = Math.min(REPEL / d2, 0.06);
+      // Region tension: a neuron pushes a neighbour from ANOTHER lobe
+      // away 2.4× harder than one of its own, so regions keep clear
+      // edges on the shared shell instead of bleeding into each other.
+      const tension = a.type === b.type ? 0.85 : 2.4;
+      const force = Math.min(REPEL * tension / d2, 0.06);
       const d = Math.sqrt(d2);
       a.vx += (dx / d) * force; a.vy += (dy / d) * force; a.vz += (dz / d) * force;
       b.vx -= (dx / d) * force; b.vy -= (dy / d) * force; b.vz -= (dz / d) * force;
@@ -2418,8 +2422,11 @@ function drawGraph(canvas, view, opts) {
     ctx.strokeStyle = edge.contested ? bad
       : (styles.getPropertyValue(style.key).trim() || dim);
     const strength = edgeStrength(edge);
+    // A wire between two lobes rests at 40%: its arc crossed the region
+    // in between and smeared the two together. Touched, it is full.
+    const crossing = a.type !== b.type && a.type !== "core" && b.type !== "core" && !touched ? 0.4 : 1;
     ctx.globalAlpha = (touched ? Math.min(1, style.alpha * 2.4) : style.alpha)
-                    * lit * farness * strength;
+                    * lit * farness * strength * crossing;
     ctx.lineWidth = (touched ? style.width * 1.8 : style.width) * ratio * (0.6 + 0.4 * strength);
     if (style.dash) ctx.setLineDash([4 * ratio, 4 * ratio]);
     ctx.beginPath();
