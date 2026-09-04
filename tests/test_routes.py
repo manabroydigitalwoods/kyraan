@@ -111,11 +111,11 @@ def test_registry_and_menu(monkeypatch):
     assert spec.permission == "auto" and spec.side_effects == "read"
     monkeypatch.delenv("TOMTOM_API_KEY", raising=False)
     monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "k")
-    assert "- routes.eta {" in agent_loop._tools_block()
+    assert "- routes.eta" in agent_loop._tools_block()
     monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
-    assert "- routes.eta {" not in agent_loop._tools_block()
+    assert "- routes.eta" not in agent_loop._tools_block()
     monkeypatch.setenv("TOMTOM_API_KEY", "t")   # TomTom alone also lights it up
-    assert "- routes.eta {" in agent_loop._tools_block()
+    assert "- routes.eta" in agent_loop._tools_block()
     assert "routes.eta" in agent_loop._READ_ONLY_TOOLS
 
 

@@ -2334,6 +2334,13 @@ TOOLS = {
                   "Text formats only; ~200KB cap."),
         "run": _files_send,
     },
+    "tools.describe": {
+        "params": '{"names": ["<tool name>", "..."]}',
+        "about": ("The full parameters and purpose of tools listed by name only "
+                  "in MORE TOOLS. Call it before using one of those, then call "
+                  "the tool. Free; no side effects."),
+        "run": None,   # bound below (needs agent_loop.tool_spec)
+    },
     "my.abilities": {
         "params": "{}",
         "about": ("What the CURRENT speaker can do here — their access "
@@ -2697,6 +2704,7 @@ VERIFICATION_CLASS = {
     "music.pause": "read_after_write",
     "music.skip": "read_after_write",
     "music.volume": "same_store",  # prior-capture; the set itself is audible
+    "tools.describe": "same_store",  # a menu read; nothing to re-read
     "home.announce": "same_store",  # audible by nature; nothing to re-read
     "home.speaker_volume": "same_store",  # prior captured; result audible
     "home.media": "same_store",   # visible on the TV itself
@@ -3239,7 +3247,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 
 
 
-_READ_ONLY_TOOLS = {"code.status", "code.diff",
+_READ_ONLY_TOOLS = {"tools.describe", "code.status", "code.diff",
                     "calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
@@ -3365,3 +3373,17 @@ def _confirmed_reply(tool: str, args: dict, outcome) -> str:
 # (the first real mount, Slack 2026-09-02, found the call sitting
 # before them — a NameError at import).
 register_mcp_tools()
+
+
+async def _tools_describe(chat_id: int, args: dict, raw_text: str):
+    from kyraan.agents import agent_loop
+    names = args.get("names") or []
+    if isinstance(names, str):
+        names = [names]
+    names = [str(n).strip() for n in names if str(n).strip()][:8]
+    if not names:
+        raise kernel.ToolFailed("give the tool names to describe")
+    return {"tools": "\n".join(agent_loop.tool_spec(n) for n in names)}
+
+
+TOOLS["tools.describe"]["run"] = _tools_describe

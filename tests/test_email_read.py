@@ -124,9 +124,9 @@ async def test_unread_executor_delegates_body_questions_when_enabled(monkeypatch
 
 def test_menu_gated_on_the_flag(monkeypatch):
     monkeypatch.delenv("KYRAAN_EMAIL_BODIES", raising=False)
-    assert "- email.read {" not in agent_loop._tools_block()
+    assert "- email.read" not in agent_loop._tools_block()
     monkeypatch.setenv("KYRAAN_EMAIL_BODIES", "local")
-    assert "- email.read {" in agent_loop._tools_block()
+    assert "- email.read" in agent_loop._tools_block()
 
 
 def test_brief_tracks_the_flag(monkeypatch):

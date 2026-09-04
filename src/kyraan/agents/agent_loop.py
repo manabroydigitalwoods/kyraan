@@ -379,11 +379,74 @@ def _compact_about(about: str, cap: int = 320) -> str:
     return " ".join(keep)
 
 
+# The catalogue in two tiers (owner 2026-09-04, token audit: the tool
+# schemas were half of every call, ~5k tokens, most of them for tools
+# used once a month). HOT tools carry their parameters; the rest carry
+# a name and one line, and the model asks tools.describe for the rest
+# (like a deferred tool schema). The hot set is usage-ranked from the
+# event log and frozen for an hour so the prompt prefix stays cacheable.
+_HOT_CORE = frozenset({
+    "home.get_state", "home.turn_on", "home.turn_off", "home.purifier",
+    "reminders.create", "reminders.list", "reminders.cancel", "calendar.list_events",
+    "calendar.create_event", "documents.search", "documents.read", "documents.list",
+    "documents.show", "memory.search", "memory.pending_list", "tasks.list",
+    "tasks.schedule", "music.play", "web.search", "usage.report", "email.unread",
+    "persons.profile", "weather.get", "rules.create", "tools.describe",
+})
+_HOT_MAX = 24
+_hot_cache: dict = {"at": 0.0, "names": frozenset()}
+
+
+def _hot_tools() -> frozenset:
+    import glob
+    import time as _t
+    if _t.monotonic() - _hot_cache["at"] < 3600 and _hot_cache["names"]:
+        return _hot_cache["names"]
+    counts: dict = {}
+    try:
+        from kyraan.control_plane.logging_setup import LOG_DIR
+        files = sorted(glob.glob(str(LOG_DIR / "archive" / "*" / "events*.jsonl")))[-14:] + [str(LOG_DIR / "events.jsonl")]
+        for path in files:
+            with open(path, encoding="utf-8") as fh:
+                for line in fh:
+                    if '"agent_tool_call"' not in line:
+                        continue
+                    m = re.search(r'"tool": "([a-z_.]+)"', line)
+                    if m:
+                        counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    except Exception:
+        pass
+    ranked = [n for n, _ in sorted(counts.items(), key=lambda kv: -kv[1]) if n in TOOLS]
+    names = set(_HOT_CORE)
+    for n in ranked:
+        if len(names) >= _HOT_MAX:
+            break
+        names.add(n)
+    _hot_cache.update(at=_t.monotonic(), names=frozenset(names))
+    return _hot_cache["names"]
+
+
+def _brief_line(about: str) -> str:
+    first = re.split(r"(?<=[.!?])\s", " ".join(str(about).split()), maxsplit=1)[0]
+    return first[:80]
+
+
+def tool_spec(name: str) -> str:
+    """The full menu line for one tool — what tools.describe returns and
+    what a failed call of a brief-listed tool carries back."""
+    spec = TOOLS.get(name)
+    if not spec:
+        return f"{name}: no such tool"
+    about = _compact_about(spec["about"]).replace("PLACEHOLDER_HOME_ENTITIES", _home_entity_roster())
+    return f"- {name} {spec['params']}\n    {about}"
+
+
 def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
     from kyraan.tools import gmail as _gmail
     from kyraan.tools import routes as _routes
     from kyraan.tools import web_search as _web
-    lines = []
+    lines, brief = [], []
+    hot = _hot_tools()
     for name, spec in TOOLS.items():
         if read_only and name not in _READ_ONLY_TOOLS:
             continue
@@ -411,7 +474,15 @@ def _tools_block(read_only: bool = False, stage: str = "owner") -> str:
             "For CONTENT questions call email.read instead."
             if _gmail.bodies_enabled()
             else "Bodies are never available, by design.")
-        lines.append(f"- {name} {spec['params']}\n    {about}")
+        if name in hot:
+            lines.append(f"- {name} {spec['params']}\n    {about}")
+        else:
+            brief.append(f"- {name}: {_brief_line(about)}")
+    if brief:
+        lines.append("\nMORE TOOLS (name and purpose only — call tools.describe "
+                     "{\"names\": [...]} for their parameters before using one, "
+                     "unless the arguments are obvious):")
+        lines.extend(brief)
     return "\n".join(lines)
 
 
@@ -1021,6 +1092,8 @@ async def _run_inner(chat_id: int, raw_text: str, tier: str,
             raise
         except kernel.ToolFailed as exc:
             result = {"error": str(exc)}
+            if tool not in _hot_tools():
+                result["spec"] = tool_spec(tool)     # the parameters it did not have
         except Exception as exc:  # an executor bug must not brick the chat
             log_event("agent_tool_error", tool=tool, error=str(exc),
                       error_type=type(exc).__name__)
