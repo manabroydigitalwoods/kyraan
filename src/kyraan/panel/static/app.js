@@ -1183,18 +1183,27 @@ async function loadCost() {
    (owner, 2026-09-03: "the centre is cluttered, use the right spaces
    and positions for each group"). Before this five lobes anchored
    within 0.6 of the core and their captions overprinted each other. */
-const LOBES = {
+/* Laid out like a brain seen from the side (owner, 2026-09-04: "make it
+   more like a human brain, and no dense single point"): x runs front(+)
+   to back(−), y up, z out to the sides. Skills and work sit forward
+   (frontal: what it can do and will do); facts on top (parietal: what it
+   knows); recall out to the side (temporal: what it has lived); documents
+   and faces at the back (occipital: what it has seen); notes and tags
+   below and behind (the cerebellum: what the owner wrote); contacts at
+   the stem. The core is the thalamus, and the people ring around it at
+   0.55 so nothing else sits on it. */
+const LOBES = {                       // canvas y grows DOWNWARD: "up" is negative
   core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
-  person:   { anchor: [0.0, 0.05, 0.0], ring: 0.42, label: "people" },
-  memory:   { anchor: [-1.10, -0.30, -0.35], label: "facts" },
-  episode:  { anchor: [-0.85, 0.75, 0.45], label: "recall" },
-  skill:    { anchor: [1.15, 0.00, 0.25], label: "skills" },
-  document: { anchor: [0.70, 0.85, 0.40], label: "documents" },
-  face:     { anchor: [0.10, 0.95, -0.60], label: "faces" },
-  note:     { anchor: [0.60, -0.80, -0.55], label: "notes" },
-  tag:      { anchor: [0.95, -0.60, -0.65], label: "tags" },
-  task:     { anchor: [0.25, -0.75, 0.75], label: "work" },
-  contact:  { anchor: [-0.55, -0.85, 0.40], label: "contacts" },
+  person:   { anchor: [0.0, 0.05, 0.0], ring: 0.55, label: "people" },
+  skill:    { anchor: [1.15, -0.40, 0.20], label: "skills" },
+  task:     { anchor: [1.05, 0.40, -0.35], label: "work" },
+  memory:   { anchor: [-0.15, -1.05, -0.10], label: "facts" },
+  episode:  { anchor: [0.15, 0.35, 1.05], label: "recall" },
+  document: { anchor: [-1.15, -0.30, 0.15], label: "documents" },
+  face:     { anchor: [-0.95, 0.30, -0.60], label: "faces" },
+  note:     { anchor: [-0.70, 0.90, 0.40], label: "notes" },
+  tag:      { anchor: [-1.00, 0.80, -0.15], label: "tags" },
+  contact:  { anchor: [0.10, 1.20, -0.30], label: "contacts" },
 };
 
 /* A node's own anchor: the lobe's point, or its own place on the lobe's
@@ -1240,9 +1249,9 @@ const EDGE_STYLE = {
   maybe:       { alpha: 0.5,  width: 1.1, rest: 110, key: "--warn", dash: true },
   // The core's wiring (server: k:kyraan). ACTS through a skill, FIRES a
   // scheduled thing, RECEIVED a file or note, TALKS with the owner.
-  acts:        { alpha: 0.22, width: 0.9, rest: 150, key: "--accent" },
+  acts:        { alpha: 0.14, width: 0.8, rest: 150, key: "--accent" },
   fires:       { alpha: 0.3,  width: 1.0, rest: 170, key: "--warn" },
-  received:    { alpha: 0.10, width: 0.7, rest: 230, key: "--dim" },
+  received:    { alpha: 0.07, width: 0.7, rest: 230, key: "--dim" },
   talks:       { alpha: 0.85, width: 2.0, rest: 110, key: "--ok" },
   // A capture and the note it illustrates (server: document.related).
   illustrates: { alpha: 0.6,  width: 1.3, rest: 90,  key: "--ok" },
@@ -1627,7 +1636,19 @@ function drawCurrent(ctx, at, tt, colour, ratio, scale, strength) {
 
 /* The same quadratic the edges are DRAWN with, so a pulse rides the wire
    instead of cutting across near it. */
-function edgeControl(pa, pb) {
+function edgeControl(pa, pb, aId, bId) {
+  // A wire out of the core is bundled: it bends through the centre of
+  // the lobe it goes to, so seventy wires to the skills leave the core
+  // as one tract and fan out inside the lobe, instead of a starburst
+  // meeting at one point. Pulses ride the same curve.
+  if (brain.lobeScreen && (aId === CORE || bId === CORE)) {
+    const far = brain.byId.get(aId === CORE ? bId : aId);
+    const centre = far && brain.lobeScreen[far.type];
+    if (centre) {
+      return { x: (pa.x + pb.x) / 2 * 0.25 + centre.x * 0.75,
+               y: (pa.y + pb.y) / 2 * 0.25 + centre.y * 0.75 };
+    }
+  }
   return { x: (pa.x + pb.x) / 2 - (pb.y - pa.y) * 0.12,
            y: (pa.y + pb.y) / 2 + (pb.x - pa.x) * 0.12 };
 }
@@ -2094,6 +2115,16 @@ function simulate() {
       continue;
     }
     const anchor = anchorFor(node);
+    // Nothing but the ring may sit on the core: inside 0.45 of the
+    // origin a neuron is pushed back out. This is the "dense single
+    // point" — the wires converged there and so did the neurons.
+    {
+      const d0 = Math.hypot(node.x, node.y, node.z);
+      if (d0 < 0.45 && !(LOBES[node.type] || {}).ring) {
+        const push = (0.45 - d0) * 0.08 / (d0 || 1e-3);
+        node.vx += node.x * push; node.vy += node.y * push; node.vz += node.z * push;
+      }
+    }
     // A ring node is held to its own point a little harder: the ring is
     // the layout, not a suggestion.
     const onRing = !!(LOBES[node.type] || {}).ring;
@@ -2254,13 +2285,16 @@ function drawGraph(canvas, view, opts) {
   const drawnLabels = [];   // rects {x, y, w, h} of every label on this frame
   brain.labelStats = { drawn: 0, skipped: 0 };
   brain.captionHits = [];
+  brain.lobeScreen = {};
   {
     for (const [type, lobe] of Object.entries(LOBES)) {
       const members = nodes.filter((n) => n.type === type);
-      if (members.length < 2) continue;
+      if (!members.length) continue;
       const points = members.map((n) => proj.get(n.id));
       const cx = points.reduce((s, p) => s + p.x, 0) / points.length;
       const cy = points.reduce((s, p) => s + p.y, 0) / points.length;
+      if (type !== "core") brain.lobeScreen[type] = { x: cx, y: cy };
+      if (members.length < 2) continue;
       const spread = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)))
                    + 30 * ratio;
       // A lobe that just received activity glows brighter and fades: the
@@ -2347,9 +2381,10 @@ function drawGraph(canvas, view, opts) {
     if (style.dash) ctx.setLineDash([4 * ratio, 4 * ratio]);
     ctx.beginPath();
     ctx.moveTo(pa.x, pa.y);
-    // A slight bow keeps parallel edges between the same regions apart.
-    ctx.quadraticCurveTo((pa.x + pb.x) / 2 - (pb.y - pa.y) * 0.12,
-                         (pa.y + pb.y) / 2 + (pb.x - pa.x) * 0.12, pb.x, pb.y);
+    // A slight bow keeps parallel edges between the same regions apart;
+    // a wire from the core runs through its lobe's centre (edgeControl).
+    const ec = edgeControl(pa, pb, edge.a, edge.b);
+    ctx.quadraticCurveTo(ec.x, ec.y, pb.x, pb.y);
     ctx.stroke();
     if (style.dash) ctx.setLineDash([]);
   }
@@ -2363,7 +2398,7 @@ function drawGraph(canvas, view, opts) {
     const pa = proj.get(wire.from), pb = proj.get(wire.to);
     const life = (performance.now() - wire.born) / wire.ttl;       // 0 → 1
     const fade = 1 - life;
-    const control = edgeControl(pa, pb);
+    const control = edgeControl(pa, pb, wire.from, wire.to);
     const accentColour = styles.getPropertyValue("--accent").trim() || dim;
     ctx.strokeStyle = accentColour;
     ctx.globalAlpha = 0.55 * fade;
@@ -2393,7 +2428,7 @@ function drawGraph(canvas, view, opts) {
     // Building it from the travel direction put every reverse-travelling
     // pulse on a curve mirrored to the other side of its wire.
     const ca = proj.get(signal.ca), cb = proj.get(signal.cb);
-    const control = edgeControl(ca, cb);
+    const control = edgeControl(ca, cb, signal.ca, signal.cb);
     const reverse = signal.from !== signal.ca;
     const at = (t) => bezierAt(ca, control, cb, reverse ? 1 - t : t);
     const tt = Math.min(1, signal.t);
