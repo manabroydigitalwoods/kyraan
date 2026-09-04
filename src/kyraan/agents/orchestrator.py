@@ -1618,12 +1618,14 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
                     "and a private message never goes to the main assistant. Nothing "
                     "was stored — try again in a moment, or say \"private mode "
                     "off\" if this doesn't need to stay private.")
-        if kernel.viewer_person() == "owner" and ("?" in raw_text or _re.search(
+        from kyraan.agents import secrets as _secrets_doc
+        _pdoc_recent = (_secrets_doc.recent_private_doc(chat_id)
+                        if kernel.viewer_person() == "owner" else None)
+        if kernel.viewer_person() == "owner" and (_pdoc_recent is not None or "?" in raw_text or _re.search(
                 r"\b(explain|summar|what|which|how|tell me|read|open|details?|amount|total|when|who|where|why)\b",
                 raw_text, _re.IGNORECASE)):
             # A question that names a PRIVATE document is the local
             # model's, with the document — never the cloud's (2026-09-04).
-            from kyraan.agents import secrets as _secrets_doc
             try:
                 import asyncio as _aio
                 from kyraan.store import documents as _docs
@@ -1631,15 +1633,16 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             except Exception:
                 doc = None
             follow = None
-            if not doc:
-                # a question minutes after a private document was explained
-                # is most likely about it — the local model decides, and
-                # hands back anything that is not (NOT_ABOUT_DOCUMENT)
-                follow = _secrets_doc.recent_private_doc(chat_id)
-                if follow and ("?" in raw_text or _re.match(r"^\s*(what|which|how|when|who|where|why|and|also|tell|show|list|explain)\b", raw_text, _re.IGNORECASE)):
-                    doc = follow["doc"]
-                else:
-                    follow = None
+            if not doc and _pdoc_recent is not None:
+                # Owner 2026-09-05: "kyraan is not intelligent enough to
+                # decide when to switch topic" — a keyword regex was
+                # deciding whether to even ASK. It no longer gates this:
+                # while the document thread is open (nothing else has
+                # answered since), every message is tried, and the LOCAL
+                # MODEL judges relevance itself — it already answers
+                # NOT_ABOUT_DOCUMENT for anything that isn't, and that
+                # verdict, not a pattern match, decides the switch.
+                doc, follow = _pdoc_recent["doc"], _pdoc_recent
             if doc:
                 _skip_extraction.set(True)
                 _history_redaction.set("[answered about a private document]")

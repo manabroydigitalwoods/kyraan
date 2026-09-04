@@ -112,3 +112,49 @@ def test_follow_up_breaks_when_something_else_is_asked_in_between(monkeypatch):
     out = asyncio.run(orchestrator.handle_message(1, "hello"))
     assert not out.startswith("🔒")
     assert secrets.recent_private_doc(1) is None
+
+
+def test_a_plain_followup_with_no_keyword_still_reaches_the_model(monkeypatch):
+    # Owner 2026-09-05: the regex used to decide whether to even ASK.
+    # "show total again" has no "?" and no listed keyword, yet is
+    # obviously about the open document — now the model itself judges it.
+    from kyraan.agents import orchestrator, secrets
+    from kyraan.control_plane import kernel
+    from kyraan.model_router import router
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    doc = {"caption": "Computation.pdf", "date": "2026-09-04", "text": "Total income 11,51,350"}
+    monkeypatch.setattr(documents, "local_only_match", lambda chat_id, q: None)
+    answers = iter(["Total income 11,51,350 again."])
+
+    class R:
+        def __init__(self, t): self.text = t
+
+    async def fake_acall(prompt="", system="", tier="", max_tokens=0, **kw):
+        return R(next(answers))
+    monkeypatch.setattr(router, "acall", fake_acall)
+    secrets._last_private_doc.clear()
+    from kyraan.agents import orchestrator as _o
+    _o._private_doc_touched.pop(2, None)
+    secrets._last_private_doc[2] = {"doc": doc, "qa": [], "at": __import__("time").time()}
+    out = asyncio.run(orchestrator.handle_message(2, "show total again"))
+    assert out == "🔒 Total income 11,51,350 again."
+
+
+def test_a_message_judged_unrelated_by_the_model_falls_through(monkeypatch):
+    from kyraan.agents import orchestrator, secrets
+    from kyraan.control_plane import kernel
+    from kyraan.model_router import router
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    doc = {"caption": "Computation.pdf", "date": "2026-09-04", "text": "Total income 11,51,350"}
+    monkeypatch.setattr(documents, "local_only_match", lambda chat_id, q: None)
+
+    class R:
+        def __init__(self, t): self.text = t
+
+    async def fake_acall(prompt="", system="", tier="", max_tokens=0, **kw):
+        return R("NOT_ABOUT_DOCUMENT")
+    monkeypatch.setattr(router, "acall", fake_acall)
+    secrets._last_private_doc.clear()
+    secrets._last_private_doc[3] = {"doc": doc, "qa": [], "at": __import__("time").time()}
+    out = asyncio.run(orchestrator.handle_message(3, "nice weather today"))
+    assert not out.startswith("🔒")   # the model, not a keyword, decided this was a topic switch
