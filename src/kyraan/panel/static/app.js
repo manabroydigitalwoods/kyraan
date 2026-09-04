@@ -2257,6 +2257,17 @@ function toScreen(canvas, node, view) {
 }
 
 /* 0 at the front of the volume, 1 at the back — for size and fade. */
+/* The far side of the globe falls back (owner, 2026-09-04: "the cluster
+   behind makes the front less readable"). Camera-space depth z is 0 at
+   the centre plane; from −0.12 to +0.32 the factor eases from 1 down to
+   0.2, so what lies behind the centre reads as the back of an opaque
+   thing rather than a second layer printed over the front. */
+function backFade(z) {
+  const t = Math.max(0, Math.min(1, (z + 0.12) / 0.44));
+  const s = t * t * (3 - 2 * t);
+  return 1 - 0.8 * s;
+}
+
 function depthOf(z) {
   // Steeper than the volume alone would need: the far hemisphere must
   // fall back behind the near one for the mass to read as a solid.
@@ -2350,13 +2361,15 @@ function drawGraph(canvas, view, opts) {
       // A lobe that just received activity glows brighter and fades: the
       // recall lobe lighting up IS "it is searching its memory".
       const heat = lobeHeat(type);
+      const cz = points.reduce((s, p) => s + p.z, 0) / points.length;
+      const back = backFade(cz);
       const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, spread);
-      glow.addColorStop(0, nodeColour(members[0], 0.16 + 0.3 * heat));
+      glow.addColorStop(0, nodeColour(members[0], (0.16 + 0.3 * heat) * back));
       glow.addColorStop(1, nodeColour(members[0], 0));
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(cx, cy, spread, 0, Math.PI * 2); ctx.fill();
       ctx.font = `${11 * ratio}px ui-monospace, monospace`;
-      ctx.fillStyle = dim; ctx.globalAlpha = 0.8;
+      ctx.fillStyle = dim; ctx.globalAlpha = 0.8 * Math.max(0.35, back);
       const held = members.reduce((s, n) => s + (n.members ? n.members.length : 1), 0);
       const caption = lobe.label.toUpperCase() + "  " + held
         + (type === "contact" && brain.contactsTotal ? ` of ${brain.contactsTotal}` : "")
@@ -2421,7 +2434,8 @@ function drawGraph(canvas, view, opts) {
     // A wire is only as visible as the dimmer of its two ends.
     const lit = Math.min(matchAlpha(a), matchAlpha(b)) * focusEdgeAlpha(edge);
     const pa = proj.get(edge.a), pb = proj.get(edge.b);
-    const farness = 1 - 0.55 * (depthOf(pa.z) + depthOf(pb.z)) / 2;
+    const farness = (1 - 0.55 * (depthOf(pa.z) + depthOf(pb.z)) / 2)
+                  * Math.min(backFade(pa.z), backFade(pb.z));
     ctx.strokeStyle = edge.contested ? bad
       : (styles.getPropertyValue(style.key).trim() || dim);
     const strength = edgeStrength(edge);
@@ -2503,7 +2517,7 @@ function drawGraph(canvas, view, opts) {
     // scatter that happens to be moving.
     const radius = nodeRadius(node) * (opts.nodeScale || 1) * ratio * breath
                  * Math.max(0.6, Math.min(view.scale, 2.4)) * Math.pow(p.p, 0.85);
-    ctx.globalAlpha = 1 - 0.62 * depthOf(p.z);
+    ctx.globalAlpha = (1 - 0.62 * depthOf(p.z)) * backFade(p.z);
 
     const halo = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, radius * 3.6);
     halo.addColorStop(0, nodeColour(node, selected ? 0.75 : 0.42));
@@ -2635,6 +2649,7 @@ function drawGraph(canvas, view, opts) {
       // A selected day yields to collisions: the callout names it already.
       const wanted = (selected && !node.dayNode) || node === brain.hover
         || (brain.query && brain.matches.has(node.id));
+      if (!wanted && backFade(p.z) < 0.5) { brain.labelStats.skipped++; continue; }
       const collides = !wanted && drawnLabels.some((r) =>
         rect.x < r.x + r.w && r.x < rect.x + rect.w && rect.y < r.y + r.h && r.y < rect.y + rect.h);
       if (collides) {
