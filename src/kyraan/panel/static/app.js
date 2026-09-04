@@ -546,7 +546,7 @@ function mergeGraph(graph) {
     const angle = (i * 137.508) * Math.PI / 180;
     node.x = anchor[0] + Math.cos(angle) * 0.42;
     node.y = anchor[1] + Math.sin(angle) * 0.42;
-    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * 0.2;
+    node.z = (anchor[2] || 0) + (i % 2 ? 1 : -1) * (0.25 + Math.abs(Math.sin(i * 0.7)) * 0.2);
     node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
   });
   const removed = brain.nodes.filter((n) => !seen.has(n.id)).map((n) => n.id);
@@ -1192,18 +1192,25 @@ async function loadCost() {
    below and behind (the cerebellum: what the owner wrote); contacts at
    the stem. The core is the thalamus, and the people ring around it at
    0.55 so nothing else sits on it. */
-const LOBES = {                       // canvas y grows DOWNWARD: "up" is negative
-  core:     { anchor: [0.0, 0.0, 0.0], label: "core" },
-  person:   { anchor: [0.0, 0.05, 0.0], ring: 0.55, label: "people" },
-  skill:    { anchor: [1.15, -0.40, 0.20], label: "skills" },
-  task:     { anchor: [1.05, 0.40, -0.35], label: "work" },
-  memory:   { anchor: [-0.15, -1.05, -0.10], label: "facts" },
-  episode:  { anchor: [0.15, 0.35, 1.05], label: "recall" },
-  document: { anchor: [-1.15, -0.30, 0.15], label: "documents" },
-  face:     { anchor: [-0.95, 0.30, -0.60], label: "faces" },
-  note:     { anchor: [-0.70, 0.90, 0.40], label: "notes" },
-  tag:      { anchor: [-1.00, 0.80, -0.15], label: "tags" },
-  contact:  { anchor: [0.10, 1.20, -0.30], label: "contacts" },
+/* The cortex. Every neuron but the core and the people ring lives on an
+   ellipsoid SHELL (CORTEX below): a brain is one solid oval, not islands
+   in space. Lobes are regions of that surface, anchored where a brain
+   keeps them, and a groove down the midline (|z| pushed out) splits it
+   into two hemispheres — a lobe straddles the fissure like a real one.
+   Anchors sit on the shell; canvas y grows DOWNWARD, so "up" is negative. */
+const CORTEX = { a: 1.05, b: 0.80, c: 0.78, inner: 0.70, groove: 0.12 };
+const LOBES = {
+  core:     { anchor: [0.0, 0.0, 0.00], label: "core" },
+  person:   { anchor: [0.00, 0.04, 0.00], ring: 0.36, label: "people" },
+  skill:    { anchor: [0.86, -0.37, 0.00], label: "skills" },      // frontal, upper
+  task:     { anchor: [0.90, 0.29, 0.00], label: "work" },         // frontal, lower
+  memory:   { anchor: [-0.08, -0.74, 0.00], label: "facts" },      // parietal, the crown
+  episode:  { anchor: [0.16, 0.25, 0.00], label: "recall" },      // temporal, both sides
+  document: { anchor: [-0.94, -0.20, 0.00], label: "documents" },  // occipital
+  face:     { anchor: [-0.66, 0.20, 0.00], label: "faces" },     // occipital, lower
+  note:     { anchor: [-0.61, 0.61, 0.00], label: "notes" },      // cerebellum
+  tag:      { anchor: [-0.78, 0.53, 0.00], label: "tags" },      // cerebellum, lower
+  contact:  { anchor: [0.12, 0.78, 0.00], label: "contacts" },   // the stem
 };
 
 /* A node's own anchor: the lobe's point, or its own place on the lobe's
@@ -1984,7 +1991,7 @@ function visibleNodes() {
    wires an episode has are drawn to its day while it is folded. Hysteresis
    so the boundary does not flicker: fold below 1.15, open above 1.35.
    Only when the lobe is big enough to need it (> 60 episodes). */
-const FOLD_BELOW = 1.15, OPEN_ABOVE = 1.35, FOLD_WHEN_MORE_THAN = 60;
+const FOLD_BELOW = 0.95, OPEN_ABOVE = 1.15, FOLD_WHEN_MORE_THAN = 60;
 
 function dayLabel(day) {
   const d = new Date(day + "T00:00:00");
@@ -2056,7 +2063,8 @@ function seedPositions() {
     node.x = anchor[0] + Math.cos(angle) * radius;
     node.y = anchor[1] + Math.sin(angle) * radius;
     // Deterministic depth jitter too, or every lobe starts as a disc.
-    node.z = (anchor[2] || 0) + Math.sin(i * 0.7) * spread * 0.6;
+    // Dealt to alternate hemispheres, so every lobe straddles the fissure.
+    node.z = (anchor[2] || 0) + (i % 2 ? 1 : -1) * (0.25 + Math.abs(Math.sin(i * 0.7)) * spread);
     node.vx = 0; node.vy = 0; node.vz = 0; node.pinned = false;
   });
 }
@@ -2070,7 +2078,7 @@ function simulate() {
   // Tuned against the live graph (102 nodes): with a weaker anchor the
   // repulsion won and the four lobes smeared into one cloud, which is
   // exactly the picture a brain view must not produce.
-  const REPEL = 0.00026, SPRING = 0.012, ANCHOR = 0.055, DAMP = 0.86;
+  const REPEL = 0.00011, SPRING = 0.009, ANCHOR = 0.08, DAMP = 0.86;
 
   for (let i = 0; i < nodes.length; i++) {
     const a = nodes[i];
@@ -2120,7 +2128,7 @@ function simulate() {
     // point" — the wires converged there and so did the neurons.
     {
       const d0 = Math.hypot(node.x, node.y, node.z);
-      if (d0 < 0.45 && !(LOBES[node.type] || {}).ring) {
+      if (d0 < 0.30 && !(LOBES[node.type] || {}).ring) {
         const push = (0.45 - d0) * 0.08 / (d0 || 1e-3);
         node.vx += node.x * push; node.vy += node.y * push; node.vz += node.z * push;
       }
@@ -2150,6 +2158,20 @@ function simulate() {
     node.x += node.vx * brain.alpha;
     node.y += node.vy * brain.alpha;
     node.z += node.vz * brain.alpha;
+    // The cortex: hold the neuron in the shell between `inner` and 1 of
+    // the ellipsoid, and off the midline by `groove`, so the cloud is
+    // one oval with a fissure — the shape of the thing, made of the
+    // evidence itself.
+    if (!node.dayNode) {
+      const { a, b, c, inner, groove } = CORTEX;
+      const r = Math.hypot(node.x / a, node.y / b, node.z / c) || 1e-3;
+      const want = r < inner ? inner : r > 1 ? 1 : r;
+      if (want !== r) {
+        const k = want / r;                       // onto the shell: the springs must not win
+        node.x *= k; node.y *= k; node.z *= k;
+      }
+      if (Math.abs(node.z) < groove) node.z += (node.z < 0 ? -1 : 1) * (groove - Math.abs(node.z)) * 0.5;
+    }
   }
   brain.alpha = Math.max(0.02, brain.alpha * 0.99);
 }
@@ -2165,7 +2187,7 @@ function reheat(to = 1) { brain.alpha = to; }
 
    No library. A 3D graph is a rotation matrix and a divide; three.js
    would be 600KB of vendored script to do two multiplies. */
-const brainCam = { yaw: -0.55, pitch: 0.32, roll: 0, spin: true };
+const brainCam = { yaw: -1.25, pitch: 0.22, roll: 0, spin: true };
 const SPIN_RATE = 0.0006;        // ~2°/s: a slow turn you can read, not a spinner
 // Two gains, opposite signs, both by the owner's hand. Sideways, a drag
 // turns the GRAPH: drag right and the near face goes right, like a globe
@@ -2176,7 +2198,7 @@ const YAW_GAIN = -0.0022;        // radians per pixel of sideways drag
 const PITCH_GAIN = 0.0022;       // radians per pixel of vertical drag
 const IDLE_BEFORE_SPIN_MS = 12000;
 const FOCAL = 4.2;
-const HOME_CAM = { yaw: -0.55, pitch: 0.32 };
+const HOME_CAM = { yaw: -1.25, pitch: 0.22 };   // the lateral view: the brain's profile
 
 function rotateToCamera(node) {
   const cy = Math.cos(brainCam.yaw), sy = Math.sin(brainCam.yaw);
@@ -2296,12 +2318,12 @@ function drawGraph(canvas, view, opts) {
       if (type !== "core") brain.lobeScreen[type] = { x: cx, y: cy };
       if (members.length < 2) continue;
       const spread = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)))
-                   + 30 * ratio;
+                   + 46 * ratio;
       // A lobe that just received activity glows brighter and fades: the
       // recall lobe lighting up IS "it is searching its memory".
       const heat = lobeHeat(type);
       const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, spread);
-      glow.addColorStop(0, nodeColour(members[0], 0.1 + 0.32 * heat));
+      glow.addColorStop(0, nodeColour(members[0], 0.16 + 0.3 * heat));
       glow.addColorStop(1, nodeColour(members[0], 0));
       ctx.fillStyle = glow;
       ctx.beginPath(); ctx.arc(cx, cy, spread, 0, Math.PI * 2); ctx.fill();
