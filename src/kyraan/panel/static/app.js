@@ -2733,7 +2733,7 @@ function drawGraph(canvas, view, opts) {
         const wires = wireCount(node);
         target = node;
         lines = [node.label.slice(0, 44),
-                 `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap clears`];
+                 `${node.type} · ${wires} wire${wires === 1 ? "" : "s"} · double-tap on space clears`];
       }
     }
     if (target) {
@@ -3654,13 +3654,11 @@ function wireMemory() {
     // With something selected, a double-click UNSELECTS (owner
     // 2026-09-04) — the way out of a selection without hunting for
     // empty space. With nothing selected it zooms into a cluster.
-    if (brain.selection.size) {
-      brain.selection = new Set();
-      renderSelection();
+    const hit = nodeAt(canvas, event);
+    if (!hit) {
+      if (brain.selection.size) { brain.selection = new Set(); renderSelection(); }
       return;
     }
-    const hit = nodeAt(canvas, event);
-    if (!hit) return;
     if (hit.dayNode) {
       brain.selection = new Set([hit.id]);
       focusOn(canvas, hit.members.map((id) => brain.byId.get(id)).filter(Boolean));
@@ -3758,6 +3756,8 @@ function wireMemory() {
       const lobe = !hit && t ? captionAt(canvas, { clientX: t.clientX, clientY: t.clientY }) : null;
       if (lobe && !isDouble) {
         flyToLobe(canvas, lobe);
+      } else if (isDouble && !hit && brain.selection.size) {
+        brain.selection = new Set(); renderSelection();     // a double-tap on space clears (2026-09-04)
       } else if (isDouble) {
         if (hit && hit.dayNode) {
           brain.selection = new Set([hit.id]);
