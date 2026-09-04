@@ -143,7 +143,9 @@ off the event stream. Every sector is a
 real URL, so a reload or a shared link lands on the same view with the
 same filters. It binds 127.0.0.1 and
 prints a URL carrying a one-time token; reach it from a phone over
-Tailscale, never a forwarded port. It writes nothing — see
+Tailscale, never a forwarded port. It writes nothing, with one exception: the
+brain's review queue (Phase C) can forget one fact or confirm one contact,
+through the kill switch, audited, from the panel's own page only — see
 [docs/design/web_panel.md](docs/design/web_panel.md) for why that matters
 and what Phases B-D would add. The look is a CRT phosphor terminal: amber,
 green, or P1 blue, switched from the header and remembered per browser.

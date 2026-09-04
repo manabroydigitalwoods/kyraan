@@ -3130,6 +3130,22 @@ function renderSelection() {
   }
 }
 
+/* POST one review action. The header is the rail no cross-site form can
+   fake; the cookie is the owner. */
+async function review(path, body) {
+  try {
+    const res = await fetch(path, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json", "X-Kyraan-Panel": "review" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, ...data } : { ok: false, error: data.error || `HTTP ${res.status}` };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
+}
+
 function renderFindings(graph) {
   const body = $("findings-body");
   clear(body);
@@ -3144,14 +3160,21 @@ function renderFindings(graph) {
   }
   for (const id of graph.orphans) {
     const node = brain.byId.get(id);
-    if (node) rows.push({ label: node.label, tag: "orphan", ids: [id] });
+    if (node) rows.push({ label: node.label, tag: "orphan", ids: [id],
+                          action: { text: "forget", path: "/api/review/forget",
+                                    body: { fact_id: id.slice(2) },
+                                    ask: `Forget this fact?\n\n${node.label}` } });
   }
   for (const label of graph.dead_skills) {
     rows.push({ label, tag: "never called", ids: ["s:" + label] });
   }
   for (const label of graph.maybe_contacts || []) {
     const node = brain.nodes.find((n) => n.type === "contact" && label.startsWith(n.label + " "));
-    rows.push({ label, tag: "confirm", ids: node ? [node.id] : [] });
+    const person = node && node.person;
+    rows.push({ label, tag: "confirm", ids: node ? [node.id] : [],
+                action: node && person ? { text: `is ${person}`, path: "/api/review/confirm_contact",
+                                           body: { person, name: node.label },
+                                           ask: `Confirm: the contact "${node.label}" is ${person}?` } : null });
   }
   if (!rows.length) { empty(body, "nothing loose"); verdictInto("findings-verdict", "clean", "ok"); return; }
 
@@ -3159,6 +3182,22 @@ function renderFindings(graph) {
     const line = el("div", "finding");
     line.appendChild(el("span", "finding-name", row.label));
     line.appendChild(el("span", "tag", row.tag));
+    if (row.action) {
+      // The review queue (Phase C): one button, one item, one confirm.
+      const btn = el("button", "review-btn", row.action.text);
+      btn.title = "the panel's only write: through the kernel's kill switch, audited";
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (!window.confirm(row.action.ask)) return;
+        btn.disabled = true; btn.textContent = "…";
+        review(row.action.path, row.action.body).then((res) => {
+          btn.textContent = res.ok ? "done" : "failed";
+          if (res.ok) setTimeout(() => refreshGraph("panel_review"), 400);
+          else { btn.disabled = false; btn.title = res.error || "failed"; btn.textContent = row.action.text; alert(res.error || "failed"); }
+        });
+      });
+      line.appendChild(btn);
+    }
     if (row.ids.length) {
       line.addEventListener("click", () => {
         brain.selection = new Set(row.ids.filter((id) => brain.byId.has(id)));

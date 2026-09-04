@@ -217,6 +217,61 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._static(path)
 
+    # -- the review queue: the one place the panel writes ------------------
+
+    def do_POST(self):
+        if not self._host_ok():
+            self._error(421, "host not allowed")
+            return
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/")
+        if not self._authed({}):
+            self._error(401, "unauthorized")
+            return
+        # Two rails a cookie alone does not give: the request must carry
+        # the panel's own header (no cross-site form can add one) and, if
+        # the browser sent an Origin, it must be one of ours.
+        if (self.headers.get("X-Kyraan-Panel") or "") != "review":
+            self._error(403, "not from the panel")
+            return
+        origin = (self.headers.get("Origin") or "").strip().lower()
+        if origin:
+            host = urllib.parse.urlparse(origin).hostname or ""
+            if host not in self.server.allowed_hosts:
+                self._error(403, "origin not allowed")
+                return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+            if not isinstance(body, dict):
+                raise ValueError("body must be an object")
+        except (ValueError, json.JSONDecodeError) as exc:
+            self._error(400, f"bad body: {exc}")
+            return
+        from kyraan.panel import actions
+        try:
+            if path == "/api/review/forget":
+                result = actions.forget_fact(body.get("fact_id"))
+            elif path == "/api/review/confirm_contact":
+                result = actions.confirm_contact(body.get("person"), body.get("name"))
+            else:
+                self._error(404, "no such action")
+                return
+        except actions.ReviewRefused as exc:
+            self._error(exc.code, str(exc))
+            return
+        except Exception as exc:                      # a store error is a 500 with its text
+            log.exception("review action failed")
+            self._error(500, f"failed: {exc}")
+            return
+        # The graph memo is stale the moment something changed.
+        try:
+            from kyraan.panel import queries
+            queries._graph_cache.clear()
+        except Exception:
+            pass
+        self._json(dict(result, ok=True))
+
     def _static(self, path: str):
         name = "index.html" if path == "/" else path.lstrip("/")
         target = (STATIC_DIR / name).resolve()

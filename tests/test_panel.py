@@ -1350,3 +1350,84 @@ def test_places_and_care_join_the_brain_when_the_duties_have_data(monkeypatch, t
     assert not any(e["a"] == "d:nope" for e in graph["edges"])   # a mention of a missing document is dropped
     ids = set(by)
     assert not [e for e in graph["edges"] if e["a"] not in ids or e["b"] not in ids]
+
+
+# ------------------------------------------------------------ review queue
+def _post(httpd, path, body, headers=None):
+    import json as _json
+    conn = http.client.HTTPConnection("127.0.0.1", httpd.server_port, timeout=10)
+    hdrs = {"Host": "127.0.0.1", "Content-Type": "application/json"}
+    hdrs.update(headers or {})
+    conn.request("POST", path, body=_json.dumps(body).encode(), headers=hdrs)
+    res = conn.getresponse()
+    data = res.read()
+    conn.close()
+    return res, (_json.loads(data) if data else {})
+
+
+@pytest.fixture
+def review_server(seeded_logs):
+    httpd = server.build(host="127.0.0.1", port=0, token="secret-token")
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd
+    httpd.shutdown(); httpd.server_close(); thread.join(timeout=5)
+
+
+def test_review_refuses_anything_that_is_not_the_panel_itself(review_server, monkeypatch):
+    """The one write path has two rails a stolen cookie does not pass: the
+    panel's own header, and an Origin of ours. And a wrong token is 401
+    before either is looked at."""
+    from kyraan.panel import actions
+    monkeypatch.setattr(actions, "forget_fact", lambda fid: (_ for _ in ()).throw(AssertionError("must not run")))
+    res, body = _post(review_server, "/api/review/forget", {"fact_id": "abc"},
+                      {"X-Kyraan-Token": "secret-token"})
+    assert res.status == 403 and "panel" in body["error"]
+    res, _ = _post(review_server, "/api/review/forget", {"fact_id": "abc"},
+                   {"X-Kyraan-Token": "secret-token", "X-Kyraan-Panel": "review",
+                    "Origin": "http://evil.example.com"})
+    assert res.status == 403
+    res, _ = _post(review_server, "/api/review/forget", {"fact_id": "abc"},
+                   {"X-Kyraan-Token": "wrong", "X-Kyraan-Panel": "review"})
+    assert res.status == 401
+
+
+def test_review_forget_runs_the_engine_for_one_id_and_drops_the_graph_memo(review_server, monkeypatch):
+    from kyraan.memory import engine
+    from kyraan.control_plane import kill_switch
+    calls = []
+    monkeypatch.setattr(kill_switch, "is_engaged", lambda: False)
+    monkeypatch.setattr(engine, "forget", lambda ids: (calls.append(list(ids)), ["the fact"])[1])
+    queries._graph_cache["marker"] = {"stale": True}
+    res, body = _post(review_server, "/api/review/forget", {"fact_id": "16876bd9"},
+                      {"X-Kyraan-Token": "secret-token", "X-Kyraan-Panel": "review",
+                       "Origin": "http://127.0.0.1:8765"})
+    assert res.status == 200 and body["ok"] is True and body["forgotten"] == ["the fact"]
+    assert calls == [["16876bd9"]]
+    assert "marker" not in queries._graph_cache
+
+
+def test_review_stops_at_the_kill_switch(review_server, monkeypatch):
+    from kyraan.memory import engine
+    from kyraan.control_plane import kill_switch
+    monkeypatch.setattr(kill_switch, "is_engaged", lambda: True)
+    monkeypatch.setattr(engine, "forget", lambda ids: (_ for _ in ()).throw(AssertionError("must not run")))
+    res, body = _post(review_server, "/api/review/forget", {"fact_id": "abc"},
+                      {"X-Kyraan-Token": "secret-token", "X-Kyraan-Panel": "review"})
+    assert res.status == 423 and "kill switch" in body["error"]
+
+
+def test_review_confirm_contact_adds_the_name_as_an_alias(review_server, monkeypatch):
+    from kyraan.store import persons
+    from kyraan.control_plane import kill_switch
+    added = []
+    monkeypatch.setattr(kill_switch, "is_engaged", lambda: False)
+    monkeypatch.setattr(persons, "add_alias", lambda pid, alias: added.append((pid, alias)))
+    res, body = _post(review_server, "/api/review/confirm_contact",
+                      {"person": "Kamal", "name": "Habu Friend"},
+                      {"X-Kyraan-Token": "secret-token", "X-Kyraan-Panel": "review"})
+    assert res.status == 200 and body["alias"] == "habu friend"
+    assert added == [("kamal", "Habu Friend")]
+    res, _ = _post(review_server, "/api/review/confirm_contact", {"person": "", "name": "x"},
+                   {"X-Kyraan-Token": "secret-token", "X-Kyraan-Panel": "review"})
+    assert res.status == 400
