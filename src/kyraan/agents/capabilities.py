@@ -106,6 +106,9 @@ def capability_brief() -> str:
     lines.append("- The owner's phone reports its position to Home Assistant (2026-09-04): "
                  "\"where am I\" is answered deterministically from that — never from a saved "
                  "address, never by asking for a pin.")
+    lines.append("- Headlines come from editors' RSS front pages (The Hindu, NDTV, BBC, Google News), "
+                 "rendered by \"news\" / \"bengal news\" / \"world news\" and sent as a digest "
+                 "morning and evening — never from a web search.")
     from kyraan.agents.commands import brief_line
     lines.append("- " + brief_line())
     lines.append("- The OWNER can grant or revoke another person's chat access right here: persons.set_access (\"enroll ruma\", \"cut X off\"). Granting requires their recorded consent + chat id and a clean subject review; revoking is instant. persons.add only makes someone trackable — it gives them nothing.")

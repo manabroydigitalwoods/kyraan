@@ -42,9 +42,13 @@ def test_follow_up_after_a_private_answer_stays_local(monkeypatch):
     answers = iter(["Total income 11,51,350.", "Other sources: 26,347.", "NOT_ABOUT_DOCUMENT"])
 
     async def fake_acall(prompt="", system="", tier="", max_tokens=0, **kw):
-        prompts.append(prompt); return R(next(answers))
+        if "private assistant" not in system:      # a summary roll etc. must not eat a scripted answer
+            return R("")
+        prompts.append(prompt)
+        return R(next(answers))
     monkeypatch.setattr(router, "acall", fake_acall)
     secrets._last_private_doc.clear()
+    orchestrator._private_doc_touched.pop(1, None)      # another suite may leave chat 1 mid-thread
     assert asyncio.run(orchestrator.handle_message(1, "explain the computation")).startswith("🔒 Total")
     out = asyncio.run(orchestrator.handle_message(1, "what are the other sources of income?"))
     assert out == "🔒 Other sources: 26,347."

@@ -1,0 +1,71 @@
+"""Headlines (owner 2026-09-05): feed parsing, dedupe, render, rail."""
+import asyncio
+from datetime import datetime, timezone
+
+from kyraan.tools import news
+
+RSS = """<?xml version="1.0"?><rss><channel>
+<item><title>Suvendu Adhikari unveils new tourism logo - Telegraph India</title>
+ <link>https://news.google.com/rss/articles/x</link><pubDate>Sat, 05 Sep 2026 04:30:00 GMT</pubDate>
+ <source url="https://telegraphindia.com">Telegraph India</source>
+ <description>&lt;a href="https://x"&gt;link&lt;/a&gt;</description></item>
+<item><title>Bonus challenge ahead for tea planters</title>
+ <link>https://www.thehindu.com/x</link><pubDate>Sat, 05 Sep 2026 03:00:00 GMT</pubDate>
+ <description>Government, planters and unions meet next week to fix the rate. More text here.</description></item>
+<item><title>Suvendu Adhikari unveils new tourism logo</title>
+ <link>https://www.thehindu.com/y</link><pubDate>Sat, 05 Sep 2026 02:00:00 GMT</pubDate>
+ <description>A duplicate of the first, older.</description></item>
+</channel></rss>"""
+
+
+def test_parse_cleans_titles_and_summaries():
+    items = news.parse_feed(RSS, "https://www.thehindu.com/news/cities/kolkata/feeder/default.rss")
+    assert items[0]["title"] == "Suvendu Adhikari unveils new tourism logo" and items[0]["source"] == "Telegraph India"
+    assert items[0]["summary"] == ""                                   # a link-only description is nothing
+    assert items[1]["source"] == "The Hindu"                          # from the feed's host
+    assert items[1]["summary"] == "Government, planters and unions meet next week to fix the rate."
+    assert items[0]["published"] == datetime(2026, 9, 5, 4, 30, tzinfo=timezone.utc)
+    assert news.parse_feed("<not xml", "") == []
+
+
+def test_headlines_dedupe_and_order(monkeypatch):
+    monkeypatch.setattr(news, "_fetch", lambda url: RSS)
+    monkeypatch.setattr(news, "feeds", lambda scope: ["u1", "u2"])
+    news._cache.clear()
+    got = news.headlines("state", 10)
+    assert [g["title"] for g in got] == ["Suvendu Adhikari unveils new tourism logo", "Bonus challenge ahead for tea planters"]
+
+
+def test_render_falls_back_to_summaries_without_the_model(monkeypatch):
+    from kyraan.model_router import router
+    def boom(**kw): raise RuntimeError("no model")
+    monkeypatch.setattr(router, "call", boom)
+    items = news.parse_feed(RSS, "https://www.thehindu.com/x")[:2]
+    now = datetime(2026, 9, 5, 5, 0, tzinfo=timezone.utc)
+    out = news.render({"state": items, "world": []}, now=now)
+    assert out.startswith("📰 Headlines ·")
+    assert "🏙 West Bengal\n1. Suvendu Adhikari unveils new tourism logo — Telegraph India · 30m ago" in out
+    assert "2. Bonus challenge ahead for tea planters — The Hindu · 2h ago\n   ↳ Government, planters and unions meet next week to fix the rate." in out
+    assert "🌍 World\n(nothing fresh came through)" in out
+
+
+def test_scope_words():
+    assert news.scope_from_words("bengal") == ("state",)
+    assert news.scope_from_words("world") == ("world",)
+    assert news.scope_from_words("india") == ("country",)
+    assert news.scope_from_words("") == news.SCOPES
+
+
+def test_news_rail(monkeypatch):
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    asked = []
+    monkeypatch.setattr(news, "digest_text", lambda scopes=news.SCOPES, per=None: asked.append(tuple(scopes)) or "📰 Headlines · x")
+    for q, want in (("news", news.SCOPES), ("top headlines", news.SCOPES), ("bengal news", ("state",)),
+                    ("world news today", ("world",)), ("news from india", ("country",)),
+                    ("give me the latest headlines", news.SCOPES), ("what's the news?", news.SCOPES)):
+        out = asyncio.run(orchestrator.handle_message(1, q))
+        assert out.startswith("📰"), q
+        assert asked[-1] == want, (q, asked[-1])
+    assert asyncio.run(orchestrator.handle_message(1, "any ai related news?")) != "📰 Headlines · x"   # a topic: search, not the digest

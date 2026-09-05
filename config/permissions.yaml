@@ -141,6 +141,16 @@ model_tiers:
       cached_input_per_million: 0.075  # mini; the whole reason the agent prompt
                                       # keeps its static prefix stable
 
+# Headlines (owner 2026-09-05): the state, country and world front pages
+# by RSS — The Hindu, NDTV, BBC, Google News regional — on "news", and
+# as a digest morning and evening. per_scope = headlines per section.
+news:
+  enabled: true
+  state: West Bengal
+  country: India
+  per_scope: 5
+  digest_times: ["07:45", "19:45"]
+
 # Privacy lane (owner decision 2026-09-04). With no local text model,
 # private material — local-only documents (tax papers, statements),
 # private-mode turns, pending facts, opted-in email bodies — is read by

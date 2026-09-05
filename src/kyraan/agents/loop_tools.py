@@ -2666,6 +2666,15 @@ TOOLS = {
                   "the place itself: web.search its name instead."),
         "run": _weather_get,
     },
+    "news.headlines": {
+        "params": '{"scope": "state|country|world|all"}',
+        "about": ("Today's top HEADLINES from editors' front pages (The Hindu, NDTV, "
+                  "BBC, Google News) for the owner's state, country, or the world — "
+                  "dated, sourced, one point each, rendered ready to send. THE tool "
+                  "for 'news', 'headlines', 'what's happening' — never web.search "
+                  "for those (search is for a specific topic or fact)."),
+        "run": None,
+    },
     "web.search": {
         "params": '{"query": "<search terms>", "count": 5}',
         "about": ("Live web search (titles, URLs, snippets — you canNOT open "
@@ -2775,6 +2784,7 @@ VERIFICATION_CLASS = {
     "music.skip": "read_after_write",
     "music.volume": "same_store",  # prior-capture; the set itself is audible
     "tools.describe": "same_store",  # a menu read; nothing to re-read
+    "news.headlines": "same_store",  # rendered feed; nothing to re-read
     "home.announce": "same_store",  # audible by nature; nothing to re-read
     "home.speaker_volume": "same_store",  # prior captured; result audible
     "home.media": "same_store",   # visible on the TV itself
@@ -3317,7 +3327,7 @@ def _describe_call(tool: str, args: dict, raw_text: str = "",
 
 
 
-_READ_ONLY_TOOLS = {"tools.describe", "code.status", "code.diff",
+_READ_ONLY_TOOLS = {"tools.describe", "news.headlines", "code.status", "code.diff",
                     "calendar.list_events", "email.unread", "home.get_state",
                     "reminders.list", "tasks.list", "usage.report",
                     "memory.pending_list", "memory.recall_episodes",
@@ -3573,3 +3583,16 @@ def direct_render(tool: str, result, raw_text: str) -> str | None:
         return fn(result, raw_text)
     except Exception:
         return None
+
+
+async def _news_headlines(chat_id: int, args: dict, raw_text: str):
+    import asyncio as _aio
+
+    from kyraan.tools import news
+    scope = str(args.get("scope") or "all").lower()
+    scopes = news.SCOPES if scope in ("all", "") else tuple(s for s in news.SCOPES if s == scope) or news.SCOPES
+    text = await _aio.to_thread(news.digest_text, scopes)
+    return {"__direct_reply__": text, "__history__": text}
+
+
+TOOLS["news.headlines"]["run"] = _news_headlines

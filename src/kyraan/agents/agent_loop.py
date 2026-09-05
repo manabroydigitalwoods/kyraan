@@ -391,7 +391,7 @@ _HOT_CORE = frozenset({
     "calendar.create_event", "documents.search", "documents.read", "documents.list",
     "documents.show", "memory.search", "memory.pending_list", "tasks.list",
     "tasks.schedule", "music.play", "web.search", "usage.report", "email.unread",
-    "persons.profile", "weather.get", "rules.create", "tools.describe",
+    "persons.profile", "weather.get", "rules.create", "tools.describe", "news.headlines",
 })
 _HOT_MAX = 24
 _hot_cache: dict = {"at": 0.0, "names": frozenset()}

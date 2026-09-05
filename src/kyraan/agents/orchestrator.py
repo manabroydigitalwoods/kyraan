@@ -1174,6 +1174,28 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
             _skip_extraction.set(True)
             _history_redaction.set("[listed what is still open today]")
             return await _cos_r.status_text(chat_id)
+        news_q = _re.match(
+            r"^\s*(?:what'?s\s+|what\s+(?:is|are)\s+|(?:give|show|tell|read|share)\s+me\s+)?(?:(?:the|today'?s?|this\s+(?:morning|evening)'?s?|latest|top|current|any|some)\s+)*"
+            r"(?:(?P<scope>west\s+bengal|bengal|kolkata|siliguri|state|local|india|indian|national|country|world|international|global|foreign)\s+)?"
+            r"(?:news|headlines?|news\s+headlines?|top\s+stories|news\s+update)"
+            r"(?:\s+(?:from|about|of|for|in)\s+(?P<scope2>west\s+bengal|bengal|kolkata|india|the\s+world|world|my\s+state|my\s+country))?"
+            r"(?:\s+(?:today|now|please|update))?\s*[?!.]*\s*$",
+            raw_text, _re.IGNORECASE)
+        if news_q and kernel.viewer_person() == "owner":
+            # Owner 2026-09-05: "Kyraan does not even share the top
+            # headlines" — a web search gave one noisy snippet. Front
+            # pages by RSS, rendered, no model loop.
+            from kyraan.tools import news as _news
+            import asyncio as _aio
+            _skip_extraction.set(True)
+            scopes = _news.scope_from_words((news_q.group("scope") or "") + " " + (news_q.group("scope2") or ""))
+            if not (news_q.group("scope") or news_q.group("scope2")):
+                scopes = _news.SCOPES
+            try:
+                return await _aio.to_thread(_news.digest_text, scopes)
+            except Exception as exc:
+                log_event("news_digest_failed", error=str(exc)[:100])
+                return "I couldn't pull the headlines just now — the feeds didn't answer. Try again in a minute."
         house_q = _re.match(
             r"^\s*(?:house|home)\s+(?:status|report|check)\s*[?!.]*\s*$"
             r"|^\s*how(?:'s|\s+is)\s+the\s+house\s*[?!.]*\s*$",

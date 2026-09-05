@@ -1333,6 +1333,16 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
                             name="kiaan_keeper", job_kwargs=_DAILY_GRACE)
         logger.info("Kiaan's keeper scheduled daily at %s", keeper_at)
 
+    # Headlines digest (2026-09-05): morning and evening front pages.
+    from kyraan.triggers import news_digest as _newsd
+    for idx, at in enumerate(_newsd.times()):
+        async def _news_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+            await _newsd.fire(_owner_id(), lambda c, t: _send(context, c, t))
+
+        job_queue.run_daily(_news_job, time=at.replace(tzinfo=local_now().tzinfo),
+                            name=f"news_digest_{idx}", job_kwargs=_DAILY_GRACE)
+        logger.info("Headlines digest scheduled daily at %s", at)
+
     # Duty #3 — chief of staff (2026-09-03): the 18:00 "still open".
     from kyraan.triggers import chief_of_staff as _cos
     cos_at = _cos.still_open_time()
