@@ -679,7 +679,8 @@ def _finish_turn(chat_id, raw_text, reply, turn_started, redaction_token, skip_t
     _degraded_turn.reset(degraded_token)
     redacted = _history_redaction.get()
     user_red = _user_redaction.get()
-    for entry in (("user", user_red or raw_text), ("assistant", redacted or reply)):
+    from kyraan.control_plane.logging_setup import plain_record as _pr
+    for entry in (("user", user_red or raw_text), ("assistant", redacted or _pr(reply))):
         _history[chat_id].append(entry)
     _history_redaction.reset(redaction_token)
     _secret_turn.reset(secret_token)
@@ -775,7 +776,8 @@ async def _finish_turn_async(chat_id, raw_text, reply, turn_started, redaction_t
                      f"\n\n{reply}")
         redacted = _history_redaction.get()
         user_red = _user_redaction.get()
-        for entry in (("user", user_red or raw_text), ("assistant", redacted or reply)):
+        from kyraan.control_plane.logging_setup import plain_record as _pr
+        for entry in (("user", user_red or raw_text), ("assistant", redacted or _pr(reply))):
             if len(_history[chat_id]) == _HISTORY_MAX_ENTRIES:
                 # the oldest entry is about to fall off the window — keep it
                 # for the rolling summary instead of losing it (harness C)
@@ -1177,6 +1179,7 @@ async def _dispatch(chat_id: int, raw_text: str) -> str:
         news_q = _re.match(
             r"^\s*(?:what'?s\s+|what\s+(?:is|are)\s+|(?:give|show|tell|read|share)\s+me\s+)?(?:(?:the|today'?s?|this\s+(?:morning|evening)'?s?|latest|top|current|any|some)\s+)*"
             r"(?:(?P<scope>west\s+bengal|bengal|kolkata|siliguri|state|local|india|indian|national|country|world|international|global|foreign)\s+)?"
+            r"(?:(?:top|latest|today'?s?|current|main|big)\s+)*"      # "bengal TOP headlines" (live 2026-09-05)
             r"(?:news|headlines?|news\s+headlines?|top\s+stories|news\s+update)"
             r"(?:\s+(?:from|about|of|for|in)\s+(?P<scope2>west\s+bengal|bengal|kolkata|india|the\s+world|world|my\s+state|my\s+country))?"
             r"(?:\s+(?:today|now|please|update))?\s*[?!.]*\s*$",

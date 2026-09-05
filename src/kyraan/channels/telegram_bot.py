@@ -112,6 +112,12 @@ def _plain(text: str) -> str:
 _HTML_MARK = "\u2063"   # tools.news.HTML_MARK — kept literal here so the channel needs no import
 
 
+async def _reply(update, reply: str, **extra) -> None:
+    """update.message.reply_text, HTML-aware — every reply site (2026-09-05)."""
+    body, kw = _send_kwargs(_plain(reply))
+    await update.message.reply_text(body, **kw, **extra)
+
+
 def _send_kwargs(text: str) -> tuple:
     """(text_to_send, kwargs): HTML-marked text goes with parse_mode=HTML,
     everything else plain — one place, every send path (2026-09-05)."""
@@ -319,9 +325,8 @@ async def _on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         if stashed is not None and faces.face_count(stashed) == 1:
             reply = await _enroll_face_gated(chat_id, name, stashed)
             orchestrator.record_exchange(chat_id, update.message.text or "", reply)
-            await update.message.reply_text(
-                _plain(reply), do_quote=True,
-                reply_markup=_confirm_keyboard(chat_id))
+            await _reply(update, reply, do_quote=True,
+                         reply_markup=_confirm_keyboard(chat_id))
             return
         # No recent photo: fall through — it may be an ordinary memory
         # statement, and the normal pipeline handles those.
@@ -680,7 +685,7 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
             from kyraan.control_plane.logging_setup import turn_summary
             log_trace("turn_end", chat_id=chat_id, reply=reply, **turn_summary())
-            await update.message.reply_text(_plain(reply), do_quote=True)
+            await _reply(update, reply, do_quote=True)
             return
 
         # Either form: the strict phrase ("remember this face as X") or
@@ -716,8 +721,7 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             orchestrator.record_exchange(chat_id, f"[sent a photo: {caption}]", reply)
             from kyraan.control_plane.logging_setup import turn_summary
             log_trace("turn_end", chat_id=chat_id, reply=reply, **turn_summary())
-            await update.message.reply_text(_plain(reply), do_quote=True,
-                                            reply_markup=_confirm_keyboard(chat_id))
+            await _reply(update, reply, do_quote=True, reply_markup=_confirm_keyboard(chat_id))
             return
 
         with _stage("face_recognize"):
@@ -741,9 +745,8 @@ async def _on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             orchestrator.record_exchange(
                 chat_id, f"[sent a photo: {caption}]", reply)
             log_trace("turn_end", chat_id=chat_id, reply=reply)
-            await update.message.reply_text(
-                _plain(reply), do_quote=True,
-                reply_markup=_confirm_keyboard(chat_id))
+            await _reply(update, reply, do_quote=True,
+                         reply_markup=_confirm_keyboard(chat_id))
             return
         if (faces.available() and is_owner_turn
                 and re.search(r"who(?:'s| is)\s+(?:this|that|he|she|they|it|in\b)"

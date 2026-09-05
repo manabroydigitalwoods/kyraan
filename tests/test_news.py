@@ -86,3 +86,21 @@ def test_news_rail(monkeypatch):
         assert out.startswith("📰"), q
         assert asked[-1] == want, (q, asked[-1])
     assert asyncio.run(orchestrator.handle_message(1, "any ai related news?")) != "📰 Headlines · x"   # a topic: search, not the digest
+
+
+def test_log_and_history_keep_words_not_tags():
+    from kyraan.control_plane.logging_setup import plain_record
+    marked = news.HTML_MARK + "📰 <b>Headlines</b>\n1. <b>Tata &amp; Sons</b>\n    <i>The Hindu · 5m ago</i>"
+    assert plain_record(marked) == "📰 Headlines\n1. Tata & Sons\n    The Hindu · 5m ago"
+    assert plain_record("plain <b>kept</b>") == "plain <b>kept</b>"          # only marked text is touched
+
+
+def test_news_rail_takes_adjectives_after_the_scope(monkeypatch):
+    from kyraan.agents import orchestrator
+    from kyraan.control_plane import kernel
+    monkeypatch.setattr(kernel, "viewer_person", lambda: "owner")
+    asked = []
+    monkeypatch.setattr(news, "digest_text", lambda scopes=news.SCOPES, per=None: asked.append(tuple(scopes)) or "📰 x")
+    for q, want in (("bengal top headlines", ("state",)), ("india latest news", ("country",)), ("top bengal headlines", ("state",))):
+        assert asyncio.run(orchestrator.handle_message(1, q)).startswith("📰"), q
+        assert asked[-1] == want, q

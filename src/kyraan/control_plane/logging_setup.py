@@ -292,7 +292,22 @@ def log_trace(kind: str, **fields) -> None:
                         **({"turn_id": tid} if tid else {}), **_redacted(fields)})
 
 
+HTML_MARK = "\u2063"   # tools.news.HTML_MARK: "this text is Telegram HTML"
+
+
+def plain_record(text: str) -> str:
+    """What the log, history and panel keep of an HTML-marked reply: the
+    words, not the tags (live 2026-09-05: the chat log and the model's
+    history carried <b>…</b> after the headlines digest)."""
+    if not isinstance(text, str) or not text.startswith(HTML_MARK):
+        return text
+    import html as _html
+    import re as _re
+    return _html.unescape(_re.sub(r"</?(b|i|u|s|a|code|pre)\b[^>]*>", "", text[len(HTML_MARK):]))
+
+
 def log_chat(chat_id: int, role: str, text: str, **fields) -> None:
+    text = plain_record(text)
     """One transcript line: role is 'user', 'assistant', or 'proactive'."""
     _append(CHAT_LOG, {
         "ts": datetime.now(timezone.utc).isoformat(),
