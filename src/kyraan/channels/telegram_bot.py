@@ -102,8 +102,22 @@ def _authorized(update: Update) -> str | None:
 def _plain(text: str) -> str:
     """Models emit markdown bold/italic; replies are sent without
     parse_mode (entity-parse errors on unbalanced markers would eat whole
-    messages), so Telegram shows the raw asterisks — strip them."""
+    messages), so Telegram shows the raw asterisks — strip them. Text
+    that declares itself HTML (news.HTML_MARK) is left exactly as is."""
+    if text.startswith(_HTML_MARK):
+        return text
     return text.replace("**", "").replace("__", "")
+
+
+_HTML_MARK = "\u2063"   # tools.news.HTML_MARK — kept literal here so the channel needs no import
+
+
+def _send_kwargs(text: str) -> tuple:
+    """(text_to_send, kwargs): HTML-marked text goes with parse_mode=HTML,
+    everything else plain — one place, every send path (2026-09-05)."""
+    if text.startswith(_HTML_MARK):
+        return text[len(_HTML_MARK):], {"parse_mode": "HTML"}
+    return text, {}
 
 
 async def _typing_loop(bot, chat_id: int) -> None:
@@ -169,8 +183,9 @@ async def _on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     reply = f"{reply}\n\n{orchestrator.processing_marker(chat_id)}"
 
     async def _send_pieces():
-        for piece in _pieces(_plain(reply)):
-            await context.bot.send_message(chat_id=chat_id, text=piece)
+        body, kw = _send_kwargs(_plain(reply))
+        for piece in _pieces(body):
+            await context.bot.send_message(chat_id=chat_id, text=piece, **kw)
 
     await _deliver(chat_id, _send_pieces, reply)
 
@@ -1294,7 +1309,9 @@ def _wire_brief(job_queue: JobQueue, bot) -> None:
         # bool PROPAGATES (Bugbot P1: discarding it let a failed brief/
         # alert be marked sent and permanently suppressed).
         async def _once():
-            await context.bot.send_message(chat_id=chat_id, text=text)
+            body, kw = _send_kwargs(text)
+            for piece in _pieces(body):
+                await context.bot.send_message(chat_id=chat_id, text=piece, **kw)
 
         ok = await _deliver(chat_id, _once, text)
         if ok:

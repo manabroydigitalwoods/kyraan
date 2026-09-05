@@ -43,10 +43,27 @@ def test_render_falls_back_to_summaries_without_the_model(monkeypatch):
     items = news.parse_feed(RSS, "https://www.thehindu.com/x")[:2]
     now = datetime(2026, 9, 5, 5, 0, tzinfo=timezone.utc)
     out = news.render({"state": items, "world": []}, now=now)
-    assert out.startswith("📰 Headlines ·")
-    assert "🏙 West Bengal\n1. Suvendu Adhikari unveils new tourism logo — Telegraph India · 30m ago" in out
-    assert "2. Bonus challenge ahead for tea planters — The Hindu · 2h ago\n   ↳ Government, planters and unions meet next week to fix the rate." in out
-    assert "🌍 World\n(nothing fresh came through)" in out
+    assert out.startswith(news.HTML_MARK + "📰 <b>Headlines</b> ·")
+    assert "<b>🏙 WEST BENGAL</b>\n\n1. <b>Suvendu Adhikari unveils new tourism logo</b>\n    <i>Telegraph India · 30m ago</i>" in out
+    assert "2. <b>Bonus challenge ahead for tea planters</b>\n    <i>The Hindu · 2h ago</i>\n    → Government, planters and unions meet next week to fix the rate." in out
+    assert "<b>🌍 WORLD</b>\n(nothing fresh came through)" in out
+
+
+def test_render_escapes_html_and_trims_long_titles(monkeypatch):
+    from kyraan.model_router import router
+    monkeypatch.setattr(router, "call", lambda **kw: (_ for _ in ()).throw(RuntimeError("no")))
+    long = "A" * 120
+    items = [{"title": f"Tata & Sons <win> {long}", "source": "X", "published": None, "link": "", "summary": "It is 5 > 3 & fine, they said."}]
+    out = news.render({"country": items}, now=datetime(2026, 9, 5, tzinfo=timezone.utc))
+    assert "Tata &amp; Sons &lt;win&gt;" in out and out.count("…") == 1
+    assert "→ It is 5 &gt; 3 &amp; fine, they said." in out
+
+
+def test_channel_sends_marked_text_as_html():
+    from kyraan.channels import telegram_bot as tb
+    assert tb._send_kwargs(news.HTML_MARK + "<b>x</b>") == ("<b>x</b>", {"parse_mode": "HTML"})
+    assert tb._send_kwargs("plain **x**") == ("plain **x**", {})
+    assert tb._plain(news.HTML_MARK + "**keep**") == news.HTML_MARK + "**keep**"
 
 
 def test_scope_words():

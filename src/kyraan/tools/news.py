@@ -23,6 +23,10 @@ from kyraan.control_plane.logging_setup import log_event
 
 CACHE_S = 600
 _cache: dict = {}
+# A leading invisible separator tells the Telegram channel "this text is
+# HTML-escaped; send it with parse_mode=HTML" — bold headlines scan far
+# better than a wall of text (owner 2026-09-05: "enhance the readability").
+HTML_MARK = "\u2063"
 
 SCOPES = ("state", "country", "world")
 LABELS = {"state": "🏙 {state}", "country": "🇮🇳 {country}", "world": "🌍 World"}
@@ -36,7 +40,7 @@ def _settings() -> dict:
         cfg = {}
     return {"state": str(cfg.get("state") or "West Bengal"),
             "country": str(cfg.get("country") or "India"),
-            "per_scope": int(cfg.get("per_scope") or 5),
+            "per_scope": int(cfg.get("per_scope") or 4),
             "digest_times": list(cfg.get("digest_times") or ["07:45", "19:45"]),
             "enabled": cfg.get("enabled", True) is not False}
 
@@ -173,7 +177,7 @@ def headlines(scope: str, limit: int | None = None) -> list:
 _SYSTEM = ("You write the one-line 'why it matters' under each news headline for a busy reader. "
            "Do NOT restate the headline — add what it means, who is affected, or what comes next, "
            "taken from the summary. Use ONLY the title and summary given — never add facts, names "
-           "or numbers that are not there. At most 22 words per line, plain words, no hype. "
+           "or numbers that are not there. At most 16 words per line, plain words, no hype. "
            "Answer ONLY with JSON: "
            '{"points": ["<line for item 1>", "<line for item 2>", ...]} in the same order.')
 
@@ -210,28 +214,41 @@ def _ago(pub, now) -> str:
     return pub.astimezone().strftime("%-d %b")
 
 
+def _esc(s: str) -> str:
+    return html.escape(str(s or ""), quote=False)
+
+
+def _short_title(t: str, limit: int = 96) -> str:
+    t = str(t or "").strip()
+    return t if len(t) <= limit else t[:limit].rsplit(" ", 1)[0].rstrip(",;:–- ") + "…"
+
+
 def render(sections: dict, now=None) -> str:
-    """Human-readable digest — a numbered headline with its source and
-    age, then one indented line of what matters."""
+    """The digest as Telegram HTML (see HTML_MARK): a bold headline, a
+    dim line of source and age, one arrow line of what it means, a blank
+    line between items. Readable in a glance, not a wall (owner
+    2026-09-05)."""
     from kyraan.control_plane.dnd import local_now
     now = now or datetime.now(timezone.utc)
     s = _settings()
-    head = f"📰 Headlines · {local_now().strftime('%a %-d %b, %-I:%M %p')}"
-    blocks = [head]
+    blocks = [f"📰 <b>Headlines</b> · {_esc(local_now().strftime('%a %-d %b, %-I:%M %p'))}"]
     for scope, items in sections.items():
         label = LABELS[scope].format(state=s["state"], country=s["country"])
         if not items:
-            blocks.append(f"{label}\n(nothing fresh came through)")
+            blocks.append(f"<b>{_esc(label).upper()}</b>\n(nothing fresh came through)")
             continue
         points = key_points(items)
-        lines = [label]
+        entries = [f"<b>{_esc(label).upper()}</b>"]
         for i, (it, point) in enumerate(zip(items, points), 1):
             meta = " · ".join(x for x in (it.get("source"), _ago(it.get("published"), now)) if x)
-            lines.append(f"{i}. {it['title']}" + (f" — {meta}" if meta else ""))
+            lines = [f"{i}. <b>{_esc(_short_title(it['title']))}</b>"]
+            if meta:
+                lines.append(f"    <i>{_esc(meta)}</i>")
             if point:
-                lines.append(f"   ↳ {point}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+                lines.append(f"    → {_esc(point)}")
+            entries.append("\n".join(lines))
+        blocks.append("\n\n".join(entries))
+    return HTML_MARK + "\n\n".join(blocks)
 
 
 def digest_text(scopes=SCOPES, per: int | None = None) -> str:
