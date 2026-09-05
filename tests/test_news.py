@@ -104,3 +104,16 @@ def test_news_rail_takes_adjectives_after_the_scope(monkeypatch):
     for q, want in (("bengal top headlines", ("state",)), ("india latest news", ("country",)), ("top bengal headlines", ("state",))):
         assert asyncio.run(orchestrator.handle_message(1, q)).startswith("📰"), q
         assert asked[-1] == want, q
+
+
+def test_typed_reply_path_sends_marked_text_as_html():
+    from kyraan.channels import telegram_bot as tb
+    sent = []
+
+    class Src:
+        async def reply_text(self, text, **kw): sent.append((text, kw))
+    asyncio.run(tb._reply_pieces(Src(), news.HTML_MARK + "<b>Headlines</b>\n\nbody", markup="KB"))
+    assert sent == [("<b>Headlines</b>\n\nbody", {"do_quote": True, "reply_markup": "KB", "parse_mode": "HTML"})]
+    sent.clear()
+    asyncio.run(tb._reply_pieces(Src(), "plain **x**", markup=None))
+    assert sent == [("plain x", {"do_quote": True, "reply_markup": None})]

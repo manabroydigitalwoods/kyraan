@@ -112,6 +112,18 @@ def _plain(text: str) -> str:
 _HTML_MARK = "\u2063"   # tools.news.HTML_MARK — kept literal here so the channel needs no import
 
 
+async def _reply_pieces(source, reply: str, markup=None) -> None:
+    """The typed-message send (burst composer): HTML-aware and split at
+    Telegram's limit — the keyboard rides on the last piece. Live
+    2026-09-05 13:01: the headlines digest arrived with its <b> tags
+    showing because this path, not the button path, sends typed replies."""
+    body, kw = _send_kwargs(_plain(reply))
+    pieces = _pieces(body)
+    for i, piece in enumerate(pieces):
+        await source.reply_text(piece, do_quote=(i == 0),
+                                reply_markup=markup if i == len(pieces) - 1 else None, **kw)
+
+
 async def _reply(update, reply: str, **extra) -> None:
     """update.message.reply_text, HTML-aware — every reply site (2026-09-05)."""
     body, kw = _send_kwargs(_plain(reply))
@@ -460,8 +472,7 @@ async def _ingest_inner(update: Update, context: ContextTypes.DEFAULT_TYPE, text
                 markup = _confirm_keyboard(chat_id) if position == len(results) - 1 else None
                 await _deliver(
                     chat_id,
-                    lambda s=source, r=reply, m=markup: s.reply_text(
-                        _plain(r), reply_markup=m, do_quote=True),
+                    lambda s=source, r=reply, m=markup: _reply_pieces(s, r, m),
                     reply)
             # A fragment that arrived after composition passed its safe
             # point couldn't retract this reply — it starts the next round
